@@ -1,0 +1,53 @@
+# Secrets — never commit these
+.env
+credentials.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# MediaPipe model (large binary, re-downloadable)
+data/hand_landmarker.task
+
+# Auth tokens / browser session data -- never commit
+data/.spotify_cache
+data/whatsapp_profile/
+data/*.token
+data/*.session
+data/gmail_token.json
+data/gmail_credentials.json
+data/calendar_token.json
+data/lg_tv_key.json
+
+# Databases (contain personal conversation history)
+data/gil_brain.db
+data/gil_memory.json
+database/
+
+# Temp / runtime files
+*.log
+*.tmp
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user

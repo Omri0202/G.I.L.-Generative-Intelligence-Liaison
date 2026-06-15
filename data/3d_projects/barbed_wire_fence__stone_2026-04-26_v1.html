@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>G.I.L. 3D SCENE · BARBED WIRE FENCE, STONE WALLS WITH IRON BARS, DIMLY LIT PRISON YARD WITH INMATES IN THE DISTANCE, BLEAK ATMOSPHERE</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0e1a;overflow:hidden;font-family:'Courier New',monospace;color:#00bfff}
+canvas{display:block;position:fixed;top:0;left:0}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,10,30,0.1) 3px,rgba(0,10,30,0.1) 4px);pointer-events:none;z-index:99}
+.corner{position:fixed;width:32px;height:32px;z-index:100;border-color:rgba(0,191,255,0.55);border-style:solid}
+.corner.tl{top:72px;left:14px;border-width:2px 0 0 2px}
+.corner.tr{top:72px;right:14px;border-width:2px 2px 0 0}
+.corner.bl{bottom:14px;left:14px;border-width:0 0 2px 2px}
+.corner.br{bottom:14px;right:14px;border-width:0 2px 2px 0}
+#topbar{position:fixed;top:0;left:0;right:0;z-index:100;height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:linear-gradient(180deg,rgba(5,10,25,0.97) 0%,transparent 100%);border-bottom:1px solid rgba(0,191,255,0.1)}
+#app-name{font-size:15px;font-weight:bold;letter-spacing:9px;color:#00bfff;text-shadow:0 0 18px #00bfff99}
+#topbar-right{font-size:10px;letter-spacing:3px;color:rgba(0,191,255,0.4);text-align:right;line-height:1.7}
+#scene-title{position:fixed;top:68px;left:0;right:0;z-index:100;text-align:center;font-size:17px;font-weight:bold;letter-spacing:6px;text-transform:uppercase;color:#00bfff;text-shadow:0 0 28px #00bfff,0 0 60px rgba(0,191,255,0.35);padding:14px 60px 4px}
+#scene-sub{position:fixed;top:112px;left:0;right:0;z-index:100;text-align:center;font-size:10px;letter-spacing:3px;color:rgba(0,191,255,0.35)}
+#data-panel{position:fixed;top:50%;right:20px;z-index:100;transform:translateY(-50%);width:160px;border:1px solid rgba(0,191,255,0.2);background:rgba(5,10,25,0.85);padding:14px 16px;font-size:10px;letter-spacing:2px;line-height:2.2}
+#data-panel .row{display:flex;justify-content:space-between;color:rgba(0,191,255,0.5)}
+#data-panel .val{color:#00bfff}
+#data-panel h4{font-size:9px;letter-spacing:4px;color:rgba(0,191,255,0.35);border-bottom:1px solid rgba(0,191,255,0.15);padding-bottom:6px;margin-bottom:8px}
+#controls{position:fixed;bottom:44px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:100}
+.btn{padding:8px 18px;border:1px solid rgba(0,191,255,0.3);background:rgba(5,10,25,0.85);color:rgba(0,191,255,0.7);font-family:'Courier New',monospace;font-size:10px;font-weight:bold;letter-spacing:2px;cursor:pointer;border-radius:3px;transition:all 0.2s}
+.btn:hover{background:rgba(0,191,255,0.12);color:#00bfff;box-shadow:0 0 16px rgba(0,191,255,0.25)}
+#bottombar{position:fixed;bottom:0;left:0;right:0;z-index:100;height:36px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:linear-gradient(0deg,rgba(5,10,25,0.95) 0%,transparent 100%);border-top:1px solid rgba(0,191,255,0.1);font-size:9px;letter-spacing:3px;color:rgba(0,191,255,0.35)}
+#ticker{overflow:hidden;white-space:nowrap;flex:1;margin:0 20px}
+#ticker-inner{display:inline-block;animation:scroll 25s linear infinite}
+@keyframes scroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
+#sdot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#00ff88;margin-right:6px;animation:pulse 2s ease-in-out infinite;box-shadow:0 0 8px #00ff88}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span id="app-name">G . I . L .</span>
+  <div id="topbar-right">3D SCENE STUDIO<br>2026-04-26</div>
+</div>
+<div id="scene-title">BARBED WIRE FENCE, STONE WALLS WITH IRON BARS, DIMLY LIT PRISON YARD WITH INMATES IN THE DISTANCE, BLEAK ATMOSPHERE</div>
+<div id="scene-sub">AI SCENE COMPOSITION &nbsp;·&nbsp; G.I.L. 3D ENGINE &nbsp;·&nbsp; REAL-TIME RENDER</div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div id="data-panel">
+  <h4>SCENE DATA</h4>
+  <div class="row"><span>STATUS</span><span class="val"><span id="sdot"></span>LIVE</span></div>
+  <div class="row"><span>MODE</span><span class="val">SCENE</span></div>
+  <div class="row"><span>FPS</span><span class="val" id="hfps">60</span></div>
+  <div class="row"><span>DEPTH</span><span class="val" id="hdepth">18.0</span></div>
+  <div class="row"><span>OBJECTS</span><span class="val" id="hobjs">0</span></div>
+  <div class="row"><span>MESHES</span><span class="val" id="hmesh">0</span></div>
+</div>
+<div id="controls">
+  <button class="btn" onclick="dlPNG()">SAVE PNG</button>
+  <button class="btn" onclick="togSpin()">PAUSE</button>
+  <button class="btn" onclick="window.close()">CLOSE</button>
+</div>
+<div id="bottombar">
+  <span><span id="sdot"></span>SCENE ACTIVE</span>
+  <div id="ticker"><span id="ticker-inner">G.I.L. GENERATIVE INTELLIGENCE LIAISON &nbsp;·&nbsp; 3D SCENE MODULE &nbsp;·&nbsp; ENVIRONMENT RENDER ENGINE &nbsp;·&nbsp; ALL SYSTEMS NOMINAL &nbsp;·&nbsp;</span></div>
+  <span>THREE.JS r128</span>
+</div>
+<script src="file:///C:/Users/Omri/project_gil/data/vendor/three.min.js"></script>
+<script src="file:///C:/Users/Omri/project_gil/data/vendor/OrbitControls.js"></script>
+<script>
+(function(){
+'use strict';
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.1;
+document.body.appendChild(renderer.domElement);
+const bloom=document.createElement('canvas');bloom.style.cssText='position:fixed;top:0;left:0;pointer-events:none;z-index:1;mix-blend-mode:screen;filter:blur(8px) brightness(1.5);opacity:0.32;';document.body.appendChild(bloom);const bctx=bloom.getContext('2d');function sizeBloom(){bloom.width=renderer.domElement.width;bloom.height=renderer.domElement.height;bloom.style.width=innerWidth+'px';bloom.style.height=innerHeight+'px';}sizeBloom();window.addEventListener('resize',sizeBloom);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x0a0e1a);scene.fog=new THREE.Fog(0x0a0e1a,28,55);
+const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,500);camera.position.set(0,10,18);camera.lookAt(0,0,0);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=0.05;controls.autoRotate=true;controls.autoRotateSpeed=0.5;
+controls.target.set(0,1,0);controls.minDistance=4;controls.maxDistance=40;
+
+// Lighting — natural daylight feel
+const sun=new THREE.DirectionalLight(0xfff5e0,2.8);sun.position.set(8,16,6);sun.castShadow=true;
+sun.shadow.mapSize.width=sun.shadow.mapSize.height=2048;sun.shadow.camera.near=0.5;sun.shadow.camera.far=60;
+sun.shadow.camera.left=-15;sun.shadow.camera.right=15;sun.shadow.camera.top=15;sun.shadow.camera.bottom=-15;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x8899cc,1.2));
+const skyL=new THREE.HemisphereLight(0xaaccff,0x334422,0.8);scene.add(skyL);
+
+// Ground — large grass plane
+const groundGeo=new THREE.PlaneGeometry(28,24);
+const groundMat=new THREE.MeshLambertMaterial({color:0x5a8a3c});
+const ground=new THREE.Mesh(groundGeo,groundMat);ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+// Concrete/asphalt area in center
+const paveGeo=new THREE.PlaneGeometry(14,12);
+const paveMat=new THREE.MeshLambertMaterial({color:0x8a8a82});
+const pave=new THREE.Mesh(paveGeo,paveMat);pave.rotation.x=-Math.PI/2;pave.position.y=0.01;scene.add(pave);
+
+// ── Scene helper functions ──────────────────────────────────────────────────
+function mat(col){return new THREE.MeshLambertMaterial({color:col});}
+function addMesh(geo,col,x,y,z,rx,ry,rz){
+  const m=new THREE.Mesh(geo,mat(col));m.position.set(x,y,z);
+  if(rx)m.rotation.x=rx;if(ry)m.rotation.y=ry;if(rz)m.rotation.z=rz;
+  m.castShadow=true;m.receiveShadow=true;model.add(m);return m;
+}
+
+function makeTree(x,z,h=2.5,tc=0x7B5E3C,lc=0x2E7D32){
+  addMesh(new THREE.CylinderGeometry(0.1,0.16,h*0.38,8),tc,x,h*0.19,z);
+  addMesh(new THREE.ConeGeometry(h*0.42,h*0.75,8),lc,x,h*0.55+h*0.375,z);
+  addMesh(new THREE.ConeGeometry(h*0.32,h*0.58,8),0x388E3C,x,h*0.72+h*0.375,z);
+}
+
+function makeBuilding(x,z,w,h,d,wc=0xD4724A,rc=0x8B4513){
+  addMesh(new THREE.BoxGeometry(w,h,d),wc,x,h/2,z);
+  addMesh(new THREE.BoxGeometry(w+0.3,0.22,d+0.3),rc,x,h+0.11,z);
+  const wr=Math.max(1,Math.floor(w/1.8));
+  for(let i=0;i<wr;i++){const wx=x-w/2+w/(wr+1)*(i+1);addMesh(new THREE.BoxGeometry(0.7,0.7,0.08),0x90CAF9,wx,h*0.62,z-d/2-0.04);}
+  addMesh(new THREE.BoxGeometry(0.6,1.0,0.08),0x5D4037,x,0.5,z-d/2-0.04);
+}
+
+function makePerson(x,z,sc=0x1565C0,pc=0x424242,sk=0xFFCC80){
+  addMesh(new THREE.SphereGeometry(0.11,8,8),sk,x,0.88,z);
+  addMesh(new THREE.CylinderGeometry(0.085,0.095,0.38,6),sc,x,0.57,z);
+  addMesh(new THREE.CylinderGeometry(0.055,0.055,0.32,6),sc,x-0.13,0.5,z,0,0,0.25);
+  addMesh(new THREE.CylinderGeometry(0.055,0.055,0.32,6),sc,x+0.13,0.5,z,0,0,-0.25);
+  addMesh(new THREE.CylinderGeometry(0.065,0.065,0.36,6),pc,x-0.07,0.19,z);
+  addMesh(new THREE.CylinderGeometry(0.065,0.065,0.36,6),pc,x+0.07,0.19,z);
+}
+
+function makeBench(x,z,ry=0){
+  const g=new THREE.Group();
+  [new THREE.Mesh(new THREE.BoxGeometry(1.1,0.07,0.34),mat(0x8B5E3C)),new THREE.Mesh(new THREE.BoxGeometry(1.1,0.34,0.06),mat(0x8B5E3C))].forEach((m,i)=>{m.position.set(0,0.45+i*0.2,i?0.14:0);g.add(m);});
+  [[-0.42,0.2],[-0.42,-0.2],[0.42,0.2],[0.42,-0.2]].forEach(([lx,lz])=>{const l=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.44,0.05),mat(0x607D8B));l.position.set(lx,0.22,lz);g.add(l);});
+  g.position.set(x,0,z);g.rotation.y=ry;model.add(g);
+}
+
+function makeHoop(x,z){
+  addMesh(new THREE.CylinderGeometry(0.045,0.045,3.6,8),0x607D8B,x,1.8,z);
+  addMesh(new THREE.BoxGeometry(0.75,0.05,0.045),0x607D8B,x+0.38,3.3,z);
+  addMesh(new THREE.BoxGeometry(0.52,0.42,0.025),0xF5F5F5,x+0.75,3.05,z);
+  const h=new THREE.Mesh(new THREE.TorusGeometry(0.24,0.016,8,32),mat(0xFF6F00));h.rotation.x=Math.PI/2;h.position.set(x+0.75,2.82,z);model.add(h);
+}
+
+function makeSwingSet(x,z){
+  addMesh(new THREE.CylinderGeometry(0.04,0.04,3.4,6),0x9E9E9E,x-1.2,1.7,z,0,0,0.15);
+  addMesh(new THREE.CylinderGeometry(0.04,0.04,3.4,6),0x9E9E9E,x+1.2,1.7,z,0,0,-0.15);
+  addMesh(new THREE.CylinderGeometry(0.04,0.04,2.9,6),0x9E9E9E,x,1.7,z,Math.PI/2,0,0);
+  addMesh(new THREE.BoxGeometry(0.4,0.05,0.2),0x8D6E63,x-0.5,0.8,z);
+  addMesh(new THREE.BoxGeometry(0.4,0.05,0.2),0x8D6E63,x+0.5,0.8,z);
+}
+
+function makeSlide(x,z,ry=0){
+  const g=new THREE.Group();
+  const sl=new THREE.Mesh(new THREE.BoxGeometry(0.7,0.06,2.4),mat(0xE53935));sl.position.set(0,1.3,0.2);sl.rotation.x=-0.55;g.add(sl);
+  const plt=new THREE.Mesh(new THREE.BoxGeometry(0.8,0.06,0.8),mat(0xFF8A80));plt.position.set(0,2.2,-0.8);g.add(plt);
+  [[0.35,1.1,0.85],[-0.35,1.1,0.85]].forEach(([lx,ly,lz])=>{const l=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,ly*2,6),mat(0xBDBDBD));l.position.set(lx,ly,lz);g.add(l);});
+  g.position.set(x,0,z);g.rotation.y=ry;model.add(g);
+}
+
+function makeFence(x1,z1,x2,z2,col=0xB0BEC5){
+  const dx=x2-x1,dz=z2-z1,len=Math.sqrt(dx*dx+dz*dz),angle=Math.atan2(dx,dz),mx=(x1+x2)/2,mz=(z1+z2)/2;
+  addMesh(new THREE.BoxGeometry(0.04,0.04,len),col,mx,1.05,mz,0,angle,0);
+  addMesh(new THREE.BoxGeometry(0.04,0.04,len),col,mx,0.65,mz,0,angle,0);
+  const n=Math.max(2,Math.floor(len/1.1));
+  for(let i=0;i<=n;i++){const t=i/n;addMesh(new THREE.BoxGeometry(0.06,1.2,0.06),col,x1+dx*t,0.6,z1+dz*t);}
+}
+
+function makeCar(x,z,ry=0,col=0xE53935){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.55,0.9),mat(col));body.position.y=0.45;g.add(body);
+  const top=new THREE.Mesh(new THREE.BoxGeometry(1.2,0.42,0.82),mat(col));top.position.set(-0.1,0.95,0);g.add(top);
+  const wgeo=new THREE.CylinderGeometry(0.25,0.25,0.12,12);const wmat=mat(0x212121);
+  [[-0.7,0.25,0.48],[-0.7,0.25,-0.48],[0.6,0.25,0.48],[0.6,0.25,-0.48]].forEach(([wx,wy,wz])=>{const w=new THREE.Mesh(wgeo,wmat);w.rotation.z=Math.PI/2;w.position.set(wx,wy,wz);g.add(w);});
+  g.position.set(x,0,z);g.rotation.y=ry;model.add(g);
+}
+
+function makeStreetLight(x,z){
+  addMesh(new THREE.CylinderGeometry(0.04,0.06,4.5,6),0x9E9E9E,x,2.25,z);
+  addMesh(new THREE.CylinderGeometry(0.02,0.02,1.2,6),0x9E9E9E,x+0.6,4.5,z,0,0,-Math.PI/6);
+  addMesh(new THREE.SphereGeometry(0.12,8,8),0xFFF9C4,x+1.1,4.3,z);
+}
+
+function makeRock(x,z,sz=0.5,col=0x888888){
+  addMesh(new THREE.DodecahedronGeometry(sz),col,x,sz*0.6,z);
+}
+
+function makeBall(x,z,r=0.15,col=0xFF5722){
+  addMesh(new THREE.SphereGeometry(r,10,10),col,x,r,z);
+}
+
+function makeFlowerPatch(x,z,col=0xFF8A80){
+  for(let i=0;i<5;i++){const ox=(Math.random()-.5)*0.8,oz=(Math.random()-.5)*0.8;addMesh(new THREE.CylinderGeometry(0.02,0.02,0.3,4),0x4CAF50,x+ox,0.15,z+oz);addMesh(new THREE.SphereGeometry(0.07,6,6),col,x+ox,0.33,z+oz);}
+}
+
+function makeDumpster(x,z,col=0x4CAF50){
+  addMesh(new THREE.BoxGeometry(1.1,0.8,0.55),col,x,0.4,z);
+  addMesh(new THREE.BoxGeometry(1.15,0.06,0.6),0x388E3C,x,0.83,z);
+}
+
+function makeFlagpole(x,z,fc=0xF44336){
+  addMesh(new THREE.CylinderGeometry(0.03,0.04,5,6),0xBDBDBD,x,2.5,z);
+  addMesh(new THREE.BoxGeometry(0.7,0.4,0.02),fc,x+0.35,4.7,z);
+}
+
+function makePoolTable(x,z){
+  addMesh(new THREE.BoxGeometry(2.0,0.1,1.1),0x1B5E20,x,0.78,z);
+  addMesh(new THREE.BoxGeometry(2.1,0.55,1.2),0x5D4037,x,0.5,z);
+}
+
+// ── AI-placed scene elements ────────────────────────────────────────────────
+const model=new THREE.Group();
+try{
+// LLM placement:
+makeBuilding(0,-6,8,4,5,0xD4724A,0x8B4513);
+makeTree(-6,3);makeTree(-5,-2);makeTree(6,2);makeTree(5,-3);makeTree(-7,-5);
+makePerson(2,1);makePerson(-1,2);makePerson(3,-1);
+makeBench(0,2);makeBench(4,0,1.57);
+makeFlagpole(-5,-6);
+makeFence(-8,-8,8,-8);makeFence(-8,-8,-8,6);makeFence(8,-8,8,6);
+}catch(err){console.error('[GIL SCENE]',err);}
+model.traverse(c=>{if(c.isMesh){c.castShadow=true;c.receiveShadow=true;}});
+scene.add(model);
+
+let mc=0,oc=0;model.traverse(c=>{if(c.isMesh)mc++;if(c.isGroup||c.isMesh)oc++;});
+document.getElementById('hmesh').textContent=mc;document.getElementById('hobjs').textContent=oc;
+
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+let t=0,fc2=0,lft2=performance.now(),spinning=true;
+function animate(){requestAnimationFrame(animate);t+=0.005;fc2++;controls.update();renderer.render(scene,camera);
+  bctx.clearRect(0,0,bloom.width,bloom.height);bctx.drawImage(renderer.domElement,0,0);
+  const now=performance.now();if(now-lft2>800){const fps=Math.round(fc2*1000/(now-lft2));fc2=0;lft2=now;
+    document.getElementById('hfps').textContent=fps;document.getElementById('hdepth').textContent=camera.position.length().toFixed(1);
+  }
+}
+animate();
+window.togSpin=()=>{spinning=!spinning;controls.autoRotate=spinning;};
+window.dlPNG=()=>{renderer.render(scene,camera);const a=document.createElement('a');a.download='GIL_SCENE_barbed_wire_fence__stone_2026-04-26.png';a.href=renderer.domElement.toDataURL('image/png');a.click();};
+})();
+</script></body></html>

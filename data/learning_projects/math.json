@@ -1,0 +1,34 @@
+{
+  "name": "Math",
+  "created": "2026-04-20T19:19:37",
+  "last_accessed": "2026-04-20T19:26:44",
+  "sessions": [
+    {
+      "date": "2026-04-20",
+      "conversations": [
+        {
+          "user": "hello",
+          "gil": "Hello, Sir. What's on your mind?",
+          "time": "19:19"
+        },
+        {
+          "user": "I'm studying math Jill",
+          "gil": "Math — which topic exactly? I can explain it or find you a video — just say the word.",
+          "time": "19:25"
+        },
+        {
+          "user": "I",
+          "gil": "It seems like you started to say something, but it got cut off. Want to try again?",
+          "time": "19:26"
+        },
+        {
+          "user": "project called",
+          "gil": "A project called what, Omri? Want me to create a new project folder?",
+          "time": "19:26"
+        }
+      ]
+    }
+  ],
+  "resources": [],
+  "notes": []
+}

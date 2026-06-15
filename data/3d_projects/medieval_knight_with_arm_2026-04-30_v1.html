@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>G.I.L. 3D · MEDIEVAL KNIGHT WITH ARMOR, SWORD AND SHIELD</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000812;overflow:hidden;font-family:'Courier New',monospace;color:#00bfff}
+canvas{display:block;position:fixed;top:0;left:0}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,10,30,0.15) 3px,rgba(0,10,30,0.15) 4px);pointer-events:none;z-index:99}
+.corner{position:fixed;width:32px;height:32px;z-index:100;border-color:rgba(0,191,255,0.6);border-style:solid}
+.corner.tl{top:72px;left:14px;border-width:2px 0 0 2px}
+.corner.tr{top:72px;right:14px;border-width:2px 2px 0 0}
+.corner.bl{bottom:14px;left:14px;border-width:0 0 2px 2px}
+.corner.br{bottom:14px;right:14px;border-width:0 2px 2px 0}
+#topbar{position:fixed;top:0;left:0;right:0;z-index:100;height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:linear-gradient(180deg,rgba(0,8,20,0.97) 0%,transparent 100%);border-bottom:1px solid rgba(0,191,255,0.12)}
+#app-name{font-size:15px;font-weight:bold;letter-spacing:9px;color:#00bfff;text-shadow:0 0 18px #00bfff99}
+#topbar-right{font-size:10px;letter-spacing:3px;color:rgba(0,191,255,0.4);text-align:right;line-height:1.7}
+#model-title{position:fixed;top:68px;left:0;right:0;z-index:100;text-align:center;font-size:17px;font-weight:bold;letter-spacing:6px;text-transform:uppercase;color:#00bfff;text-shadow:0 0 28px #00bfff,0 0 60px rgba(0,191,255,0.4);padding:14px 60px 4px}
+#model-sub{position:fixed;top:112px;left:0;right:0;z-index:100;text-align:center;font-size:10px;letter-spacing:3px;color:rgba(0,191,255,0.35)}
+#data-panel{position:fixed;top:50%;right:20px;z-index:100;transform:translateY(-50%);width:160px;border:1px solid rgba(0,191,255,0.2);background:rgba(0,8,20,0.8);padding:14px 16px;font-size:10px;letter-spacing:2px;line-height:2.2}
+#data-panel .row{display:flex;justify-content:space-between;color:rgba(0,191,255,0.5)}
+#data-panel .val{color:#00bfff}
+#data-panel h4{font-size:9px;letter-spacing:4px;color:rgba(0,191,255,0.35);border-bottom:1px solid rgba(0,191,255,0.15);padding-bottom:6px;margin-bottom:8px}
+#radar{position:fixed;bottom:80px;left:28px;z-index:100;width:72px;height:72px;border-radius:50%;border:1px solid rgba(0,191,255,0.25);background:rgba(0,8,20,0.7);overflow:hidden}
+#radar-inner{width:100%;height:100%;position:relative;border-radius:50%}
+#radar-inner::before{content:'';position:absolute;top:50%;left:50%;width:1px;height:50%;background:linear-gradient(to top,rgba(0,191,255,0.8),transparent);transform-origin:bottom center;transform:translateX(-50%);animation:rspin 3s linear infinite}
+#radar-inner::after{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(0,191,255,0.15),transparent 60%,transparent);animation:rspin 3s linear infinite}
+@keyframes rspin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+#radar-lbl{position:fixed;bottom:60px;left:28px;z-index:100;font-size:8px;letter-spacing:3px;color:rgba(0,191,255,0.3);width:72px;text-align:center}
+#bottombar{position:fixed;bottom:0;left:0;right:0;z-index:100;height:36px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:linear-gradient(0deg,rgba(0,8,20,0.95) 0%,transparent 100%);border-top:1px solid rgba(0,191,255,0.1);font-size:9px;letter-spacing:3px;color:rgba(0,191,255,0.35)}
+#ticker{overflow:hidden;white-space:nowrap;flex:1;margin:0 20px}
+#ticker-inner{display:inline-block;animation:scroll 22s linear infinite}
+@keyframes scroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
+#controls{position:fixed;bottom:44px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:100}
+.btn{padding:8px 18px;border:1px solid rgba(0,191,255,0.3);background:rgba(0,8,20,0.85);color:rgba(0,191,255,0.7);font-family:'Courier New',monospace;font-size:10px;font-weight:bold;letter-spacing:2px;cursor:pointer;border-radius:3px;transition:all 0.2s}
+.btn:hover{background:rgba(0,191,255,0.12);color:#00bfff;box-shadow:0 0 16px rgba(0,191,255,0.25)}
+#sdot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#00ff88;margin-right:6px;animation:pulse 2s ease-in-out infinite;box-shadow:0 0 8px #00ff88}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+#atm{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 48%,rgba(0,40,110,0.32) 0%,transparent 62%);pointer-events:none;z-index:0;}
+.reticle{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:340px;height:340px;border-radius:50%;border:1px solid rgba(0,191,255,0.07);pointer-events:none;z-index:2;animation:rpulse 5s ease-in-out infinite;}
+.reticle::after{content:'';position:absolute;inset:20px;border-radius:50%;border:1px solid rgba(0,191,255,0.04);}
+@keyframes rpulse{0%,100%{opacity:0.55;transform:translate(-50%,-50%) scale(1);}50%{opacity:1;transform:translate(-50%,-50%) scale(1.06);}}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span id="app-name">G . I . L .</span>
+  <div id="topbar-right">3D ANALYSIS STUDIO<br>2026-04-30</div>
+</div>
+<div id="model-title">MEDIEVAL KNIGHT WITH ARMOR, SWORD AND SHIELD</div>
+<div id="model-sub">AI GENERATED &nbsp;·&nbsp; G.I.L. 3D ENGINE &nbsp;·&nbsp; REAL-TIME RENDER</div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div id="atm"></div><div class="reticle"></div>
+<div id="data-panel">
+  <h4>ANALYSIS DATA</h4>
+  <div class="row"><span>STATUS</span><span class="val"><span id="sdot"></span>LIVE</span></div>
+  <div class="row"><span>ENGINE</span><span class="val">GROQ 70B</span></div>
+  <div class="row"><span>FPS</span><span class="val" id="hfps">60</span></div>
+  <div class="row"><span>DEPTH</span><span class="val" id="hdepth">6.00</span></div>
+  <div class="row"><span>ROT X</span><span class="val" id="hrx">0.0</span></div>
+  <div class="row"><span>ROT Y</span><span class="val" id="hry">0.0</span></div>
+  <div class="row"><span>PARTS</span><span class="val" id="hparts">0</span></div>
+</div>
+<div id="radar"><div id="radar-inner"></div></div>
+<div id="radar-lbl">TRACKING</div>
+<div id="controls">
+  <button class="btn" onclick="dlPNG()">SAVE PNG</button>
+  <button class="btn" onclick="togWire()">WIREFRAME</button>
+  <button class="btn" onclick="togSpin()">PAUSE</button>
+  <button class="btn" onclick="window.close()">CLOSE</button>
+</div>
+<div id="bottombar">
+  <span><span id="sdot"></span>SYSTEM ONLINE</span>
+  <div id="ticker"><span id="ticker-inner">G.I.L. GENERATIVE INTELLIGENCE LIAISON &nbsp;·&nbsp; 3D ANALYSIS MODULE &nbsp;·&nbsp; HOLOGRAPHIC RENDER ENGINE &nbsp;·&nbsp; ALL SYSTEMS NOMINAL &nbsp;·&nbsp;</span></div>
+  <span>THREE.JS r128</span>
+</div>
+<script src="file:///C:/Users/Omri/project_gil/data/vendor/three.min.js"></script>
+<script src="file:///C:/Users/Omri/project_gil/data/vendor/OrbitControls.js"></script>
+<script>
+(function(){
+'use strict';
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.4;
+document.body.appendChild(renderer.domElement);
+const bloom=document.createElement('canvas');bloom.style.cssText='position:fixed;top:0;left:0;pointer-events:none;z-index:1;mix-blend-mode:screen;filter:blur(11px) brightness(2.0);opacity:0.46;';document.body.appendChild(bloom);const bctx=bloom.getContext('2d');function sizeBloom(){bloom.width=renderer.domElement.width;bloom.height=renderer.domElement.height;bloom.style.width=innerWidth+'px';bloom.style.height=innerHeight+'px';}sizeBloom();window.addEventListener('resize',sizeBloom);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x000812);scene.fog=new THREE.FogExp2(0x000812,0.022);
+const camera=new THREE.PerspectiveCamera(48,innerWidth/innerHeight,0.01,500);camera.position.set(0,1.8,6.5);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=0.06;controls.autoRotate=true;controls.autoRotateSpeed=1.2;
+controls.minDistance=2;controls.maxDistance=22;
+scene.add(new THREE.AmbientLight(0x001a3a,3));
+const key=new THREE.DirectionalLight(0x2255ff,4);key.position.set(4,8,5);key.castShadow=true;key.shadow.mapSize.setScalar(2048);scene.add(key);
+const fillL=new THREE.PointLight(0x00bfff,6,25);fillL.position.set(-5,3,-4);scene.add(fillL);
+const rimL=new THREE.PointLight(0x0033ff,4,18);rimL.position.set(0,-4,-6);scene.add(rimL);
+const topL=new THREE.PointLight(0x44aaff,3,14);topL.position.set(0,9,0);scene.add(topL);
+const accentL=new THREE.PointLight(0x00ffaa,2,10);accentL.position.set(3,-1,4);scene.add(accentL);
+const grid=new THREE.GridHelper(24,48,0x061428,0x030a14);grid.position.y=-2.8;scene.add(grid);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(24,24),new THREE.MeshStandardMaterial({color:0x010510,metalness:0.9,roughness:0.1,transparent:true,opacity:0.55}));
+ground.rotation.x=-Math.PI/2;ground.position.y=-2.81;ground.receiveShadow=true;scene.add(ground);
+const sGeo=new THREE.BufferGeometry();const sN=1600,sPos=new Float32Array(sN*3);
+for(let i=0;i<sN;i++){sPos[i*3]=(Math.random()-.5)*120;sPos[i*3+1]=(Math.random()-.5)*120;sPos[i*3+2]=(Math.random()-.5)*120;}
+sGeo.setAttribute('position',new THREE.BufferAttribute(sPos,3));
+scene.add(new THREE.Points(sGeo,new THREE.PointsMaterial({color:0x223366,size:0.08,transparent:true,opacity:0.8})));
+function createHoloPart(geo,col,x,y,z){
+  const g=new THREE.Group();
+  const wf=new THREE.LineSegments(new THREE.WireframeGeometry(geo),new THREE.LineBasicMaterial({color:0x00bfff,transparent:true,opacity:0.52,blending:THREE.AdditiveBlending,depthWrite:false}));
+  g.add(wf);
+  const inner=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0x003d66,transparent:true,opacity:0.13,depthWrite:false,side:THREE.DoubleSide}));g.add(inner);
+  if(x!==undefined)g.position.set(x,y,z);return g;
+}
+function buildHuman(){
+  const g=new THREE.Group();
+  const S=(r,w,h)=>new THREE.SphereGeometry(r,w||32,h||24);
+  function add(geo,x,y,z,sx,sy,sz){
+    const p=createHoloPart(geo,0x00bfff,x,y,z);
+    if(sx!==undefined)p.scale.set(sx,sy!==undefined?sy:sx,sz!==undefined?sz:sx);
+    g.add(p);return p;
+  }
+  // Head — perfect sphere
+  add(S(0.12),0,0.885,0);
+  // Neck — narrow ellipsoid
+  add(S(1,18,12),0,0.75,0, 0.054,0.075,0.054);
+  // Torso — LatheGeometry: organic chest-waist-shoulder silhouette
+  const tp=[new THREE.Vector2(0.13,0),new THREE.Vector2(0.148,0.08),new THREE.Vector2(0.172,0.2),new THREE.Vector2(0.183,0.34),new THREE.Vector2(0.188,0.48),new THREE.Vector2(0.168,0.56)];
+  add(new THREE.LatheGeometry(tp,24),0,0.19,0);
+  // Pelvis — LatheGeometry: hip flare
+  const pp=[new THREE.Vector2(0.148,0),new THREE.Vector2(0.168,0.1),new THREE.Vector2(0.162,0.21),new THREE.Vector2(0.118,0.27)];
+  add(new THREE.LatheGeometry(pp,24),0,-0.11,0);
+  // Shoulder caps — squashed spheres bridging torso to arms
+  add(S(1,18,14),-0.27,0.565,0, 0.092,0.085,0.076);
+  add(S(1,18,14), 0.27,0.565,0, 0.092,0.085,0.076);
+  // Upper arms — elongated ellipsoids (look like biceps, not tin cans)
+  add(S(1,20,16),-0.335,0.345,0, 0.068,0.19,0.062);
+  add(S(1,20,16), 0.335,0.345,0, 0.068,0.19,0.062);
+  // Forearms — tapered ellipsoids
+  add(S(1,20,16),-0.355,0.055,0, 0.054,0.165,0.048);
+  add(S(1,20,16), 0.355,0.055,0, 0.054,0.165,0.048);
+  // Hands — wide flat ellipsoids
+  add(S(1,18,14),-0.355,-0.145,0, 0.062,0.062,0.038);
+  add(S(1,18,14), 0.355,-0.145,0, 0.062,0.062,0.038);
+  // Thighs — wide organic ellipsoids
+  add(S(1,22,18),-0.1,-0.315,0, 0.095,0.24,0.092);
+  add(S(1,22,18), 0.1,-0.315,0, 0.095,0.24,0.092);
+  // Calves — tapered ellipsoids
+  add(S(1,22,18),-0.1,-0.74,0, 0.074,0.22,0.068);
+  add(S(1,22,18), 0.1,-0.74,0, 0.074,0.22,0.068);
+  // Feet — subdivided box
+  add(new THREE.BoxGeometry(0.1,0.055,0.22,4,2,6),-0.1,-0.962,0.038);
+  add(new THREE.BoxGeometry(0.1,0.055,0.22,4,2,6), 0.1,-0.962,0.038);
+  return g;
+}
+const rings=[];
+[{r:1.7,tube:0.022,col:0x00bfff,rx:Math.PI/2,ry:0,spd:-0.55},{r:2.2,tube:0.016,col:0x0088ff,rx:Math.PI/3,ry:0.5,spd:0.40},{r:2.7,tube:0.012,col:0x00ffbb,rx:Math.PI/6,ry:1.1,spd:-0.28},{r:3.1,tube:0.009,col:0x0055cc,rx:Math.PI/4,ry:-0.6,spd:0.20},{r:3.6,tube:0.007,col:0x00bfff,rx:0.3,ry:0.3,spd:-0.14},{r:4.1,tube:0.005,col:0x003388,rx:Math.PI/5,ry:2.0,spd:0.09}].forEach(d=>{
+  const r=new THREE.Mesh(new THREE.TorusGeometry(d.r,d.tube,8,120),new THREE.MeshBasicMaterial({color:d.col,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false}));
+  r.rotation.x=d.rx;r.rotation.y=d.ry;r._spd=d.spd;scene.add(r);rings.push(r);
+});
+const scanMat=new THREE.MeshBasicMaterial({color:0x00bfff,transparent:true,opacity:0.07,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false});
+const scanBeam=new THREE.Mesh(new THREE.PlaneGeometry(8,0.04),scanMat);scene.add(scanBeam);
+const scanLine=new THREE.Line((()=>{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(new Float32Array([-4,0,0,4,0,0]),3));return g;})(),new THREE.LineBasicMaterial({color:0x00ffff,transparent:true,opacity:0.5}));scene.add(scanLine);
+let model=null;
+try{
+const model = buildHuman();
+
+if(model){model.traverse(c=>{if(c.isMesh||c.isLine)c.castShadow=true;});if(!scene.children.includes(model))scene.add(model);}
+}catch(err){console.error('[GIL]',err);model=new THREE.Group();model.add(createHoloPart(new THREE.IcosahedronGeometry(1,2),0x00bfff,0,0,0));scene.add(model);}
+let pc=0;if(model)model.traverse(c=>{if(c.isMesh)pc++;});document.getElementById('hparts').textContent=pc;
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+let t=0,fc=0,lft=performance.now(),spinning=true,wireOn=false;
+function animate(){requestAnimationFrame(animate);t+=0.008;fc++;
+  fillL.intensity=5.5+Math.sin(t*1.1)*1.2;rimL.intensity=3.5+Math.sin(t*0.7)*0.8;accentL.intensity=1.8+Math.sin(t*1.5)*0.8;
+  rings.forEach(r=>{r.rotation.z+=r._spd*0.01;r.material.opacity=0.52+Math.sin(t*0.85+r._spd)*0.16;});
+  const sy=Math.sin(t*0.55)*2.2;scanBeam.position.y=sy;scanLine.position.y=sy;
+  if(model){model.position.y=Math.sin(t*0.4)*0.12;model.traverse(c=>{if(c.isLineSegments)c.material.opacity=0.44+Math.sin(t*1.3)*0.18;});}
+  controls.update();renderer.render(scene,camera);
+  bctx.clearRect(0,0,bloom.width,bloom.height);bctx.drawImage(renderer.domElement,0,0);
+  const now=performance.now();if(now-lft>800){const fps=Math.round(fc*1000/(now-lft));fc=0;lft=now;
+    document.getElementById('hfps').textContent=fps;document.getElementById('hdepth').textContent=camera.position.length().toFixed(2);
+    document.getElementById('hrx').textContent=(camera.rotation.x*57.3).toFixed(1);document.getElementById('hry').textContent=(camera.rotation.y*57.3).toFixed(1);
+  }
+}
+animate();
+window.togWire=()=>{wireOn=!wireOn;if(model)model.traverse(c=>{if(c.isMesh)c.material.wireframe=wireOn;});};
+window.togSpin=()=>{spinning=!spinning;controls.autoRotate=spinning;};
+window.dlPNG=()=>{renderer.render(scene,camera);const a=document.createElement('a');a.download='GIL_3D_medieval_knight_with_arm_2026-04-30.png';a.href=renderer.domElement.toDataURL('image/png');a.click();};
+})();
+</script></body></html>
