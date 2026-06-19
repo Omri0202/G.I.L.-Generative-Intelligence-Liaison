@@ -453,10 +453,38 @@ class GestureWatcher:
             print("[G.I.L. GESTURE] Screenshot: " + path)
             self._say("Screenshot saved.")
             self._write_result("Screenshot saved")
+            self._toast_screenshot(path)
         except Exception as exc:
             print("[G.I.L. GESTURE] Screenshot failed: " + str(exc))
             self._say("Screenshot failed.")
             self._write_result("Screenshot failed")
+
+    def _toast_screenshot(self, path):
+        """Windows toast notification — click opens the screenshot."""
+        try:
+            import subprocess
+            uri = Path(path).as_uri()   # file:///C:/Users/.../GIL_xxx.png
+            ps = (
+                "[Windows.UI.Notifications.ToastNotificationManager,"
+                "Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null;"
+                "[Windows.Data.Xml.Dom.XmlDocument,"
+                "Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null;"
+                "$x=New-Object Windows.Data.Xml.Dom.XmlDocument;"
+                f"$x.LoadXml('<toast activationType=\"protocol\" launch=\"{uri}\">"
+                "<visual><binding template=\"ToastGeneric\">"
+                "<text>G.I.L. Screenshot</text>"
+                "<text>Saved to Pictures — click to open</text>"
+                "</binding></visual></toast>');"
+                "$t=New-Object Windows.UI.Notifications.ToastNotification $x;"
+                "[Windows.UI.Notifications.ToastNotificationManager]"
+                "::CreateToastNotifier('G.I.L.').Show($t)"
+            )
+            subprocess.Popen(
+                ["powershell", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception as exc:
+            print("[G.I.L. GESTURE] Toast notification failed: " + str(exc))
 
     def _adjust_volume(self, delta):
         try:
