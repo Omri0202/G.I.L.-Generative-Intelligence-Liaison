@@ -1,0 +1,12 @@
+{
+  "gestures": {
+    "thumbs_up":   {"type": "builtin", "action": "volume_up",   "label": "Vol Up"},
+    "thumbs_down": {"type": "builtin", "action": "volume_down", "label": "Vol Down"},
+    "peace":       {"type": "builtin", "action": "screenshot",  "label": "Screenshot"},
+    "fist":        {"type": "builtin", "action": "mute_toggle", "label": "Mute"},
+    "open_hand":   {"type": "builtin", "action": "announce",    "label": "Announce"},
+    "rock_on":     {"type": "builtin", "action": "dnd_toggle",  "label": "DND Mode"},
+    "three_up":    {"type": "builtin", "action": "next_track",  "label": "Next Track"},
+    "call_me":     {"type": "builtin", "action": "prev_track",  "label": "Prev Track"}
+  }
+}

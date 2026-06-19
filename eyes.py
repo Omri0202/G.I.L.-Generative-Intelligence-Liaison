@@ -185,9 +185,12 @@ class CameraWindow:
 
         # Write a .ps1 file to avoid all PowerShell quoting issues.
         # Start-Process via a script file is identical to running it from a PS terminal.
+        _launcher = sys.executable.replace("python.exe", "pythonw.exe")
+        if not Path(_launcher).exists():
+            _launcher = sys.executable
         _ps1 = Path(tempfile.gettempdir()) / "gil_start_camera.ps1"
         _ps1.write_text(
-            f"Start-Process -FilePath '{sys.executable}' -ArgumentList '{_VIEWER}'\n"
+            f"Start-Process -FilePath '{_launcher}' -ArgumentList '{_VIEWER}'\n"
         )
         subprocess.Popen(
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(_ps1)],

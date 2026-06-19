@@ -4,6 +4,7 @@ A being that lives in your computer.
 Frameless, transparent, floating — always present.
 """
 
+import json
 import math
 import os
 import random
@@ -162,6 +163,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build_credentials_tab(tabs.add("  Credentials  "))
         self._build_triggers_tab(tabs.add("  Triggers  "))
         self._build_system_tab(tabs.add("  System  "))
+        self._build_gestures_tab(tabs.add("  Gestures  "))
 
     # ── Config helpers ────────────────────────────────────────────────────────
 
@@ -469,6 +471,195 @@ class SettingsWindow(ctk.CTkToplevel):
                          width=130, anchor="w").pack(side="left", padx=12)
             ctk.CTkLabel(r, text=val, text_color="#A0A0C0",
                          font=ctk.CTkFont("Segoe UI", 11)).pack(side="left")
+
+
+    # ── Gestures tab ─────────────────────────────────────────────────────────
+
+    _GESTURE_CONFIG_FILE = Path(__file__).parent / "data" / "gesture_config.json"
+
+    _GESTURE_ROWS = [
+        ("thumbs_up",   "Thumbs Up   ☝"),
+        ("thumbs_down", "Thumbs Down ↓"),
+        ("peace",       "Peace  ✌"),
+        ("fist",        "Fist  ✊"),
+        ("open_hand",   "Open Hand  🖐"),
+        ("rock_on",     "Rock On  🤘"),
+        ("three_up",    "Three Fingers ☝☝☝"),
+        ("call_me",     "Call Me  🤙"),
+        ("index_point", "Index Point ☝"),
+    ]
+
+    _BUILTIN_OPTS = [
+        ("Vol Up (+10%)",    "volume_up"),
+        ("Vol Down (-10%)",  "volume_down"),
+        ("Screenshot",       "screenshot"),
+        ("Mute / Unmute",    "mute_toggle"),
+        ("Next Track",       "next_track"),
+        ("Prev Track",       "prev_track"),
+        ("DND Toggle",       "dnd_toggle"),
+        ("Announce Mode",    "announce"),
+        ("Open App...",      "__open_app__"),
+        ("Open URL...",      "__open_url__"),
+    ]
+
+    _DEFAULT_GESTURE_CONFIG = {
+        "thumbs_up":   {"type": "builtin", "action": "volume_up",   "label": "Vol Up"},
+        "thumbs_down": {"type": "builtin", "action": "volume_down", "label": "Vol Down"},
+        "peace":       {"type": "builtin", "action": "screenshot",  "label": "Screenshot"},
+        "fist":        {"type": "builtin", "action": "mute_toggle", "label": "Mute"},
+        "open_hand":   {"type": "builtin", "action": "announce",    "label": "Announce"},
+        "rock_on":     {"type": "builtin", "action": "dnd_toggle",  "label": "DND Mode"},
+        "three_up":    {"type": "builtin", "action": "next_track",  "label": "Next Track"},
+        "call_me":     {"type": "builtin", "action": "prev_track",  "label": "Prev Track"},
+        "index_point": {"type": "builtin", "action": "announce",    "label": "Cursor"},
+    }
+
+    def _build_gestures_tab(self, parent) -> None:
+        s = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        s.pack(fill="both", expand=True)
+
+        ctk.CTkLabel(s, text="Gesture Bindings",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color="#4A4A6A").pack(anchor="w", pady=(8, 4))
+        ctk.CTkLabel(s,
+                     text="Hold each gesture 0.5 s to trigger.  Choose Open App or Open URL\n"
+                          "to bind any gesture to an app name (e.g. chrome) or a URL.",
+                     font=ctk.CTkFont("Segoe UI", 10),
+                     text_color="#3A3A5A", justify="left").pack(anchor="w", padx=2, pady=(0, 10))
+
+        try:
+            cfg_data = json.loads(self._GESTURE_CONFIG_FILE.read_text(encoding="utf-8"))
+            current  = cfg_data.get("gestures", {})
+        except Exception:
+            current  = {}
+
+        opt_labels  = [o[0] for o in self._BUILTIN_OPTS]
+        opt_by_act  = {act: lbl for lbl, act in self._BUILTIN_OPTS}
+
+        self._gesture_vars    = {}   # gkey -> (ctk.StringVar action_label, ctk.StringVar target)
+        self._gesture_entries = {}   # gkey -> CTkEntry
+
+        for gkey, glabel in self._GESTURE_ROWS:
+            gcfg   = current.get(gkey, self._DEFAULT_GESTURE_CONFIG.get(gkey, {}))
+            gtype  = gcfg.get("type", "builtin")
+            gact   = gcfg.get("action", "volume_up")
+            gtgt   = gcfg.get("target", "")
+
+            if gtype == "open_app":
+                selected_label = "Open App..."
+                tgt_val        = gtgt
+            elif gtype == "open_url":
+                selected_label = "Open URL..."
+                tgt_val        = gtgt
+            else:
+                selected_label = opt_by_act.get(gact, opt_labels[0])
+                tgt_val        = ""
+
+            row = ctk.CTkFrame(s, fg_color="#0A0A18", corner_radius=8, height=52)
+            row.pack(fill="x", pady=3)
+            row.pack_propagate(False)
+            row.columnconfigure(1, weight=1)
+
+            ctk.CTkLabel(row, text=glabel, text_color="#C0C0D8",
+                         font=ctk.CTkFont("Segoe UI", 11),
+                         width=148, anchor="w").place(x=10, y=14)
+
+            action_var = ctk.StringVar(value=selected_label)
+            target_var = ctk.StringVar(value=tgt_val)
+            self._gesture_vars[gkey] = (action_var, target_var)
+
+            ent = ctk.CTkEntry(row, textvariable=target_var,
+                               placeholder_text="app name or URL",
+                               width=128, height=26,
+                               fg_color="#05050F", text_color="#90D0FF",
+                               border_color="#0A2030", font=ctk.CTkFont("Segoe UI", 10))
+            ent.place(x=370, y=13)
+            self._gesture_entries[gkey] = ent
+
+            needs_target = selected_label in ("Open App...", "Open URL...")
+            ent.configure(state="normal" if needs_target else "disabled",
+                          text_color="#90D0FF" if needs_target else "#2A2A3A")
+
+            def _on_action_change(choice, _ent=ent, _tgt=target_var, _gk=gkey):
+                is_custom = choice in ("Open App...", "Open URL...")
+                _ent.configure(state="normal" if is_custom else "disabled",
+                               text_color="#90D0FF" if is_custom else "#2A2A3A")
+                if not is_custom:
+                    _tgt.set("")
+
+            ctk.CTkOptionMenu(row, variable=action_var,
+                              values=opt_labels,
+                              width=196, height=26,
+                              fg_color="#070714", button_color="#001530",
+                              button_hover_color="#002040",
+                              text_color="#A0C8E8",
+                              dropdown_fg_color="#070714",
+                              dropdown_text_color="#A0C8E8",
+                              dropdown_hover_color="#001E30",
+                              font=ctk.CTkFont("Segoe UI", 10),
+                              command=_on_action_change).place(x=158, y=13)
+
+        # Save / Reset buttons
+        btn_row = ctk.CTkFrame(s, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(14, 4))
+
+        ctk.CTkButton(btn_row, text="Save Gestures",
+                      height=32, width=160,
+                      fg_color=ACCENT, hover_color="#0090CC",
+                      text_color="#000", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                      command=self._save_gestures).pack(side="left", padx=(2, 8))
+
+        ctk.CTkButton(btn_row, text="Reset Defaults",
+                      height=32, width=130,
+                      fg_color="#0A0A18", hover_color="#0A0A28",
+                      text_color="#4A4A6A",
+                      font=ctk.CTkFont("Segoe UI", 11),
+                      command=self._reset_gestures).pack(side="left")
+
+        self._gesture_status = ctk.CTkLabel(s, text="",
+                                            font=ctk.CTkFont("Segoe UI", 10),
+                                            text_color="#00AA44")
+        self._gesture_status.pack(anchor="w", pady=(4, 2))
+
+    def _save_gestures(self) -> None:
+        act_lookup = {lbl: act for lbl, act in self._BUILTIN_OPTS}
+        gestures   = {}
+        for gkey, (action_var, target_var) in self._gesture_vars.items():
+            choice = action_var.get()
+            target = target_var.get().strip()
+            if choice == "Open App...":
+                gestures[gkey] = {"type": "open_app", "target": target,
+                                  "label": target[:12] or "App"}
+            elif choice == "Open URL...":
+                gestures[gkey] = {"type": "open_url", "target": target,
+                                  "label": target[:12] or "URL"}
+            else:
+                act = act_lookup.get(choice, "volume_up")
+                gestures[gkey] = {"type": "builtin", "action": act, "label": choice[:12]}
+
+        try:
+            self._GESTURE_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._GESTURE_CONFIG_FILE.write_text(
+                json.dumps({"gestures": gestures}, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            if hasattr(self, "_gesture_status"):
+                self._gesture_status.configure(text="Saved.  Changes take effect immediately.")
+        except Exception as exc:
+            if hasattr(self, "_gesture_status"):
+                self._gesture_status.configure(text=f"Error: {exc}", text_color="#FF4444")
+
+    def _reset_gestures(self) -> None:
+        try:
+            self._GESTURE_CONFIG_FILE.write_text(
+                json.dumps({"gestures": self._DEFAULT_GESTURE_CONFIG}, indent=2),
+                encoding="utf-8"
+            )
+            if hasattr(self, "_gesture_status"):
+                self._gesture_status.configure(text="Reset to defaults.")
+        except Exception as exc:
+            if hasattr(self, "_gesture_status"):
+                self._gesture_status.configure(text=f"Error: {exc}", text_color="#FF4444")
 
 
 # ── Tasks window (opened from right-click menu) ───────────────────────────────
