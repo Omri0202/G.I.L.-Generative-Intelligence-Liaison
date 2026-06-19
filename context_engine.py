@@ -108,8 +108,10 @@ def _read_clipboard() -> str:
         if not ptr:
             _user32.CloseClipboard()
             return ""
-        text = ctypes.wstring_at(ptr)
-        ctypes.windll.kernel32.GlobalUnlock(h)
+        try:
+            text = ctypes.wstring_at(ptr)
+        finally:
+            ctypes.windll.kernel32.GlobalUnlock(h)
         _user32.CloseClipboard()
         return text[:400]   # cap at 400 chars for safety
     except Exception:

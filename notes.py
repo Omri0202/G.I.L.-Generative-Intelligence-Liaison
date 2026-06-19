@@ -90,8 +90,10 @@ def _read_clipboard_text() -> str | None:
         ptr = k32.GlobalLock(h)
         if not ptr:
             return None
-        text = ctypes.wstring_at(ptr)
-        k32.GlobalUnlock(h)
+        try:
+            text = ctypes.wstring_at(ptr)
+        finally:
+            k32.GlobalUnlock(h)
         return text or None
     except Exception:
         return None

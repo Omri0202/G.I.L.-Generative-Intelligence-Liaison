@@ -34,8 +34,11 @@ import session_manager
 import preferences
 
 # ── Module-level shared state ─────────────────────────────────────────────────
-_pending_recap_global: list = [{}]   # shared between _gil_main and _audio_loop
-_brain_ref:            list = []     # holds GILBrain instance; filled by _audio_loop
+_pending_recap_global: list = [{}]          # shared between main and _audio_loop
+_brain_ref:            list = []            # holds GILBrain instance; filled by _audio_loop
+_processing_lock             = threading.Lock()   # one query at a time; shared with proactive
+_last_addressed_at: list     = [0.0]        # filled on _audio_loop start; shared with proactive
+_ATTENTION_SECS              = 45.0         # seconds of open attention window after last address
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -299,12 +302,14 @@ def _audio_loop(username: str, window) -> None:
     _last_said[0]     = greeting
     window.set_state("listening")
 
-    _processing_lock  = threading.Lock()   # only one query at a time
     _active_project:  list[str | None] = [None]   # currently active learning project
     _pending_recap:   list[dict]       = [{}]     # {"type": "wa"|"email", "items": [...]}
     _paused:          list[bool]       = [False]  # True = waiting for "Gil" to wake up
     _camera_win:      list             = [None]   # CameraWindow instance if open
     _gesture_watcher: list             = [None]   # GestureWatcher instance if camera is open
+
+    # Seed the module-level attention timestamp so the first command works immediately
+    _last_addressed_at[0] = time.time()
 
     def _start_gesture_watcher():
         try:
@@ -321,10 +326,6 @@ def _audio_loop(username: str, window) -> None:
         if _gesture_watcher[0]:
             _gesture_watcher[0].stop()
             _gesture_watcher[0] = None
-
-    # Attention window: after being addressed, respond freely for this many seconds
-    _ATTENTION_SECS      = 45.0
-    _last_addressed_at:  list[float] = [time.time()]   # start open so first command works
 
     _brain_ref.append(brain)   # expose for shutdown summary (declared in _gil_main scope)
 
@@ -554,6 +555,115 @@ def _audio_loop(username: str, window) -> None:
             threading.Thread(target=_do_recap, daemon=True, name="GIL-EmailRecap").start()
             return
 
+        # Fast-path: face enrollment — "remember my face", "scan my face"
+        _FACE_ENROLL = {
+            "remember my face", "enroll my face", "scan my face",
+            "save my face", "learn my face", "memorize my face",
+        }
+        if any(tr in lower for tr in _FACE_ENROLL):
+            def _do_enroll():
+                from ears import unmute
+                import tempfile
+                import cv2 as _cv2
+                from pathlib import Path as _Path
+
+                ack = "Scanning your face — hold still."
+                window.set_state("speaking", said=ack)
+                unmute()
+                speak(ack)
+                time.sleep(1.8)
+
+                frame_path = _Path(tempfile.gettempdir()) / "gil_cam_frame.jpg"
+                if not frame_path.exists():
+                    msg = "Open the camera first, then say remember my face."
+                else:
+                    try:
+                        frame = _cv2.imread(str(frame_path))
+                        if frame is None:
+                            raise ValueError("blank frame")
+                        from face_id import FaceID
+                        ok, detail = FaceID().enroll(frame, username)
+                        if ok:
+                            msg = f"Got it. I'll recognize you as {username} from now on."
+                        else:
+                            msg = "Couldn't see your face clearly — try better lighting and look straight at the camera."
+                            print(f"[G.I.L. FACE] Enroll failed: {detail}")
+                    except Exception as exc:
+                        msg = "Face enrollment failed — make sure the camera is open."
+                        print(f"[G.I.L. FACE] Error: {exc}")
+                window.set_state("speaking", said=msg)
+                speak(msg)
+                _last_spoke_at[0] = time.time() - 1.5
+                _last_said[0]     = msg
+                window.set_state("listening")
+            threading.Thread(target=_do_enroll, daemon=True, name="GIL-FaceEnroll").start()
+            return
+
+        # Fast-path: face identity query — "who do you see", "do you recognize me"
+        _FACE_QUERY = {
+            "who do you see", "do you recognize me", "do you know me",
+            "can you identify me", "who is there", "who's there",
+            "is it me", "recognize my face", "do you see me", "who am i",
+        }
+        if any(tr in lower for tr in _FACE_QUERY):
+            def _do_face_query():
+                from ears import unmute
+                import tempfile, json as _j
+                import cv2 as _cv2
+                from pathlib import Path as _Path
+
+                face_file = _Path(tempfile.gettempdir()) / "gil_face_state.json"
+                if face_file.exists():
+                    try:
+                        state = _j.loads(face_file.read_bytes())
+                        nm  = state.get("name")
+                        st  = state.get("status")
+                        if st == "match" and nm:
+                            msg = f"Yes — I recognize you, {nm}."
+                        elif st == "unknown":
+                            msg = "I see someone, but I don't recognize them."
+                        else:
+                            msg = "I can't see a face clearly right now."
+                        unmute()
+                        window.set_state("speaking", said=msg)
+                        speak(msg)
+                        _last_spoke_at[0] = time.time() - 1.5
+                        _last_said[0]     = msg
+                        window.set_state("listening")
+                        return
+                    except Exception:
+                        pass
+
+                frame_path = _Path(tempfile.gettempdir()) / "gil_cam_frame.jpg"
+                if not frame_path.exists():
+                    msg = "Open the camera first so I can see you."
+                else:
+                    try:
+                        frame = _cv2.imread(str(frame_path))
+                        from face_id import FaceID
+                        fid = FaceID()
+                        if not fid.has_enrolled():
+                            msg = "I haven't learned your face yet. Say 'remember my face' to enroll."
+                        else:
+                            r = fid.identify(frame)
+                            if r["status"] == "match":
+                                msg = f"I see {r['name']}."
+                            elif r["status"] == "unknown":
+                                msg = "I see someone, but I don't recognize them."
+                            else:
+                                msg = "I can't detect a face — try looking directly at the camera."
+                    except Exception as exc:
+                        msg = "Face recognition isn't available right now."
+                        print(f"[G.I.L. FACE] Query error: {exc}")
+                unmute()
+                window.set_state("speaking", said=msg)
+                speak(msg)
+                _last_spoke_at[0] = time.time() - 1.5
+                _last_said[0]     = msg
+                window.set_state("listening")
+            threading.Thread(target=_do_face_query, daemon=True, name="GIL-FaceQuery").start()
+            return
+
         # Fast-path: camera STATUS query — must be checked BEFORE _cam_open because
         # "is the camera open?" contains "open" and would wrongly fire the open path.
         _cam_status_kw = any(p in lower for p in (
@@ -651,8 +761,23 @@ def _audio_loop(username: str, window) -> None:
             _cam_kw and any(w in lower for w in ("close", "hide", "stop", "disable", "turn off", "shut"))
         ) or "close your eyes" in lower
         if _cam_close:
-            if _camera_win[0] and _camera_win[0].is_alive():
-                _camera_win[0].close()
+            from eyes import CameraWindow as _CW, _FRAME_FILE as _FF, _KILL_FILE as _KF
+            _cam_actually_running = (
+                (_camera_win[0] and _camera_win[0].is_alive())
+                or (_FF.exists() and time.time() - _FF.stat().st_mtime < 2.0)
+            )
+            if _cam_actually_running:
+                if _camera_win[0]:
+                    _camera_win[0].close()
+                else:
+                    # Orphaned camera_viewer.py — kill via kill file directly
+                    try:
+                        _KF.write_text("kill")
+                        import time as _t; _t.sleep(0.4)
+                        _FF.unlink(missing_ok=True)
+                        _KF.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 _camera_win[0] = None
                 _stop_gesture_watcher()
                 speech = "Camera closed."
@@ -769,6 +894,7 @@ def _audio_loop(username: str, window) -> None:
                     result = _wgp(proj) if proj else _wg(utterance)
                 except Exception as exc:
                     result = f"Website generation failed — {exc.__class__.__name__}."
+                    _last_spoke_at[0] = time.time()   # reset block so GIL doesn't go deaf
                 window.close_webgen_progress()
                 unmute()
                 window.set_state("speaking", said=result)
@@ -1253,8 +1379,9 @@ def _audio_loop(username: str, window) -> None:
                 threading.Thread(target=_camera_win[0].bring_to_front,
                                  daemon=True, name="GIL-CamFocus").start()
             else:
+                _cam_ref = [None]  # filled by thread so _cam_closed_cb sees the real instance
                 def _cam_closed_cb():
-                    if _camera_win[0] is _this_cam:
+                    if _camera_win[0] is _cam_ref[0]:
                         _camera_win[0] = None
                     _stop_gesture_watcher()
                 def _open_and_confirm():
@@ -1262,6 +1389,7 @@ def _audio_loop(username: str, window) -> None:
                     try:
                         from eyes import CameraWindow
                         _this_cam2 = CameraWindow(on_close=_cam_closed_cb)
+                        _cam_ref[0] = _this_cam2
                         _camera_win[0] = _this_cam2
                         _start_gesture_watcher()
                         found = _this_cam2.bring_to_front()
@@ -1283,7 +1411,6 @@ def _audio_loop(username: str, window) -> None:
                         _last_said[0]     = _fail
                         window.set_state("listening")
                 try:
-                    _this_cam = None
                     threading.Thread(target=_open_and_confirm,
                                      daemon=True, name="GIL-CamOpen").start()
                 except Exception as exc:
@@ -1316,6 +1443,7 @@ def _audio_loop(username: str, window) -> None:
                     result = _wgp(proj) if proj else _wg(desc)
                 except Exception as exc:
                     result = f"Website generation failed — {exc.__class__.__name__}."
+                    _last_spoke_at[0] = time.time()   # reset block so GIL doesn't go deaf
                 window.close_webgen_progress()
                 unmute()
                 window.set_state("speaking", said=result)
@@ -1392,6 +1520,7 @@ def _audio_loop(username: str, window) -> None:
                         result = _wgp(proj) if proj else _wg(t)
                     except Exception as exc:
                         result = f"Website generation failed — {exc.__class__.__name__}."
+                        _last_spoke_at[0] = time.time()   # reset block so GIL doesn't go deaf
                     window.close_webgen_progress()
                     unmute()
                     window.set_state("speaking", said=result)
@@ -1940,8 +2069,6 @@ def main() -> None:
     # Gmail unread recap — check on startup + every 30 min
     try:
         import gmail_recap
-        def _gmail_cb(msg: str, _items=[]):
-            _proactive_recap_callback(msg, "email", _items[0] if _items else [])
         gmail_recap.set_show_callback(
             lambda msg, items=[]: _proactive_recap_callback(msg, "email", items)
         )
@@ -2001,20 +2128,16 @@ def main() -> None:
     context_engine.on_context_changed(_on_ctx_change)
 
     def _save_conversation_summary() -> None:
-        """Call Groq to summarise the session and save as last_task."""
+        """Ask Groq for a JSON topic list covering the full session and save it."""
         try:
             if not _brain_ref:
                 return
             b = _brain_ref[0]
-            history = [h for h in b.history if h.get("role") in ("user", "assistant")]
-            if len(history) < 2:
+            # Collect ALL user messages for an accurate full-session picture
+            user_msgs = [h["content"] for h in b.history if h.get("role") == "user"]
+            if not user_msgs:
                 return
-            # Build a compact transcript (last 10 turns max)
-            lines = []
-            for h in history[-10:]:
-                role = "Omri" if h["role"] == "user" else "G.I.L."
-                lines.append(f"{role}: {h['content'][:120]}")
-            transcript = "\n".join(lines)
+            transcript = "\n".join(f"- {m[:200]}" for m in user_msgs)
 
             import requests as _req
             groq_key = os.getenv("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY_2", "")
@@ -2024,11 +2147,15 @@ def main() -> None:
                 "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content":
-                        "Summarise this conversation in ONE short sentence (max 15 words). "
-                        "Focus on what was worked on or discussed. No filler words."},
-                    {"role": "user", "content": transcript},
+                        "You extract topic labels from a chat log. "
+                        "Reply with ONLY a JSON array of 2-5 short topic strings (2-4 words each). "
+                        "No explanation, no markdown, just the raw JSON array. "
+                        'Example: ["gesture drag fix", "facial recognition", "cursor accuracy"]'},
+                    {"role": "user", "content":
+                        f"Here are the user messages from this session:\n{transcript}\n\n"
+                        "List the main topics as a JSON array."},
                 ],
-                "max_tokens": 40,
+                "max_tokens": 80,
                 "temperature": 0.2,
             }
             resp = _req.post(
@@ -2036,13 +2163,26 @@ def main() -> None:
                 headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
                 json=payload, timeout=8,
             )
-            summary = resp.json()["choices"][0]["message"]["content"].strip().strip('"')
-            if summary:
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            # Validate it's a proper JSON array before saving
+            import json as _json
+            topics = _json.loads(raw)
+            if isinstance(topics, list) and topics:
                 from memory import record_task
-                record_task(summary)
-                print(f"[G.I.L.] Session summary saved: {summary}")
+                record_task(_json.dumps(topics))
+                print(f"[G.I.L.] Session topics saved: {topics}")
         except Exception as exc:
             print(f"[G.I.L.] Summary save failed: {exc}")
+
+    # Periodic session summary save — survives ungraceful shutdown
+    def _periodic_summary():
+        while True:
+            time.sleep(600)   # every 10 minutes
+            try:
+                _save_conversation_summary()
+            except Exception:
+                pass
+    threading.Thread(target=_periodic_summary, daemon=True, name="GIL-SummarySave").start()
 
     # Wire session shutdown
     def _on_shutdown(msg: str):

@@ -14,6 +14,11 @@
       "key": "project",
       "name": "project",
       "created": "2026-04-30T11:50:13.634005"
+    },
+    "project_g.i.l.": {
+      "key": "project_g.i.l.",
+      "name": "project_g.i.l.",
+      "created": "2026-06-19T15:05:57.626183"
     }
   },
   "tasks": [
@@ -23,6 +28,13 @@
       "project": "project",
       "done": false,
       "created": "2026-04-30T11:50:13.651795"
+    },
+    {
+      "id": "508036dc",
+      "text": "fixed subtitles",
+      "project": "project_g.i.l.",
+      "done": false,
+      "created": "2026-06-19T15:05:57.641764"
     }
   ]
 }

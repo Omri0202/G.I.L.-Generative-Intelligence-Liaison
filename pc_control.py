@@ -47,10 +47,12 @@ def cancel_shutdown() -> str:
 
 def _get_volume_interface():
     from ctypes import cast, POINTER
-    from comtypes import CLSCTX_ALL
-    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-    devices   = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    from comtypes import CLSCTX_ALL, CoCreateInstance, GUID
+    from pycaw.pycaw import IAudioEndpointVolume, IMMDeviceEnumerator
+    CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
+    enumerator = CoCreateInstance(CLSID_MMDeviceEnumerator, IMMDeviceEnumerator, CLSCTX_ALL)
+    device    = enumerator.GetDefaultAudioEndpoint(0, 1)   # eRender=0, eMultimedia=1
+    interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 

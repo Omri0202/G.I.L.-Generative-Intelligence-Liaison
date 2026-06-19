@@ -21,6 +21,10 @@ env/
 # MediaPipe model (large binary, re-downloadable)
 data/hand_landmarker.task
 
+# Face recognition data (personal biometric data -- never commit)
+data/face_db/
+data/face_embeddings.json
+
 # Auth tokens / browser session data -- never commit
 data/.spotify_cache
 data/whatsapp_profile/

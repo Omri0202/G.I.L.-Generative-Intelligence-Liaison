@@ -29,16 +29,20 @@ def _set_clipboard(text: str) -> None:
     ctypes.memmove(ptr, encoded, len(encoded))
     k32.GlobalUnlock(h)
     u32.OpenClipboard(None)
-    u32.EmptyClipboard()
-    u32.SetClipboardData(CF_UNICODETEXT, h)
-    u32.CloseClipboard()
+    try:
+        u32.EmptyClipboard()
+        u32.SetClipboardData(CF_UNICODETEXT, h)
+    finally:
+        u32.CloseClipboard()
 
 
 def _clear_clipboard() -> None:
     u32 = ctypes.windll.user32
     u32.OpenClipboard(None)
-    u32.EmptyClipboard()
-    u32.CloseClipboard()
+    try:
+        u32.EmptyClipboard()
+    finally:
+        u32.CloseClipboard()
 
 
 # ── Personality helpers ───────────────────────────────────────────────────────
@@ -305,6 +309,7 @@ def execute_action(action: str, target: str) -> str | None:
         "open_url":        lambda: open_url(target),
         "system_vitals":   lambda: _handle_vitals(),
         "web_search":      lambda: open_web_search(target),
+        "web_research":    lambda: web_research(target),
         "sign_in":         lambda: sign_in(target),
         "take_screenshot": lambda: _handle_screenshot(),
         "build":           lambda: build_project(*_split_target(target)),
@@ -481,7 +486,7 @@ def sign_in(service: str) -> str:
 # ── System vitals ─────────────────────────────────────────────────────────────
 
 def get_vitals() -> dict:
-    cpu     = psutil.cpu_percent(interval=1)
+    cpu     = psutil.cpu_percent(interval=None)
     mem     = psutil.virtual_memory()
     disk    = psutil.disk_usage("/")
     battery = psutil.sensors_battery()
@@ -646,6 +651,80 @@ def open_web_search(query: str) -> str:
         url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
     webbrowser.open(url)
     return f"Search opened: {query}"
+
+
+def web_research(query: str) -> str:
+    """
+    Fetch real web results for query and return a spoken summary via Groq.
+    Uses DuckDuckGo Instant Answer API first, falls back to scraping top result snippets.
+    """
+    import requests as _rq
+
+    snippets: list[str] = []
+
+    # 1. DuckDuckGo Instant Answer API (no key, fast)
+    try:
+        r = _rq.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_redirect": 1, "no_html": 1},
+            timeout=6,
+            headers={"User-Agent": "GIL/1.0"},
+        )
+        data = r.json()
+        if data.get("AbstractText"):
+            snippets.append(data["AbstractText"][:600])
+        for result in data.get("RelatedTopics", [])[:4]:
+            if isinstance(result, dict) and result.get("Text"):
+                snippets.append(result["Text"][:200])
+    except Exception:
+        pass
+
+    # 2. Fallback: DuckDuckGo HTML search — parse result snippets
+    if not snippets:
+        try:
+            r = _rq.get(
+                f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}",
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+            import re as _re
+            # Extract result snippets from the HTML
+            texts = _re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', r.text, _re.DOTALL)
+            for t in texts[:5]:
+                clean = _re.sub(r"<[^>]+>", "", t).strip()
+                if clean:
+                    snippets.append(clean[:300])
+        except Exception:
+            pass
+
+    if not snippets:
+        return f"I couldn't fetch live results for '{query}'. Try opening a browser search instead."
+
+    # Summarize with Groq
+    combined = "\n".join(f"- {s}" for s in snippets[:6])
+    groq_key = os.getenv("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY_2", "")
+    if not groq_key:
+        # No LLM — return raw first snippet
+        return snippets[0][:280]
+
+    try:
+        resp = _rq.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "system", "content": "Summarize the key finding in 2 short spoken sentences. No markdown, no bullets. Conversational."},
+                    {"role": "user", "content": f"Query: {query}\n\nWeb results:\n{combined}"},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 120,
+            },
+            timeout=10,
+        )
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return snippets[0][:280]
 
 
 # ── Song identification (Shazam) ──────────────────────────────────────────────

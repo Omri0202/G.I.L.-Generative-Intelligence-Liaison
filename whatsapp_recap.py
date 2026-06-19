@@ -120,15 +120,17 @@ def get_unread_messages(timeout_secs: int = 12) -> list[dict]:
 
     _scraping[0] = True
     result: list = [None]
+    _generation = [object()]   # unique token so the hung thread's finally doesn't clobber a new scrape
 
-    def _run():
+    def _run(gen=_generation[0]):
         try:
             result[0] = _scrape_playwright()
         except Exception as exc:
             print(f"[G.I.L. WHATSAPP] Scraper thread error: {exc}")
             result[0] = []
         finally:
-            _scraping[0] = False
+            if _generation[0] is gen:   # only reset if no newer scrape has started
+                _scraping[0] = False
 
     t = threading.Thread(target=_run, daemon=True, name="GIL-WAScrape")
     t.start()
@@ -137,7 +139,8 @@ def get_unread_messages(timeout_secs: int = 12) -> list[dict]:
     if result[0] is None:
         # Thread is still running (Playwright hung) — return immediately, don't block
         print(f"[G.I.L. WHATSAPP] Hard timeout after {timeout_secs}s — resuming.")
-        _scraping[0] = False   # unblock future calls — the hung thread will self-clean
+        _generation[0] = object()   # invalidate the hung thread's finally token
+        _scraping[0] = False
         return []
 
     return result[0]

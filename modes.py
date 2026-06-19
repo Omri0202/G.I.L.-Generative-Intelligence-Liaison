@@ -13,6 +13,7 @@ _paused_callback:   Callable[[bool], None] | None   = None
 _window_ref                                          = None
 _speak_ref:         Callable[[str], None] | None     = None
 _pomodoro_active                                     = [False]
+_pomodoro_thread: list                               = [None]
 
 # Modes that block proactive announcements (emails, WhatsApp, etc.)
 _PROACTIVE_BLOCKED = {"dnd", "study"}
@@ -117,6 +118,8 @@ def _activate_fun_mode() -> None:
 
 
 def _start_pomodoro() -> None:
+    if _pomodoro_thread[0] and _pomodoro_thread[0].is_alive():
+        return  # already running — don't spawn a second thread
     _pomodoro_active[0] = True
 
     def _loop():
@@ -138,7 +141,9 @@ def _start_pomodoro() -> None:
                     return
                 time.sleep(1)
 
-    threading.Thread(target=_loop, daemon=True, name="GIL-Pomodoro").start()
+    t = threading.Thread(target=_loop, daemon=True, name="GIL-Pomodoro")
+    _pomodoro_thread[0] = t
+    t.start()
 
 
 def _stop_pomodoro() -> None:

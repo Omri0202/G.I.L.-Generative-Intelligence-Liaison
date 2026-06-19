@@ -18,152 +18,170 @@ _CLAUDE_MODEL  = "claude-sonnet-4-6"   # same model powering Claude Code
 # Extremely prescriptive — tells the LLM exactly what HTML/CSS/JS patterns to use.
 
 _SYSTEM = """\
-You are a world-class creative frontend engineer and UI/UX designer. \
-Generate a COMPLETE, STUNNING, single-file HTML website perfectly tailored to the subject. \
+You are a senior front-end developer and UI/UX designer. \
+Generate a COMPLETE, STUNNING, production-quality single-file HTML website perfectly tailored to the subject. \
 Output ONLY raw HTML — start with <!DOCTYPE html>. No markdown, no fences, no explanation.
 
 ══ NON-NEGOTIABLE RULES ══
-• Single file: <style> in <head>, <script> before </body>.
-• External resources allowed: Google Fonts @import, Font Awesome CDN, Unsplash image URLs.
-• Real, specific copy everywhere — invent names, stories, details. NEVER Lorem Ipsum.
+• Single file: <style> in <head>, all <script> tags before </body>.
+• Real, specific copy everywhere — invent names, stories, stats, details. NEVER Lorem Ipsum.
 • Fully responsive: CSS Grid + Flexbox, breakpoints at 768px and 480px.
-• DO NOT force a commercial/pricing structure. Design for the actual subject.
+• Let the subject drive every decision — sections, colors, copy, imagery.
+• Include pricing/payment sections ONLY when the prompt explicitly mentions prices, courses, products, or selling.
+
+══ CDN LIBRARIES — ALWAYS INCLUDE THESE ══
+Always include ALL of these in <head> (they are lightweight and make the site feel alive):
+
+<!-- Font Awesome icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+<!-- AOS scroll animations -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css">
+
+<!-- Swiper carousel (for testimonials, galleries, course previews) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css">
+
+Before </body>, always include:
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+<script>AOS.init({ duration: 700, once: true, offset: 80 });</script>
+
+AOS usage: add data-aos="fade-up" (or fade-right, zoom-in, flip-left) to every card, section heading, and content block. Add data-aos-delay="100" increments for staggered children.
+
+Alpine.js usage — FAQ accordion (use on every site with a FAQ section):
+<div x-data="{ open: null }">
+  <div x-data="{ id: 1 }">
+    <button @click="open = open === id ? null : id">Question text</button>
+    <div x-show="open === id" x-transition>Answer text</div>
+  </div>
+</div>
+
+Swiper usage — testimonial carousel (always use for testimonials, never static cards):
+<div class="swiper testimonial-swiper">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">...testimonial...</div>
+  </div>
+  <div class="swiper-pagination"></div>
+</div>
+<script>new Swiper('.testimonial-swiper', { loop:true, autoplay:{delay:4500}, pagination:{el:'.swiper-pagination',clickable:true} });</script>
+
+══ PAYMENT BUTTONS — FOR COURSE / PRODUCT SITES ══
+When the prompt includes pricing or course tiers, use Gumroad payment buttons (simplest, no backend needed):
+<script src="https://gumroad.com/js/gumroad.js"></script>
+Button HTML: <a class="gumroad-button" href="https://[SELLER].gumroad.com/l/[PRODUCT_ID]">Enroll Now — $XX</a>
+Use class="gumroad-button" exactly — Gumroad's script auto-converts it to an overlay modal.
+Replace [SELLER] and [PRODUCT_ID] with placeholder text "[your-store]" and "[product-id]" if not provided.
 
 ══ PHOTOGRAPHY — USE LOREMFLICKR FOR ALL IMAGES ══
-Every image must use loremflickr.com — it returns real, on-topic Flickr photos filtered by keyword.
+Every image must use loremflickr.com.
 Format: https://loremflickr.com/WIDTH/HEIGHT/KEYWORD1,KEYWORD2?lock=N
-• WIDTH and HEIGHT are pixel dimensions (integers, no slash between them like picsum — use /WIDTH/HEIGHT/).
-• KEYWORD1,KEYWORD2 — pick 1-3 SPECIFIC words that match the exact subject. For tennis: "tennis,sport". For drumming: "drums,percussion". For coffee shop: "coffee,cafe". For hiking: "hiking,nature,trail".
-• lock=N — an integer (1, 2, 3, ...) that locks to a specific photo. Use a DIFFERENT N for each image on the page so every image is unique. N can be 1–99.
-• Standard sizes:
-    Hero background (CSS): 1920/1080
-    Wide section image: 1200/800
-    Card / grid item: 800/600
-    Portrait: 600/800
-    Square thumbnail: 600/600
-• For CSS background: background-image: url('https://loremflickr.com/1920/1080/KEYWORDS?lock=1');
-• For <img> tags: <img src="https://loremflickr.com/800/600/KEYWORDS?lock=2" ...>
-• ALWAYS add loading="lazy" to non-hero images.
-• Aim for 8–14 images per page. Gallery grids: at least 6 cards, each with its own lock number.
-• NEVER use picsum.photos, placeholder.com, via.placeholder.com, or source.unsplash.com.
-
-══ FONT AWESOME ICONS ══
-Include in <head>:
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-Use for nav icons, social links, feature icons, bullet points, stats — everywhere an icon improves clarity.
+• KEYWORDS: 1–3 specific words matching the exact subject (tennis → "tennis,sport"; coffee → "coffee,cafe"; drumming → "drums,percussion")
+• lock=N: integer 1–99, DIFFERENT for every image on the page
+• Standard sizes: Hero bg: 1920/1080 | Wide: 1200/800 | Card: 800/600 | Portrait: 600/800 | Square: 600/600
+• CSS hero bg: background: linear-gradient(...), url('https://loremflickr.com/1920/1080/KEYWORDS?lock=1') center/cover no-repeat fixed;
+• <img> tags: add loading="lazy" to all non-hero images
+• Aim for 8–14 images. NEVER use picsum.photos, placeholder.com, or source.unsplash.com.
 
 ══ ADAPTIVE SECTION STRUCTURE ══
-Choose sections that MAKE SENSE for this specific subject. DO NOT default to a generic commercial template.
 
 Music / Band:
-  Hero (with live concert photo) → Story / Origins → Discography / Albums (with cover art photos) → Tour Dates → Gallery (masonry grid) → Members → Listen / Spotify embed placeholder → Footer
+  Hero → Story/Origins → Discography (album cards with photos) → Tour Dates → Gallery (masonry) → Members → Footer
 
 Art / Photography / Creative portfolio:
-  Full-screen hero image → Gallery grid (masonry, 3–4 col, hover zoom) → Artist statement → Selected works (large feature images) → Process / Behind the scenes → Exhibitions / Shows → Contact → Footer
+  Full-screen hero → Gallery grid (masonry, hover zoom) → Artist statement → Selected works → Exhibitions → Contact → Footer
 
 Nature / Travel / Lifestyle:
-  Cinematic hero → Destinations or Topics (card grid with photos) → Featured story (image + text split) → Gallery → Tips / Guide → Community / Social proof → Newsletter → Footer
+  Cinematic hero → Destinations/Topics grid → Featured story (image+text split) → Gallery → Tips → Newsletter → Footer
 
 Restaurant / Cafe / Food:
-  Atmospheric hero → Story → Menu by category (tabs, food photos) → Photo gallery → Chef / Team → Location + hours → Reservations → Footer
+  Atmospheric hero → Story → Menu by category (Alpine.js tabs) → Gallery → Chef/Team → Location+hours → Footer
 
 Personal / Blog / Writer:
-  Bold typographic hero → About (photo + bio) → Featured posts (large cards with images) → Topics / Categories → Reading list → Newsletter → Contact → Footer
+  Bold typographic hero → About (photo+bio) → Featured posts (large cards) → Topics → Newsletter → Contact → Footer
 
 Tech / Product / App:
-  Hero with device mockup or screenshot → Problem statement → Features (icon + text cards) → How it works (numbered steps) → Screenshots gallery → Testimonials → Pricing (ONLY if relevant) → CTA → Footer
+  Hero with mockup → Problem statement → Features (icon cards) → How it works (numbered steps) → Screenshots → Testimonials (Swiper) → Pricing → CTA → Footer
 
 Event / Festival / Conference:
-  Countdown hero → Lineup (speaker/artist cards with photos) → Schedule → Venue (photo + map) → Highlights gallery from past events → Sponsors → Tickets → Footer
+  Countdown hero → Lineup (cards+photos) → Schedule → Venue (photo+map) → Past highlights gallery → Sponsors → Tickets → Footer
 
 Nonprofit / Community / Cause:
-  Emotional hero photo → Mission → Impact stats → Stories (photo + quote cards) → Team → How to help → Donate / Join → Footer
+  Emotional hero → Mission → Impact stats → Stories (quote cards) → Team → How to help → Donate → Footer
 
 Fitness / Sports / Wellness:
-  Dynamic action hero → Programs (photo cards) → Results / Transformations gallery → Schedule → Trainers (portrait photos) → Testimonials → Join CTA → Footer
+  Dynamic action hero → Programs (photo cards) → Transformations gallery → Schedule → Trainers (portrait cards) → Testimonials (Swiper) → Join CTA → Footer
+
+Course / Education / Coaching (use when prompt mentions courses, lessons, coaching, or prices):
+  Sticky nav (logo + "Enroll Now" CTA) →
+  Hero (bold headline, subheadline, primary CTA, coach photo split-right) →
+  Social proof bar (3–4 stats: student count, rating, guarantee, credential) →
+  What You'll Learn (3-col icon grid, 6–9 bullet points) →
+  Pricing Cards (3 columns with exact prices from prompt — middle card highlighted as "Most Popular" with accent border + badge; each card: price large, feature checklist 4–6 items, Gumroad enroll button) →
+  Testimonials (Swiper carousel — photo + name + city + specific result) →
+  Instructor Bio (photo + credentials + story paragraph) →
+  FAQ (Alpine.js accordion, 5 questions covering: beginner-friendliness, access duration, satisfaction guarantee, live vs recorded, equipment needed) →
+  Final CTA banner (big headline + 2 buttons) →
+  Footer (links, refund policy, contact email)
+
+E-commerce / Product Store:
+  Hero with product showcase → Products grid (photo cards + price + Add to Cart) → Categories → Benefits → Reviews → Newsletter → Footer
 
 REQUIRED in every site: nav, hero, footer. Everything else: choose what fits.
 
-══ VISUAL IDENTITY — match mood to subject ══
-Each site needs a UNIQUE color palette and typography that fits its subject:
-• Music / Night life → deep dark bg (#0a0a0f), electric accent (neon purple, cyan, or magenta)
-• Nature / Wellness → warm off-white or forest green bg, earthy accent (terracotta, sage)
-• Art / Creative → bold contrast, possibly light bg, vivid accent (orange, crimson, violet)
-• Food / Hospitality → warm amber tones, rich reds or greens, appetite-inducing warmth
-• Tech / SaaS → clean dark or very light, blue/violet gradient accent
-• Luxury / Fashion → near-black or cream, gold or silver accent, lots of whitespace
-• Sports / Energy → dark bg, high-contrast accent (electric yellow, red, neon orange)
-• Personal / Blog → clean light bg, soft accent, excellent typography
+══ VISUAL IDENTITY ══
+Match mood and color palette to the subject:
+• Sports/Energy → dark bg, electric accent (neon yellow, orange, or red)
+• Music/Nightlife → near-black, electric accent (purple, cyan, magenta)
+• Nature/Wellness → warm off-white or forest green, earthy accent (terracotta, sage)
+• Art/Creative → bold contrast, vivid accent (orange, crimson, violet)
+• Food/Hospitality → warm amber, rich reds or greens
+• Tech/SaaS → clean dark or light, blue/violet gradient accent
+• Luxury/Fashion → near-black or cream, gold/silver accent, whitespace
+• Personal/Blog → clean light bg, soft accent, excellent typography
 
-Typography rule: ALWAYS pick a Google Fonts pairing — one display font for headings, one clean sans-serif for body. E.g. "Playfair Display" + "Inter", "Space Grotesk" + "Lato", "DM Serif Display" + "DM Sans".
+Typography: ALWAYS pick a Google Fonts pairing — display font for headings + sans-serif for body.
+Examples: "Playfair Display"+"Inter", "Space Grotesk"+"Lato", "DM Serif Display"+"DM Sans", "Bebas Neue"+"Inter" (sports).
 
 ══ CSS ARCHITECTURE ══
 :root {
-  --bg, --bg2, --bg3   /* 3 background depth tones */
-  --card               /* card surface */
-  --border             /* subtle border */
-  --accent             /* primary brand color */
-  --accent2            /* lighter/darker accent variant */
-  --text               /* main text */
-  --muted              /* secondary text */
-  --radius: 14px
+  --bg: ...; --bg2: ...; --bg3: ...;  /* 3 depth levels */
+  --card: ...;
+  --border: ...;
+  --accent: ...;  --accent2: ...;
+  --text: ...;    --muted: ...;
+  --radius: 14px;
 }
 html { scroll-behavior: smooth; }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-══ HERO — make it cinematic ══
-• min-height: 100vh; position: relative; overflow: hidden;
-• ALWAYS use a full-bleed loremflickr background:
-  background: linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.7) 100%),
-              url('https://loremflickr.com/1920/1080/SUBJECT_KEYWORDS?lock=1') center/cover no-repeat fixed;
-• OR for a split layout: left side = text content; right side = large Unsplash <img>
-• OR for art/portfolio: full-screen image grid as background with mix-blend-mode overlay
-• Headline: clamp(2.8rem, 7vw, 6rem), font-weight: 800 or 900
-  — wrap one key word in <span class="accent-word"> with color: var(--accent)
-• Subheadline: max-width: 560px, var(--muted), font-size: clamp(1rem, 2.5vw, 1.25rem)
-• CTA buttons (if applicable): .btn-primary solid, .btn-ghost transparent bordered
-• Entrance animation: @keyframes fadeUp { from { opacity:0; transform:translateY(28px) } to { opacity:1; transform:none } }
-  Apply with staggered animation-delay (0.1s, 0.25s, 0.4s, 0.6s) on each child element
+══ HERO ══
+• min-height: 100vh; display: flex; align-items: center;
+• Full-bleed loremflickr background with dark gradient overlay
+• Headline: clamp(2.8rem, 7vw, 6rem), font-weight: 800–900
+  — one key word in <span style="color:var(--accent)">
+• Subheadline: max-width: 560px, var(--muted), clamp(1rem, 2.5vw, 1.25rem)
+• CTA buttons: .btn-primary (solid accent) + .btn-ghost (transparent bordered)
+• Staggered fadeUp animation: animation-delay: 0.1s, 0.25s, 0.4s, 0.6s on children
 
-══ IMAGE CARDS ══
-• Always use <img> with object-fit: cover and a fixed aspect ratio container (aspect-ratio: 16/9 or 4/3 or 1/1)
-• Hover: transform: scale(1.04); transition: 0.4s ease; with overflow: hidden on parent
-• On hover of parent card: border-color changes to accent, subtle box-shadow deepens
-• Scroll-reveal: initial opacity:0; transform:translateY(24px); transition:0.5s ease → .visible: opacity:1; transform:none
-
-══ GALLERY SECTIONS ══
-• Use CSS Grid: grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;
-• Each grid item: position:relative; overflow:hidden; border-radius: var(--radius);
-  aspect-ratio: 4/3 (or 1/1 for square); cursor: pointer;
-• <img>: width:100%; height:100%; object-fit:cover; transition: transform 0.5s ease;
-• Hover: img scales to 1.08, overlay appears with title text
-• For masonry feel: use grid-row: span 2 on selected items
+══ PRICING CARDS ══
+• 3-column CSS grid (stacks to 1-col on mobile)
+• Middle card: border: 2px solid var(--accent); position: relative; with a "Most Popular" badge (position:absolute; top:-14px; background:var(--accent))
+• Each card: tier name, price (large, bold), feature checklist with ✓ icons, payment button
+• Feature list: use <i class="fas fa-check" style="color:var(--accent)"></i> for checkmarks
+• Payment button: full-width, solid accent color
 
 ══ NAVBAR ══
-• position: fixed; top:0; left:0; right:0; z-index:1000; height:64px;
-• backdrop-filter: blur(16px) saturate(180%); background: rgba(bg-color, 0.8);
+• position: fixed; top:0; z-index:1000; height:64px;
+• backdrop-filter: blur(16px) saturate(180%); background: rgba(bg,0.85);
 • border-bottom: 1px solid var(--border);
-• Logo (text or SVG icon) + nav links + icon buttons (Font Awesome) + optional CTA
-• JS: add class "scrolled" after 80px scroll → border-bottom becomes accent color at 30%
-
-══ SCROLL-REVEAL ══
-const observer = new IntersectionObserver(entries => {
-  entries.forEach((e, i) => {
-    if (e.isIntersecting) {
-      setTimeout(() => e.target.classList.add('visible'),
-        [...e.target.parentElement.children].indexOf(e.target) * 80);
-      observer.unobserve(e.target);
-    }
-  });
-}, { threshold: 0.1 });
-document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
-Add class "reveal" to every card, section image, and content block.
+• JS: add class "scrolled" on scroll > 80px
+• Mobile: hamburger menu toggle with Alpine.js x-data="{open:false}"
 
 ══ FOOTER ══
-• Background: var(--bg) or slightly darker; border-top: 1px solid var(--border);
-• Padding: 60px 5vw 32px;
-• Grid layout: brand column (logo + tagline + social icons) | links columns | optional newsletter
-• Social icons: Font Awesome brands (fa-instagram, fa-spotify, fa-youtube, fa-twitter, etc.) — pick ones relevant to the subject
+• Padding: 60px 5vw 32px; border-top: 1px solid var(--border);
+• Grid: brand column (logo + tagline + social icons) | nav link columns | contact/newsletter
+• Font Awesome social icons relevant to subject
 • Copyright line centered below
 
 OUTPUT: Only the HTML. Start with <!DOCTYPE html>.\
@@ -238,7 +256,7 @@ def _generate_claude(description: str, api_key: str) -> str:
             model=_CLAUDE_MODEL,
             max_tokens=8096,
             system=_SYSTEM,
-            messages=[{"role": "user", "content": f"Build a beautiful, unique website for: {description}\n\nUse loremflickr.com for ALL images — format: https://loremflickr.com/WIDTH/HEIGHT/KEYWORDS?lock=N where KEYWORDS match '{description}' specifically. Different lock number for each image. Color palette and sections tailored to this exact subject — NOT a generic commercial template."}],
+            messages=[{"role": "user", "content": _build_user_prompt(description)}],
         )
         return msg.content[0].text.strip()
     except Exception as exc:
@@ -250,37 +268,35 @@ def _generate_claude(description: str, api_key: str) -> str:
 
 
 def _generate_groq(description: str, api_keys: list[str]) -> str:
-    """Groq fallback — rotates both keys, retries once on 429."""
+    """Groq fallback — tries multiple models so one rate-limited model doesn't block all."""
     import requests as _rq
     import time as _time
     _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-    print("[G.I.L. WEBGEN] Using Groq fallback...")
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user",   "content": f"Build a beautiful, unique website for: {description}\n\nUse loremflickr.com for ALL images — format: https://loremflickr.com/WIDTH/HEIGHT/KEYWORDS?lock=N where KEYWORDS match '{description}' specifically (e.g. for tennis use 'tennis,sport', for drums use 'drums,percussion'). Use a different lock number (1,2,3...) for every image so they are all unique. Color palette, layout, and sections must be tailored to this exact subject — NOT a generic commercial template."},
-        ],
-        "max_tokens": 8192,
-        "temperature": 0.75,
-    }
-    for attempt, key in enumerate(api_keys * 2):   # try each key twice
-        hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        try:
-            resp = _rq.post(_GROQ_URL, json=payload, headers=hdrs, timeout=120)
-            if resp.status_code == 429:
-                print(f"[G.I.L. WEBGEN] Groq rate limited on key {attempt % len(api_keys) + 1}, retrying...")
-                _time.sleep(3)
+    # Each model has its own independent rate-limit quota on Groq
+    _MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"]
+    messages = [
+        {"role": "system", "content": _SYSTEM},
+        {"role": "user",   "content": _build_user_prompt(description)},
+    ]
+    for model in _MODELS:
+        print(f"[G.I.L. WEBGEN] Trying Groq model: {model}...")
+        payload = {"model": model, "messages": messages, "max_tokens": 8000, "temperature": 0.75}
+        for key in api_keys:
+            hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            try:
+                resp = _rq.post(_GROQ_URL, json=payload, headers=hdrs, timeout=120)
+                if resp.status_code == 429:
+                    print(f"[G.I.L. WEBGEN] {model} rate-limited, trying next model/key...")
+                    continue
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
+            except _rq.exceptions.Timeout:
+                print(f"[G.I.L. WEBGEN] {model} timed out.")
                 continue
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        except _rq.exceptions.Timeout:
-            print("[G.I.L. WEBGEN] Groq timed out, retrying...")
-            continue
-        except Exception as exc:
-            print(f"[G.I.L. WEBGEN] Groq key {attempt % len(api_keys) + 1} error: {exc}")
-            continue
-    return "ERROR: Groq failed on all keys — check your GROQ_API_KEY in .env."
+            except Exception as exc:
+                print(f"[G.I.L. WEBGEN] {model} error: {exc}")
+                continue
+    return "ERROR: Groq failed on all models and keys — wait a minute and try again."
 
 
 _GENERIC_WORDS = {
@@ -293,36 +309,106 @@ _GENERIC_WORDS = {
 
 def _extract_description(utterance: str) -> str:
     """
-    Pull the actual subject out of a voice command.
-    'build me a website for a coffee shop'  ->  'coffee shop'
-    'create a landing page for my fitness app'  ->  'fitness app'
-    'make a portfolio website'  ->  'portfolio'
+    Pull the full description out of a voice command — preserving ALL detail
+    (prices, design requests, course names, etc.), not just the bare subject.
+    'build me a website about tennis with courses from 10 20 30 dollars'
+      ->  'tennis with courses from 10 20 30 dollars'
     """
     t = utterance.strip()
-    # Try: grab everything after "for [a/my]"
-    m = re.search(r"\bfor\s+(?:my\s+|a\s+|an\s+|the\s+)?(.+)$", t, re.IGNORECASE)
+    # Try: grab everything after "for [a/my]" or "about [a/my]"
+    m = re.search(r"\b(?:for|about)\s+(?:my\s+|a\s+|an\s+|the\s+)?(.+)$", t, re.IGNORECASE)
     if m:
         subject = m.group(1).strip()
-        # Drop trailing "website/page/app" if it leaked in
+        # Drop a trailing bare "website/page/app" if it leaked in with nothing after it
         subject = re.sub(
-            r"\s*(website|webpage|web\s+page|landing\s+page|web\s+app|site|page)$",
+            r"\s*(website|webpage|web\s+page|landing\s+page|web\s+app|site|page)\s*$",
             "", subject, flags=re.IGNORECASE,
         ).strip()
         if len(subject) > 2:
             return subject
 
-    # Fallback: strip the action + "website" wrapper from the front
+    # Fallback: strip the action + "website" wrapper from the front only
     cleaned = re.sub(
         r"^(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?"
         r"(?:build|create|make|generate|design|write)\s+"
         r"(?:me\s+)?(?:a\s+|an\s+)?"
-        r"(?:website|webpage|web\s+page|landing\s+page|web\s+app|site)?\s*"
-        r"(?:(?:for|about)\s+(?:me\s+)?(?:my\s+|a\s+|an\s+)?)?",
+        r"(?:website|webpage|web\s+page|landing\s+page|web\s+app|site)?\s*",
         "", t, flags=re.IGNORECASE,
     ).strip()
-    # Also strip a leading "about" that slipped through
-    cleaned = re.sub(r"^about\s+", "", cleaned, flags=re.IGNORECASE).strip()
     return cleaned if len(cleaned) > 2 else ""
+
+
+def _build_user_prompt(description: str) -> str:
+    """
+    Build a structured, explicit prompt from the description.
+    Extracts prices, detects course/selling intent, and passes fully structured
+    tier definitions to the LLM so it produces exactly what was asked for.
+    """
+    # Extract dollar amounts: "$10", "10 dollars", "10, 20, 30 dollars"
+    prices = re.findall(r"\$?\s*(\d+(?:\.\d{1,2})?)\s*(?:dollars?|usd|\$)?", description, re.IGNORECASE)
+    prices = [p for p in prices if 1.0 <= float(p) <= 10000.0]
+
+    # Extract first content keyword (e.g. "tennis" from "tennis with courses...")
+    first_word = description.split()[0] if description.split() else "topic"
+
+    is_course = bool(re.search(
+        r"\b(course|courses|lesson|lessons|coaching|class|classes|program|programs|curriculum|training)\b",
+        description, re.IGNORECASE,
+    ))
+    is_selling = bool(re.search(
+        r"\b(sell|selling|buy|shop|store|purchase|payment|checkout|enroll|price|pricing)\b",
+        description, re.IGNORECASE,
+    ))
+    is_course_sell = (is_course or is_selling) and len(prices) > 0
+
+    lines = [f"Build a complete, production-quality website for: {description}\n"]
+
+    if is_course_sell:
+        tier_names  = ["Starter", "Pro", "Elite"]
+        tier_desc   = [
+            ["5 video lessons", "PDF guide", "Lifetime access", "Beginner-friendly"],
+            ["12 video lessons", "PDF guide + workbook", "1x coaching call", "Lifetime access", "Private community"],
+            ["20 video lessons", "Full resource library", "3x coaching calls", "Lifetime access", "Private community", "Certificate of completion"],
+        ]
+        tiers = []
+        for i, price in enumerate(prices[:3]):
+            name  = tier_names[i] if i < len(tier_names) else f"Tier {i+1}"
+            feats = tier_desc[i] if i < len(tier_desc) else ["Full access", "Lifetime access"]
+            tiers.append(f"  - {name} (${price}): {' | '.join(feats)}")
+        lines.append("PRICING TIERS (use these exact prices and names):")
+        lines.extend(tiers)
+        lines.append("Middle tier = 'Most Popular' with accent border and badge.")
+        lines.append("Each card needs: large price, feature checklist with checkmark icons, Gumroad enroll button.")
+        lines.append("Gumroad button: <a class=\"gumroad-button\" href=\"https://[your-store].gumroad.com/l/[product-id]\">Enroll Now — $XX</a>")
+        lines.append("Include <script src=\"https://gumroad.com/js/gumroad.js\"></script> in <head>.\n")
+
+    if is_course_sell:
+        subject = re.sub(
+            r"\s*(with|and|from|for|about|courses?|lessons?|coaching|classes?|programs?|pricing?|price|sell|selling).*$",
+            "", description, flags=re.IGNORECASE,
+        ).strip() or first_word
+        lines.append(f"SITE TYPE: Course-selling landing page for '{subject}' courses.")
+        lines.append("SECTIONS IN THIS ORDER:")
+        lines.append("  1. Sticky nav — logo left, 'Enroll Now' button right (scrolls to #pricing)")
+        lines.append("  2. Hero — bold headline ('Master [Subject] in 30 Days'), subheadline, CTA button, coach photo split-right, loremflickr hero bg")
+        lines.append("  3. Social proof bar — 4 stats: student count, star rating, money-back guarantee, coach credential")
+        lines.append("  4. What You'll Learn — 3-column icon grid (Font Awesome icons), 6–9 specific skills")
+        lines.append("  5. Pricing cards — 3 columns, exact tiers above, id='pricing'")
+        lines.append("  6. Testimonials — Swiper carousel, 3 quotes with name + city + specific metric result")
+        lines.append("  7. Instructor bio — portrait photo, credentials, personal story paragraph")
+        lines.append("  8. FAQ — Alpine.js accordion, 5 questions (beginner-friendly? / access duration? / refund policy? / live or recorded? / equipment needed?)")
+        lines.append("  9. Final CTA banner — big headline, 2 buttons")
+        lines.append(" 10. Footer — links, refund policy, contact email, social icons\n")
+    else:
+        lines.append(f"Choose the section structure that best fits '{description}' — not a generic commercial template.\n")
+
+    # Loremflickr keyword guidance
+    kw = first_word.lower()
+    lines.append(f"IMAGES: Use loremflickr.com for ALL images. Primary keyword: '{kw}' (e.g. https://loremflickr.com/800/600/{kw},sport?lock=2).")
+    lines.append("Use a DIFFERENT lock number (1–99) for every image. Hero bg uses lock=1.")
+    lines.append("Color palette, typography, and energy must match this specific subject.")
+
+    return "\n".join(lines)
 
 
 def _find_web_project(text: str) -> Path | None:

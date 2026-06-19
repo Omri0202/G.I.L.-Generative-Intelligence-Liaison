@@ -52,6 +52,16 @@ def _init_db() -> None:
             value      TEXT NOT NULL,
             updated_at REAL NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS schedule_patterns (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_of_week INTEGER NOT NULL,   -- 0=Mon … 6=Sun
+            time_block  TEXT    NOT NULL,   -- 'morning'|'afternoon'|'evening'|'night'
+            topic       TEXT    NOT NULL,
+            count       INTEGER DEFAULT 1,
+            last_seen   REAL    NOT NULL,
+            UNIQUE(day_of_week, time_block, topic)
+        );
     """)
     conn.close()
 
@@ -289,12 +299,20 @@ def _run_extraction(user_text: str, gil_response: str) -> None:
         return
 
     prompt = (
-        "Extract facts worth remembering from this conversation exchange.\n"
-        "Only extract CONCRETE facts: preferences, decisions, names, projects, goals, dislikes, habits.\n"
-        "NOT opinions, greetings, vague chat, or filler.\n"
+        "Extract facts worth remembering long-term from this conversation. The user is Omri.\n"
+        "Extract ONLY concrete, specific, durable facts — NOT filler, greetings, or transient info.\n\n"
+        "Memory types:\n"
+        "  fact        — concrete fact about Omri (name, setup, owns X, lives in Y)\n"
+        "  preference  — how Omri likes things done (prefers X, always wants Y, hates Z)\n"
+        "  habit       — behavioral pattern (works late nights, iterates quickly, uses X for Y)\n"
+        "  project     — active project info (building X, working on Y feature, deadline Z)\n"
+        "  decision    — explicit choice made (chose X over Y, decided to use Z)\n"
+        "  tool        — software/service Omri uses (uses X for Y, switched from A to B)\n"
+        "  frustration — things that annoy or block Omri (GIL kept doing X wrong, X doesn't work)\n"
+        "  person      — someone Omri mentioned (mom, a colleague, a client)\n\n"
         "Return a JSON array ONLY — no explanation, no markdown:\n"
-        '[{"type": "fact|preference|project|decision", "content": "...", "importance": 1-10}]\n'
-        "Return [] if nothing is worth remembering. Max 3 items. Be very selective.\n\n"
+        '[{"type": "...", "content": "...", "importance": 1-10}]\n'
+        "Return [] if nothing durable is learned. Max 4 items. Be selective — quality over quantity.\n\n"
         f"User: {user_text}\n"
         f"GIL: {gil_response}\n\n"
         "JSON array:"
@@ -338,6 +356,65 @@ def _run_extraction(user_text: str, gil_response: str) -> None:
                     )
     except Exception as exc:
         print(f"[G.I.L. MEMORY] Extraction skipped: {exc}")
+
+
+# ── Schedule learning ─────────────────────────────────────────────────────────
+
+def _time_block(hour: int) -> str:
+    if 5  <= hour < 12: return "morning"
+    if 12 <= hour < 17: return "afternoon"
+    if 17 <= hour < 22: return "evening"
+    return "night"
+
+
+def record_schedule_activity(topic: str) -> None:
+    """Call this when GIL has a real conversation — records day/time + topic."""
+    if not topic or len(topic) < 3:
+        return
+    now   = datetime.now()
+    day   = now.weekday()          # 0=Mon … 6=Sun
+    block = _time_block(now.hour)
+    topic = topic[:60].strip()
+    try:
+        with _db_lock:
+            conn = _get_db()
+            conn.execute("""
+                INSERT INTO schedule_patterns (day_of_week, time_block, topic, count, last_seen)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(day_of_week, time_block, topic)
+                DO UPDATE SET count=count+1, last_seen=excluded.last_seen
+            """, (day, block, topic, time.time()))
+            conn.commit()
+            conn.close()
+    except Exception as exc:
+        print(f"[G.I.L. MEMORY] Schedule record error: {exc}")
+
+
+def get_schedule_suggestion() -> str:
+    """
+    Returns a proactive suggestion if a clear pattern matches today's day+time.
+    Requires count >= 3 for the same day+block+topic before suggesting.
+    """
+    now   = datetime.now()
+    day   = now.weekday()
+    block = _time_block(now.hour)
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    try:
+        with _db_lock:
+            conn = _get_db()
+            rows = conn.execute("""
+                SELECT topic, count FROM schedule_patterns
+                WHERE day_of_week=? AND time_block=? AND count >= 3
+                ORDER BY count DESC LIMIT 1
+            """, (day, block)).fetchall()
+            conn.close()
+        if rows:
+            topic = rows[0]["topic"]
+            return (f"It's {block} on {DAY_NAMES[day]} — you usually work on '{topic}' around now. "
+                    f"Want me to get everything set up?")
+    except Exception as exc:
+        print(f"[G.I.L. MEMORY] Schedule query error: {exc}")
+    return ""
 
 
 def _announce_db_error_once() -> None:

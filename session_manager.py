@@ -59,23 +59,40 @@ def build_startup_greeting(username: str = "Omri") -> str:
 
     if last.get("is_recent") and last.get("last_task"):
         hours_ago = last.get("hours_ago") or 0
-        last_task = last["last_task"][:60]
+        raw_task  = last["last_task"]
+
+        # Try to parse as a JSON topic array (new format)
+        try:
+            import json as _j
+            topics = _j.loads(raw_task)
+            if isinstance(topics, list) and topics:
+                if len(topics) == 1:
+                    topic_str = topics[0]
+                elif len(topics) == 2:
+                    topic_str = f"{topics[0]} and {topics[1]}"
+                else:
+                    topic_str = ", ".join(topics[:-1]) + f", and {topics[-1]}"
+                last_task = topic_str
+            else:
+                last_task = raw_task[:60]
+        except Exception:
+            last_task = raw_task[:60]
 
         if hours_ago < 0.5:
             greeting = (f"Welcome back, {username}. "
-                        f"You were just working on {last_task} — picking up where we left off.")
+                        f"Last session you covered: {last_task}. Picking up where we left off?")
         elif hours_ago < 3:
             greeting = (f"{tod}, {username}. "
-                        f"You were working on {last_task} — still on that, or something new?")
+                        f"Last session you covered: {last_task}. Still on that, or something new?")
         elif hours_ago < 12:
             greeting = (f"{tod}, {username}. "
-                        f"Last session you were on {last_task}. Want to continue?")
+                        f"Last session you covered: {last_task}. Want to continue?")
         else:
             greeting = (f"{tod}, {username}. "
-                        f"Yesterday you were working on {last_task}. Ready to pick it back up?")
+                        f"Last session you covered: {last_task}. Ready to pick it back up?")
     elif goal:
         greeting = (f"{tod}, {username}. "
-                    f"Picking up from {goal['description'][:50]}.")
+                    f"Picking up from {goal.get('description', '')[:50]}.")
     else:
         greeting = (f"{tod}, {username}. "
                     f"All systems online. What are we working on today?")

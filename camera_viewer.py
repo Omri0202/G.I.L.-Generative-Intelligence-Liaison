@@ -22,6 +22,7 @@ from pathlib import Path
 
 FRAME_FILE   = Path(tempfile.gettempdir()) / "gil_cam_frame.jpg"
 GESTURE_FILE = Path(tempfile.gettempdir()) / "gil_gesture_state.json"
+FACE_FILE    = Path(tempfile.gettempdir()) / "gil_face_state.json"
 KILL_FILE    = Path(tempfile.gettempdir()) / "gil_cam_kill.txt"
 WIN_NAME     = "G.I.L. Vision"
 STARTUP_SEC  = 3.0
@@ -90,7 +91,7 @@ def _load_model():
         base = _mp_py.BaseOptions(model_asset_path=str(_MODEL_FILE))
         opts = _mp_vis.HandLandmarkerOptions(
             base_options=base,
-            num_hands=1,
+            num_hands=2,
             min_hand_detection_confidence=0.65,
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
@@ -105,6 +106,106 @@ def _load_model():
         print("[G.I.L. VISION] MediaPipe load failed: " + str(exc))
 
 threading.Thread(target=_load_model, daemon=True, name="GIL-ModelLoad").start()
+
+# ---- Face recognition -- background thread at 2 fps -------------------------
+
+_face_result = {
+    "status":        "idle",
+    "name":          None,
+    "confidence":    0.0,
+    "face_box":      None,   # current scan face position
+    "result_ts":     0.0,    # time when last match/unknown was detected
+    "result_status": None,   # "match" or "unknown" — persists for display
+    "result_name":   None,   # name from last definitive result
+    "result_box":    None,   # face_box from last definitive result
+}
+_face_lock   = threading.Lock()
+_raw_lock    = threading.Lock()
+_latest_raw  = [None]   # [np.ndarray|None]
+
+def _face_loop():
+    try:
+        from face_id import FaceID
+        fid = FaceID()
+        print("[G.I.L. VISION] Face recognition ready.")
+    except Exception as exc:
+        print("[G.I.L. VISION] Face recognition unavailable: " + str(exc))
+        return
+
+    last_result_status = None
+    result_ts          = 0.0
+    last_face_ts       = 0.0
+    no_face_since      = 0.0
+
+    while True:
+        time.sleep(0.5)
+        with _raw_lock:
+            frame = _latest_raw[0]
+        if frame is None:
+            continue
+
+        with _face_lock:
+            _face_result["status"] = "scanning"
+
+        try:
+            result = fid.identify(frame)
+        except Exception:
+            continue
+
+        now = time.time()
+
+        # Track face presence; reset result after 2s of no face so next
+        # appearance triggers a fresh scan animation
+        if result["face_box"] is not None:
+            last_face_ts  = now
+            no_face_since = 0.0
+            cur_box       = result["face_box"]
+        else:
+            if no_face_since == 0.0:
+                no_face_since = now
+            if now - no_face_since > 2.0:
+                result_ts          = 0.0
+                last_result_status = None
+            cur_box = None
+
+        # Track when we first get a definitive result
+        if result["status"] in ("match", "unknown"):
+            if result["status"] != last_result_status:
+                result_ts = now
+            last_result_status = result["status"]
+            result_box  = result["face_box"] or cur_box
+            result_name = result["name"]
+            result_stat = result["status"]
+        else:
+            result_box  = _face_result.get("result_box")
+            result_name = _face_result.get("result_name")
+            result_stat = _face_result.get("result_status")
+
+        with _face_lock:
+            _face_result.update({
+                "status":        result["status"],
+                "name":          result["name"],
+                "confidence":    result["confidence"],
+                "face_box":      cur_box,
+                "result_ts":     result_ts,
+                "result_status": result_stat,
+                "result_name":   result_name,
+                "result_box":    result_box,
+            })
+
+        try:
+            tmp = FACE_FILE.with_name("gil_face_tmp.json")
+            tmp.write_text(json.dumps({
+                "name":       result_name,
+                "confidence": result["confidence"],
+                "status":     result_stat or result["status"],
+                "ts":         now,
+            }))
+            tmp.replace(FACE_FILE)
+        except Exception:
+            pass
+
+threading.Thread(target=_face_loop, daemon=True, name="GIL-FaceRecog").start()
 
 # ---- Gesture classifier ------------------------------------------------------
 
@@ -127,10 +228,13 @@ def classify_gesture(lm):
     thumb_up_dir = lm[4].y < wrist_y - 0.12
     thumb_dn_dir = lm[4].y > lm[9].y
 
-    cx, cy  = lm[8].x, lm[8].y
+    # X: index MCP knuckle (stable, less horizontal jitter)
+    # Y: index fingertip (full vertical reach to top/bottom of screen)
+    cx = lm[5].x
+    cy = lm[8].y
     none_up = not (idx or mid or rng or pnk)
 
-    if pinch < 0.05:
+    if pinch < 0.10:
         return "pinch", cx, cy
     if none_up and thumb_up_dir:
         return "thumbs_up", cx, cy
@@ -142,6 +246,8 @@ def classify_gesture(lm):
         return "open_hand", cx, cy
     if idx and not mid and not rng and not pnk:
         return "index_point", cx, cy
+    if idx and not mid and not rng and pnk:
+        return "rock_on", cx, cy
     if idx and mid and not rng and not pnk:
         return "peace", cx, cy
     if idx and mid and rng and not pnk:
@@ -162,11 +268,13 @@ _GESTURE_LABELS = {
     "open_hand":   ("OPEN HAND",    (200, 200, 200)),
     "three_up":    ("NEXT TRACK",   (80,  255, 80)),
     "call_me":     ("PREV TRACK",   (80,  255, 80)),
+    "rock_on":     ("DND TOGGLE",   (255, 100, 200)),
 }
 
 _HOLD_FRAMES = {
     "peace": 25, "thumbs_up": 18, "thumbs_down": 18,
     "fist": 18, "open_hand": 22, "three_up": 18, "call_me": 18,
+    "rock_on": 20,
 }
 
 _HAND_CONNECTIONS = [
@@ -211,6 +319,174 @@ def _draw_gesture_hud(frame, gesture, hold_count):
             bar_col = (0, 255, 0) if progress >= 1.0 else col
             cv2.rectangle(frame, (bx, by), (bx + filled, by + bh), bar_col, -1)
 
+# ---- Face recognition overlay -----------------------------------------------
+
+_RESULT_HOLD = 2.8   # seconds to show result before it disappears
+
+def _draw_face_overlay(frame, face_result, tick):
+    import math, random
+
+    now           = time.time()
+    h, w          = frame.shape[:2]
+    status        = face_result.get("status", "idle")
+    result_ts     = float(face_result.get("result_ts", 0.0))
+    result_status = face_result.get("result_status")   # "match" or "unknown" or None
+    result_name   = face_result.get("result_name") or ""
+    result_box    = face_result.get("result_box")
+    scan_box      = face_result.get("face_box")        # current scan position
+
+    # --- Decide what phase to draw -------------------------------------------
+    in_result_window = (
+        result_status in ("match", "unknown")
+        and result_ts > 0
+        and (now - result_ts) < _RESULT_HOLD
+    )
+    # Scanning animation only appears before the first confirmed result.
+    # Once a face is identified, camera stays clean until face leaves for 2s.
+    in_scan = status == "scanning" and scan_box is not None and result_ts == 0.0
+
+    if not in_result_window and not in_scan:
+        return   # nothing to draw — clean frame
+
+    # =========================================================================
+    # PHASE A: SCANNING  — cyan movie-style laser scan
+    # =========================================================================
+    if in_scan:
+        fx, fy, fw, fh = scan_box
+        fx = max(0, fx); fy = max(0, fy)
+        fw = min(fw, w - fx); fh = min(fh, h - fy)
+        if fw < 10 or fh < 10:
+            return
+
+        col = (0, 220, 255)   # cyan
+
+        # Scattered data dots over the face (change slowly with tick)
+        rng = random.Random(tick // 5)
+        for _ in range(12):
+            px = fx + rng.randint(4, max(5, fw - 4))
+            py = fy + rng.randint(4, max(5, fh - 4))
+            a  = rng.random()
+            cv2.circle(frame, (px, py), rng.randint(1, 3),
+                       tuple(int(c * a) for c in col), -1, cv2.LINE_AA)
+
+        # Sweeping scan line with bright leading edge + gradient trail
+        raw_pos  = (tick * 5) % (fh * 2)
+        scan_off = raw_pos if raw_pos < fh else fh * 2 - raw_pos
+        scan_y   = max(fy, min(fy + fh - 1, fy + int(scan_off)))
+        for trail in range(20):
+            ty = scan_y - trail
+            if fy <= ty <= fy + fh:
+                a  = max(0.0, (1.0 - trail / 20.0) ** 1.4)
+                tc = tuple(int(c * a) for c in col)
+                cv2.line(frame, (fx, ty), (fx + fw, ty), tc, 1)
+        cv2.line(frame, (fx, scan_y), (fx + fw, scan_y), (230, 245, 255), 1)
+
+        # Corner brackets (grow in over first 20 ticks, then static)
+        blen = max(8, int(min(fw, fh) * 0.22 * min(1.0, tick / 20.0)))
+        for cx2, cy2, dx1, dy1, dx2, dy2 in [
+            (fx,      fy,       1, 0,  0,  1),
+            (fx+fw,   fy,      -1, 0,  0,  1),
+            (fx,      fy+fh,    1, 0,  0, -1),
+            (fx+fw,   fy+fh,   -1, 0,  0, -1),
+        ]:
+            e1 = (cx2 + dx1*blen, cy2 + dy1*blen)
+            e2 = (cx2 + dx2*blen, cy2 + dy2*blen)
+            cv2.line(frame, (cx2, cy2), e1, (50, 100, 130), 4, cv2.LINE_AA)
+            cv2.line(frame, (cx2, cy2), e2, (50, 100, 130), 4, cv2.LINE_AA)
+            cv2.line(frame, (cx2, cy2), e1, col, 2, cv2.LINE_AA)
+            cv2.line(frame, (cx2, cy2), e2, col, 2, cv2.LINE_AA)
+
+        # Tiny center crosshair
+        cx_c, cy_c = fx + fw // 2, fy + fh // 2
+        cv2.line(frame, (cx_c-6, cy_c), (cx_c+6, cy_c), col, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx_c, cy_c-6), (cx_c, cy_c+6), col, 1, cv2.LINE_AA)
+
+        # "ANALYZING..." label below box
+        dots  = "." * ((tick // 8) % 4)
+        atxt  = "ANALYZING" + dots
+        (aw, ah), _ = cv2.getTextSize(atxt, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
+        ax = fx + (fw - aw) // 2
+        ay = fy + fh + ah + 8
+        if ay < h - 4:
+            cv2.putText(frame, atxt, (ax+1, ay+1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0,0,0), 2, cv2.LINE_AA)
+            cv2.putText(frame, atxt, (ax, ay),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, col, 1, cv2.LINE_AA)
+        return
+
+    # =========================================================================
+    # PHASE B: RESULT  — flash in, hold, fade out, then gone
+    # =========================================================================
+    if in_result_window and result_box:
+        fx, fy, fw, fh = result_box
+        fx = max(0, fx); fy = max(0, fy)
+        fw = min(fw, w - fx); fh = min(fh, h - fy)
+        if fw < 10 or fh < 10:
+            return
+
+        elapsed   = now - result_ts
+        col       = (70, 255, 110) if result_status == "match" else (40, 60, 255)
+
+        # Fade envelope: flash in over 0.15s, hold, fade out over 0.5s
+        if elapsed < 0.15:
+            alpha = elapsed / 0.15
+        elif elapsed > _RESULT_HOLD - 0.5:
+            alpha = max(0.0, (_RESULT_HOLD - elapsed) / 0.5)
+        else:
+            alpha = 1.0
+
+        if alpha <= 0:
+            return
+
+        # Quick flash on the face box (first 0.15s)
+        if elapsed < 0.15:
+            fl = frame.copy()
+            cv2.rectangle(fl, (fx, fy), (fx+fw, fy+fh), col, -1)
+            cv2.addWeighted(fl, 0.30 * alpha, frame, 1.0 - 0.30 * alpha, 0, frame)
+
+        # Corner brackets (solid)
+        blen    = max(8, int(min(fw, fh) * 0.22))
+        bright  = tuple(min(255, int(c * alpha)) for c in col)
+        dim_col = tuple(max(0, int(c * 0.25 * alpha)) for c in col)
+        for cx2, cy2, dx1, dy1, dx2, dy2 in [
+            (fx,      fy,       1, 0,  0,  1),
+            (fx+fw,   fy,      -1, 0,  0,  1),
+            (fx,      fy+fh,    1, 0,  0, -1),
+            (fx+fw,   fy+fh,   -1, 0,  0, -1),
+        ]:
+            e1 = (cx2 + dx1*blen, cy2 + dy1*blen)
+            e2 = (cx2 + dx2*blen, cy2 + dy2*blen)
+            cv2.line(frame, (cx2, cy2), e1, dim_col, 5, cv2.LINE_AA)
+            cv2.line(frame, (cx2, cy2), e2, dim_col, 5, cv2.LINE_AA)
+            cv2.line(frame, (cx2, cy2), e1, bright, 2, cv2.LINE_AA)
+            cv2.line(frame, (cx2, cy2), e2, bright, 2, cv2.LINE_AA)
+
+        # Name (large, centered above box) with glow
+        rlabel = result_name.upper() if result_status == "match" else "UNIDENTIFIED"
+        scale  = 0.82
+        thick2 = 2
+        (lw, lh2), _ = cv2.getTextSize(rlabel, cv2.FONT_HERSHEY_SIMPLEX, scale, thick2)
+        lx = fx + (fw - lw) // 2
+        ly = fy - 14
+        if ly < lh2 + 6:
+            ly = fy + fh + lh2 + 18
+        glow = tuple(max(0, int(c * 0.35 * alpha)) for c in col)
+        for g in (3, 2):
+            cv2.putText(frame, rlabel, (lx-g, ly-g),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, glow, thick2+g*2, cv2.LINE_AA)
+        cv2.putText(frame, rlabel, (lx+1, ly+1),
+                    cv2.FONT_HERSHEY_SIMPLEX, scale, (0,0,0), thick2+1, cv2.LINE_AA)
+        cv2.putText(frame, rlabel, (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX, scale, bright, thick2, cv2.LINE_AA)
+
+        # Small subtitle line
+        sub = "IDENTITY CONFIRMED" if result_status == "match" else "IDENTITY UNKNOWN"
+        sub_col = tuple(max(0, int(c * 0.65 * alpha)) for c in col)
+        (sw, _), _ = cv2.getTextSize(sub, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
+        cv2.putText(frame, sub, (fx + (fw-sw)//2, ly + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, sub_col, 1, cv2.LINE_AA)
+
+
 # ---- Main loop --------------------------------------------------------------
 
 start_time        = time.time()
@@ -218,6 +494,7 @@ last_frame_save   = 0.0
 last_gesture_save = 0.0
 _brought_to_front = False
 _frame_ts_ms      = 0
+_anim_tick        = 0
 
 _hold_gesture = None
 _hold_count   = 0
@@ -235,12 +512,18 @@ while True:
         time.sleep(0.05)
         continue
 
-    display = cv2.flip(raw_frame, 1)
-    now     = time.time()
+    display    = cv2.flip(raw_frame, 1)
+    now        = time.time()
+    _anim_tick += 1
+
+    # Share raw frame with face recognition thread
+    with _raw_lock:
+        _latest_raw[0] = raw_frame.copy()
 
     # ---- Gesture detection (only when model is ready) -----------------------
-    gesture_name = None
-    gx, gy       = 0.5, 0.5
+    gesture_name  = None
+    gesture2_name = None
+    gx, gy        = 0.5, 0.5
 
     with _model_lock:
         _lm_ready = _GESTURE_ENABLED
@@ -251,13 +534,27 @@ while True:
             import mediapipe as mp
             rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
             mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            _frame_ts_ms += 33
+            _frame_ts_ms = int(now * 1000)   # real wall-clock ms — prevents timestamp drift
             result    = _lm.detect_for_video(mp_image, _frame_ts_ms)
 
             if result.hand_landmarks:
                 lm = result.hand_landmarks[0]
                 _draw_hand(display, lm)
                 gesture_name, gx, gy = classify_gesture(lm)
+
+                # Second hand — drawn in a slightly different tint
+                if len(result.hand_landmarks) > 1:
+                    lm2 = result.hand_landmarks[1]
+                    # Draw second hand with gold tint
+                    h2, w2 = display.shape[:2]
+                    pts2 = {i: (int(lm2[i].x * w2), int(lm2[i].y * h2)) for i in range(21)}
+                    for a, b in _HAND_CONNECTIONS:
+                        cv2.line(display, pts2[a], pts2[b], (30, 180, 255), 2, cv2.LINE_AA)
+                    for i, pt in pts2.items():
+                        r = 6 if i in (4, 8, 12, 16, 20) else 3
+                        cv2.circle(display, pt, r, (255, 255, 255), -1, cv2.LINE_AA)
+                        cv2.circle(display, pt, r, (20, 140, 200),   1, cv2.LINE_AA)
+                    gesture2_name, _, _ = classify_gesture(lm2)
 
             if gesture_name != _hold_gesture:
                 _hold_gesture = gesture_name
@@ -267,10 +564,41 @@ while True:
 
             _draw_gesture_hud(display, gesture_name, _hold_count)
 
+            # Two-hand combo HUD
+            if gesture_name and gesture2_name:
+                _combo_key = "/".join(sorted([gesture_name, gesture2_name]))
+                _combo_labels = {
+                    "fist/fist":           ("LOCK SCREEN",    (255,  80,  80)),
+                    "thumbs_up/thumbs_up": ("VOL  MAX",       (80,  255,  80)),
+                    "open_hand/open_hand": ("SHOW DESKTOP",   (200, 200, 200)),
+                }
+                if _combo_key in _combo_labels:
+                    _cl, _cc = _combo_labels[_combo_key]
+                    _h, _w = display.shape[:2]
+                    cv2.putText(display, f"  {_cl}",
+                                (10, _h - 22), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.62, (0, 0, 0), 3, cv2.LINE_AA)
+                    cv2.putText(display, f"  {_cl}",
+                                (10, _h - 22), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.62, _cc, 1, cv2.LINE_AA)
+
+            # Face overlay (uses shared state from _face_loop thread)
+            with _face_lock:
+                _fr_snap = dict(_face_result)
+                if _fr_snap.get("face_box"):
+                    _fr_snap["face_box"] = tuple(_fr_snap["face_box"])
+            _draw_face_overlay(display, _fr_snap, _anim_tick)
+
             hand_visible = bool(result.hand_landmarks)
             if hand_visible or (now - last_gesture_save > 0.1):
                 try:
-                    state = {"gesture": gesture_name, "x": gx, "y": gy, "hand": hand_visible, "ts": now}
+                    state = {
+                        "gesture":  gesture_name,
+                        "gesture2": gesture2_name,
+                        "x": gx, "y": gy,
+                        "hand": hand_visible,
+                        "ts": now,
+                    }
                     tmp_g = GESTURE_FILE.with_name("gil_gesture_tmp.json")
                     tmp_g.write_text(json.dumps(state))
                     tmp_g.replace(GESTURE_FILE)
@@ -335,7 +663,7 @@ with _model_lock:
     if _landmarker:
         _landmarker.close()
 
-for _f in (FRAME_FILE, GESTURE_FILE):
+for _f in (FRAME_FILE, GESTURE_FILE, FACE_FILE):
     try:
         _f.unlink(missing_ok=True)
     except Exception:

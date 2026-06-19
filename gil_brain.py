@@ -11,11 +11,39 @@ import time
 import requests
 from datetime import datetime
 
+# Strips conversational preamble so saved topics are clean.
+# "could you tell me about Montenegro" → "Montenegro"
+_PREAMBLE_RE = re.compile(
+    r"^(could you |can you |please |hey\s+gil[,\s]*|gil[,\s]*|"
+    r"tell me about |tell me |what (is|are|was|were|do you know about)\s+(the\s+)?|"
+    r"give me (info|information|details)?\s*(on|about|regarding)\s+|"
+    r"explain |describe |help me (with |understand )?|"
+    r"i want to know (about )?|i need (info|information|help) (about |on |with )?|"
+    r"(could|can) you (tell|explain|describe|give me info on|give me information on)\s+(me\s+)?(about\s+)?|"
+    r"do you know (about |anything about )?|what'?s\s+(the\s+)?|whats\s+(the\s+)?)",
+    re.IGNORECASE,
+)
+
+def _clean_task_topic(text: str) -> str:
+    cleaned = text.strip()
+    prev = None
+    while prev != cleaned:          # strip preamble layers until nothing left to remove
+        prev = cleaned
+        cleaned = _PREAMBLE_RE.sub("", cleaned)
+    cleaned = cleaned.rstrip("?.!").strip()
+    if cleaned:
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned or text[:60]
+
 GROQ_KEYS = [k for k in [
     os.getenv("GROQ_API_KEY", ""),
     os.getenv("GROQ_API_KEY_2", ""),
 ] if k]
 GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions"
+
+# Fallback models tried in order when all keys are 429'd on the primary model.
+# Each model has its own independent rate-limit quota on Groq.
+_FALLBACK_MODELS = ["gemma2-9b-it", "llama-3.3-70b-versatile"]
 
 
 def _load_model() -> str:
@@ -32,7 +60,41 @@ def _load_model() -> str:
 
 GROQ_MODEL = _load_model()
 
-_groq_key_index = 0   # rotates on rate limit
+_groq_key_index = 0
+
+
+def _load_user_profile() -> str:
+    """Always-present identity layer — never depends on DB search relevance."""
+    try:
+        from pathlib import Path
+        import json as _json
+        p = Path(__file__).parent / "data" / "user_profile.json"
+        data = _json.loads(p.read_text(encoding="utf-8"))
+        lines = [
+            f"Name: {data.get('name','Omri')} | Address as: {data.get('address_as','Omri')}",
+            f"Languages: {', '.join(data.get('fluent_in', ['Hebrew','English']))} (native: {data.get('native_language','Hebrew')})",
+            f"Tech: {', '.join(data.get('tech_stack', []))}",
+            f"Apps: {', '.join(data.get('daily_apps', []))}",
+            f"Main project: {data.get('main_project', 'Project G.I.L.')}",
+        ]
+        prefs = data.get("preferences", {})
+        pref_str = " | ".join(f"{k}: {v}" for k, v in prefs.items() if v is not True and v is not False)
+        if pref_str:
+            lines.append(f"Preferences: {pref_str}")
+        habits = data.get("known_habits", [])
+        if habits:
+            lines.append(f"Habits: {'; '.join(habits[:4])}")
+        goals = data.get("current_goals", [])
+        if goals:
+            lines.append(f"Current goals: {'; '.join(goals[:3])}")
+        comm = data.get("communication_rules", {})
+        dislikes = comm.get("dislikes", [])
+        if dislikes:
+            lines.append(f"NEVER do: {'; '.join(dislikes[:3])}")
+        return "\n".join(lines)
+    except Exception:
+        return "Name: Omri | Hebrew native speaker | Builds Project G.I.L. | Wants sharp JARVIS-style responses"   # rotates on rate limit
+_groq_key_lock  = __import__("threading").Lock()
 
 _SYSTEM = """\
 You are G.I.L. (Generative Intelligence Liaison) — the personal AI of {username}. \
@@ -69,6 +131,9 @@ SPOTIFY: Always "spotify" action for music. NEVER open_app or open_url for Spoti
 REMINDER: "remind me to X in N minutes" → action "reminder", target = full text verbatim.
 MODES: dnd=silent+hidden|study=Pomodoro+quiet|fun=Spotify+relaxed|normal=default
 
+━━ WHO YOU'RE TALKING TO ━━
+{user_profile}
+
 ━━ TIME & CONTEXT ━━
 {datetime}
 {memory_context}
@@ -79,7 +144,7 @@ DESKTOP PROJECTS: {projects_context}
 CAMERA STATE: {camera_state}
 
 ━━ ACTIONS (action → target format) ━━
-open_app → app name | open_url → full URL | web_search → query string
+open_app → app name | open_url → full URL | web_search → query string | web_research → question (fetches live results and speaks a summary — use instead of web_search when user wants an answer spoken aloud)
 system_vitals → null | take_screenshot → null | identify_song → null
 sign_in → service | save_credential → "svc|email|pw" | delete_credential → svc | list_credentials → null
 show_settings → null | note → text | list_notes → null | clip_history → null
@@ -192,12 +257,73 @@ CRITICAL: Return ONE valid JSON object. Use "actions" array always. Nothing outs
 """
 
 
+# ── Sub-agent routing ─────────────────────────────────────────────────────────
+# Detects intent type and returns a specialized prompt suffix.
+# Appended to the base system prompt to sharpen the brain for that domain.
+
+_CODE_RE = re.compile(
+    r"\b(code|coding|debug|error|bug|fix|function|class|script|python|javascript|"
+    r"typescript|react|node|flask|django|api|import|syntax|compile|test|refactor|"
+    r"terminal|git|commit|pull request|pr|deploy|docker|bash|powershell)\b",
+    re.IGNORECASE,
+)
+_RESEARCH_RE = re.compile(
+    r"\b(research|find out|look up|search|who is|what is|explain|how does|"
+    r"summarize|article|news|paper|study|statistics|history|facts? about|"
+    r"tell me about|give me info|information on|learn about)\b",
+    re.IGNORECASE,
+)
+_CREATIVE_RE = re.compile(
+    r"\b(write|draft|story|poem|script|email|message|post|caption|blog|essay|"
+    r"slogan|tagline|brainstorm|ideas? for|creative|design|logo|brand|name for|"
+    r"suggest|generate text|marketing|ad copy|description for)\b",
+    re.IGNORECASE,
+)
+
+_SUB_CODE = """\
+━━ CODING AGENT MODE ━━
+You are now acting as a senior software engineer. Extra rules for this query:
+• Read SCREEN context carefully — if an error message or code is visible, address it directly.
+• Give concrete, copy-paste-ready code snippets when helpful (the TTS layer will skip code blocks).
+• Diagnose root cause before suggesting a fix. Don't just say "try this" — explain why it works.
+• If the active file is visible in context, reference it by name.
+• Keep speech short (1–2 sentences), put detailed code/explanation in "report" field."""
+
+_SUB_RESEARCH = """\
+━━ RESEARCH AGENT MODE ━━
+You are now acting as a research analyst. Extra rules for this query:
+• Lead with the single most useful fact in your speech (1–2 sentences).
+• Put deeper detail, sources, or structured breakdown in the "report" field.
+• If you know the topic well, be specific — cite numbers, names, dates where relevant.
+• Don't hedge with "I'm not sure" unless genuinely uncertain. Be direct."""
+
+_SUB_CREATIVE = """\
+━━ CREATIVE AGENT MODE ━━
+You are now acting as a creative director and copywriter. Extra rules for this query:
+• Generate fresh, specific, high-quality content — not generic filler.
+• For drafts/writing: put the full output in "report", summarize in speech ("Here's a draft — check the panel.").
+• For ideas/brainstorming: give 3 concrete options in speech, more in report.
+• Match tone to context — professional for emails, energetic for marketing, etc."""
+
+
+def _route_to_subagent(user_input: str) -> str:
+    """Returns a specialized sub-prompt suffix based on detected intent, or '' for general."""
+    if _CODE_RE.search(user_input):
+        return _SUB_CODE
+    if _RESEARCH_RE.search(user_input):
+        return _SUB_RESEARCH
+    if _CREATIVE_RE.search(user_input):
+        return _SUB_CREATIVE
+    return ""
+
+
 class GILBrain:
     def __init__(self, username: str):
         self.username = username
         self.history: list[dict] = []
 
     def query(self, user_input: str, project_context: str = "", camera_state: str = "closed") -> dict:
+        global _groq_key_index
         print(f"[G.I.L. BRAIN] Query: {user_input}")
         self.history.append({"role": "user", "content": user_input})
 
@@ -296,11 +422,19 @@ class GILBrain:
             time_ex=now.strftime("%I:%M %p"),
             credentials=cred_block,
             memory_context=memory_context,
+            user_profile=_load_user_profile(),
             screen_context=screen_context or "Not available.",
             projects_context=projects_context,
             location_context=location_context,
             camera_state=camera_state,
         ) + project_block + extra_str
+
+        # ── Multi-agent routing ───────────────────────────────────────────────
+        # Detect intent type and append a specialized sub-prompt that sharpens
+        # the brain's focus. This lets GIL behave like a specialist for that domain.
+        _sub = _route_to_subagent(user_input)
+        if _sub:
+            system += "\n\n" + _sub
 
         payload = {
             "model":       GROQ_MODEL,
@@ -308,8 +442,6 @@ class GILBrain:
             "temperature": 0.30,
             "max_tokens":  500,
         }
-        global _groq_key_index
-
         def _try_groq(key: str):
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             return requests.post(GROQ_URL, json=payload, headers=hdrs, timeout=15)
@@ -318,21 +450,44 @@ class GILBrain:
             self.history.pop()
             return {"speech": "No Groq API key is configured — check your .env file.", "action": None, "target": None, "report": None}
 
-        resp = _try_groq(GROQ_KEYS[_groq_key_index % len(GROQ_KEYS)])
-
-        if resp.status_code == 429:
-            # Rotate to next key
-            _groq_key_index += 1
-            next_key = GROQ_KEYS[_groq_key_index % len(GROQ_KEYS)]
-            print(f"[G.I.L. BRAIN] Key {_groq_key_index % len(GROQ_KEYS) + 1} rate limited — rotating.")
-            resp = _try_groq(next_key)
-
-        if resp.status_code == 429:
-            self.history.pop()
-            print("[G.I.L. BRAIN] All Groq keys rate limited.")
-            return {"speech": "All keys are rate limited. Try again in a minute.", "action": None, "target": None, "report": None}
-
         try:
+            with _groq_key_lock:
+                _cur_idx = _groq_key_index
+            resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
+
+            if resp.status_code == 429:
+                # Rotate to next key
+                with _groq_key_lock:
+                    _groq_key_index += 1
+                    _cur_idx = _groq_key_index
+                next_key = GROQ_KEYS[_cur_idx % len(GROQ_KEYS)]
+                print(f"[G.I.L. BRAIN] Key {(_cur_idx - 1) % len(GROQ_KEYS) + 1} rate limited — rotating to key {_cur_idx % len(GROQ_KEYS) + 1}.")
+                resp = _try_groq(next_key)
+
+            if resp.status_code == 429:
+                # Both keys rate-limited on primary model — try fallback models
+                print(f"[G.I.L. BRAIN] All keys rate-limited on {GROQ_MODEL}. Trying fallback models...")
+                fallback_resp = None
+                for fb_model in _FALLBACK_MODELS:
+                    for key in GROQ_KEYS:
+                        fb_payload = {**payload, "model": fb_model}
+                        hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                        try:
+                            r = requests.post(GROQ_URL, json=fb_payload, headers=hdrs, timeout=15)
+                            if r.status_code != 429:
+                                fallback_resp = r
+                                print(f"[G.I.L. BRAIN] Fallback succeeded on {fb_model}.")
+                                break
+                        except Exception:
+                            continue
+                    if fallback_resp is not None:
+                        break
+                if fallback_resp is None:
+                    self.history.pop()
+                    print("[G.I.L. BRAIN] All models rate-limited.")
+                    return {"speech": "I'm rate-limited across all models right now — give me 30 seconds and ask again.", "action": None, "target": None, "report": None}
+                resp = fallback_resp
+
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
         except requests.exceptions.ConnectionError:
@@ -355,11 +510,15 @@ class GILBrain:
         if len(self.history) > 40:
             self.history = self.history[-40:]
 
-        # Persist this task to memory — skip trivial yes/no replies
+        # Persist this task to memory — skip trivial replies and garbled/non-Latin STT
         try:
             if len(user_input.split()) > 4:
-                from memory import record_task
-                record_task(user_input, parsed.get("speech", ""))
+                _ascii_frac = sum(1 for c in user_input if ord(c) < 128) / max(len(user_input), 1)
+                if _ascii_frac > 0.6:
+                    clean_topic = _clean_task_topic(user_input)
+                    from memory import record_task, record_schedule_activity
+                    record_task(clean_topic, parsed.get("speech", ""))
+                    record_schedule_activity(clean_topic)
         except Exception:
             pass
 

@@ -172,9 +172,14 @@ def _speak_elevenlabs(text: str) -> None:
             for chunk in audio_gen:
                 tmp.write(chunk)
             tmp_path = tmp.name
-        if not _stop_flag[0]:
-            _play_mp3_winmm(tmp_path)
-        os.unlink(tmp_path)
+        try:
+            if not _stop_flag[0]:
+                _play_mp3_winmm(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
     except Exception as exc:
         print(f"[G.I.L. VOICE] ElevenLabs error: {exc}. Falling back to edge-tts.")
         _speak_edge_tts(text)
