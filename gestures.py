@@ -439,14 +439,24 @@ class GestureWatcher:
             os.makedirs(pics, exist_ok=True)
             fname = "GIL_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".png"
             path  = os.path.join(pics, fname)
-            if pyautogui:
+            img   = None
+            try:
+                from PIL import ImageGrab
+                img = ImageGrab.grab()
+            except Exception:
+                pass
+            if img is None and pyautogui:
                 img = pyautogui.screenshot()
-                img.save(path)
-                print("[G.I.L. GESTURE] Screenshot: " + path)
+            if img is None:
+                raise RuntimeError("No screenshot backend available (PIL/pyautogui).")
+            img.save(path)
+            print("[G.I.L. GESTURE] Screenshot: " + path)
             self._say("Screenshot saved.")
             self._write_result("Screenshot saved")
         except Exception as exc:
             print("[G.I.L. GESTURE] Screenshot failed: " + str(exc))
+            self._say("Screenshot failed.")
+            self._write_result("Screenshot failed")
 
     def _adjust_volume(self, delta):
         try:
