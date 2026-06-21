@@ -1100,7 +1100,6 @@ class _FloatingChatButton(ctk.CTkToplevel):
 
     def __init__(self, parent, on_click: callable):
         super().__init__(parent)
-        # No transient() — button must survive parent.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", 0.0)
@@ -1110,27 +1109,22 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self._alive    = True
         self._alpha    = 0.0
         self._pulse_t  = 0.0
+        self._hidden   = False
 
-        # Position: bottom-left, above the Windows taskbar
-        sw = parent.winfo_screenwidth()
-        sh = parent.winfo_screenheight()
-        self.geometry(f"{self.W}x{self.H}+16+{sh - self.H - 52}")
+        # Offscreen placeholder — real position set in _place() after mapping
+        self.geometry(f"{self.W}x{self.H}+16+900")
 
         cv = tk.Canvas(self, width=self.W, height=self.H,
                        bg=BG, highlightthickness=0)
         cv.pack()
         self._cv = cv
 
-        # Card background
         self._bg = cv.create_rectangle(3, 3, self.W - 3, self.H - 3,
                                         fill="#04041A", outline=ACCENT, width=2)
-        # ◈ avatar
         cv.create_oval(10, 10, 38, 38, fill="#06061C", outline=ACCENT, width=1)
         cv.create_text(24, 24, text="◈", fill=ACCENT,
                        font=("Segoe UI", 12, "bold"))
-        # Divider
         cv.create_line(46, 9, 46, self.H - 9, fill="#0C1830", width=1)
-        # Labels
         self._lbl  = cv.create_text(97, 19, text="Open Chat",
                                      fill="#C0E8FF",
                                      font=("Segoe UI", 10, "bold"))
@@ -1143,10 +1137,33 @@ class _FloatingChatButton(ctk.CTkToplevel):
         cv.bind("<Leave>",    self._hover_out)
         cv.configure(cursor="hand2")
 
-        # Hide from taskbar after window is realised
-        self.after(80, lambda: _hide_from_taskbar(self))
+        # Position and show after the window is fully mapped
+        self.after(100, self._place)
+
+    def _place(self) -> None:
+        """Move to the correct bottom-left position once the window is mapped."""
+        sh = self.winfo_screenheight()
+        # sit just above the taskbar (taskbar is ~48 px on most Windows installs)
+        y  = sh - self.H - 48
+        self.geometry(f"{self.W}x{self.H}+16+{y}")
+        _hide_from_taskbar(self)
         self._fade_in()
         self._pulse()
+
+    # ── Show / hide (called when chat opens / closes) ─────────────────────────
+
+    def show(self) -> None:
+        if self._hidden:
+            self._hidden = False
+            self._alpha  = 0.0
+            self.deiconify()
+            _hide_from_taskbar(self)
+            self._fade_in()
+
+    def hide(self) -> None:
+        if not self._hidden:
+            self._hidden = True
+            self.withdraw()
 
     # ── Interactions ──────────────────────────────────────────────────────────
 
@@ -1776,6 +1793,27 @@ class GILWindow(ctk.CTk):
         else:
             self._chat_win = ChatWindow(self, send_fn)
             self._chat_win.after(80, lambda: self._chat_win.state("zoomed"))
+            # Show button again when chat is closed
+            self._chat_win.protocol("WM_DELETE_WINDOW", self._on_chat_close)
+        # Hide floating button while chat is open
+        self._hide_float_btn()
+
+    def _hide_float_btn(self) -> None:
+        if hasattr(self, "_float_btn") and self._float_btn.winfo_exists():
+            self._float_btn.hide()
+
+    def _show_float_btn(self) -> None:
+        if hasattr(self, "_float_btn") and self._float_btn.winfo_exists():
+            self._float_btn.show()
+
+    def _on_chat_close(self) -> None:
+        """Called when the user closes the chat window."""
+        try:
+            if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
+                self._chat_win.destroy()
+        except Exception:
+            pass
+        self._show_float_btn()
 
     def add_chat_message(self, text: str, sender: str) -> None:
         """Thread-safe — safely no-ops when the chat window is not open."""
