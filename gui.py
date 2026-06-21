@@ -1091,12 +1091,16 @@ class _SpeakBubble(ctk.CTkToplevel):
 
 # ── Floating chat launcher (bottom-left, always on screen) ───────────────────
 class _FloatingChatButton(ctk.CTkToplevel):
-    """Persistent pill button at bottom-left — always visible, opens chat."""
-    W, H = 130, 50
+    """
+    Always-visible pill at the bottom-left corner.
+    Does NOT use transient() so it stays visible even when GIL hides to tray.
+    WS_EX_TOOLWINDOW keeps it off the taskbar.
+    """
+    W, H = 148, 52
 
     def __init__(self, parent, on_click: callable):
         super().__init__(parent)
-        self.transient(parent)          # child of main window — no taskbar button
+        # No transient() — button must survive parent.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", 0.0)
@@ -1104,75 +1108,77 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self.attributes("-transparentcolor", BG)
         self._on_click = on_click
         self._alive    = True
-        self.after(50, lambda: _hide_from_taskbar(self))  # belt-and-suspenders
         self._alpha    = 0.0
         self._pulse_t  = 0.0
 
+        # Position: bottom-left, above the Windows taskbar
         sw = parent.winfo_screenwidth()
         sh = parent.winfo_screenheight()
-        self.geometry(f"{self.W}x{self.H}+22+{sh - self.H - 36}")
+        self.geometry(f"{self.W}x{self.H}+16+{sh - self.H - 52}")
 
         cv = tk.Canvas(self, width=self.W, height=self.H,
                        bg=BG, highlightthickness=0)
         cv.pack()
         self._cv = cv
 
-        # Pill background + border
-        self._bg   = cv.create_rectangle(3, 3, self.W - 3, self.H - 3,
-                                          fill="#050518", outline=ACCENT, width=2)
-        # ◈ icon
-        cv.create_oval(12, 12, 36, 36, fill="#07071C", outline=ACCENT, width=1)
+        # Card background
+        self._bg = cv.create_rectangle(3, 3, self.W - 3, self.H - 3,
+                                        fill="#04041A", outline=ACCENT, width=2)
+        # ◈ avatar
+        cv.create_oval(10, 10, 38, 38, fill="#06061C", outline=ACCENT, width=1)
         cv.create_text(24, 24, text="◈", fill=ACCENT,
-                       font=("Segoe UI", 11, "bold"))
+                       font=("Segoe UI", 12, "bold"))
         # Divider
-        cv.create_line(44, 10, 44, self.H - 10, fill="#0D1830", width=1)
+        cv.create_line(46, 9, 46, self.H - 9, fill="#0C1830", width=1)
         # Labels
-        self._lbl  = cv.create_text(87, 20, text="Chat",
-                                     fill="#C0E4FF",
-                                     font=("Segoe UI", 11, "bold"))
-        self._hint = cv.create_text(87, 36, text="Ctrl+Shift+C",
-                                     fill="#142030",
+        self._lbl  = cv.create_text(97, 19, text="Open Chat",
+                                     fill="#C0E8FF",
+                                     font=("Segoe UI", 10, "bold"))
+        self._hint = cv.create_text(97, 35, text="Ctrl+Shift+C",
+                                     fill="#1A3050",
                                      font=("Segoe UI", 7))
 
-        cv.bind("<Button-1>",  lambda e: self._click())
-        cv.bind("<Enter>",     self._hover_in)
-        cv.bind("<Leave>",     self._hover_out)
+        cv.bind("<Button-1>", lambda e: self._click())
+        cv.bind("<Enter>",    self._hover_in)
+        cv.bind("<Leave>",    self._hover_out)
         cv.configure(cursor="hand2")
 
+        # Hide from taskbar after window is realised
+        self.after(80, lambda: _hide_from_taskbar(self))
         self._fade_in()
         self._pulse()
 
     # ── Interactions ──────────────────────────────────────────────────────────
 
     def _click(self) -> None:
-        self._cv.itemconfig(self._bg, fill="#0A2040")
-        self.after(120, lambda: self._cv.itemconfig(self._bg, fill="#050518"))
+        self._cv.itemconfig(self._bg, fill="#0A2044")
+        self.after(130, lambda: self._cv.itemconfig(self._bg, fill="#04041A"))
         self._on_click()
 
     def _hover_in(self, _) -> None:
-        self._cv.itemconfig(self._bg,  fill="#0A1C34", outline="#60D8FF")
+        self._cv.itemconfig(self._bg,  fill="#081830", outline="#60D8FF")
         self._cv.itemconfig(self._lbl, fill=ACCENT)
 
     def _hover_out(self, _) -> None:
-        self._cv.itemconfig(self._bg,  fill="#050518", outline=ACCENT)
-        self._cv.itemconfig(self._lbl, fill="#C0E4FF")
+        self._cv.itemconfig(self._bg,  fill="#04041A", outline=ACCENT)
+        self._cv.itemconfig(self._lbl, fill="#C0E8FF")
 
     # ── Animations ────────────────────────────────────────────────────────────
 
     def _fade_in(self) -> None:
-        self._alpha = min(0.93, self._alpha + 0.055)
+        self._alpha = min(0.95, self._alpha + 0.055)
         self.attributes("-alpha", self._alpha)
-        if self._alpha < 0.93:
+        if self._alpha < 0.95:
             self.after(18, self._fade_in)
 
     def _pulse(self) -> None:
         if not self._alive:
             return
-        self._pulse_t += 0.07
+        self._pulse_t += 0.06
         t = abs(math.sin(self._pulse_t))
         self._cv.itemconfig(self._bg,
-                             outline=_blend(ACCENT, "#80EEFF", t * 0.55))
-        self.after(40, self._pulse)
+                             outline=_blend(ACCENT, "#80EEFF", t * 0.5))
+        self.after(45, self._pulse)
 
     def kill(self) -> None:
         self._alive = False
@@ -1751,6 +1757,7 @@ class GILWindow(ctk.CTk):
         menu.add_command(label="  Chat with G.I.L.", command=self._open_chat_window)
         menu.add_command(label="  Tasks & Learning", command=self._open_tasks_window)
         menu.add_command(label="  Settings",         command=self.open_settings)
+        menu.add_command(label="  Open Log File",    command=self._open_log)
         menu.add_separator()
         menu.add_command(label="  Exit",             command=self._do_quit)
         try:
@@ -1792,6 +1799,14 @@ class GILWindow(ctk.CTk):
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
             self._float_btn = _FloatingChatButton(self, self._open_chat_window)
+
+    def _open_log(self) -> None:
+        import subprocess
+        log_path = Path(__file__).parent / "data" / "gil.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not log_path.exists():
+            log_path.write_text("No log entries yet.\n", encoding="utf-8")
+        subprocess.Popen(["notepad.exe", str(log_path)])
 
     def _open_tasks_window(self) -> None:
         if hasattr(self, "_tasks_win"):
