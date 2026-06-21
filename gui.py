@@ -23,6 +23,72 @@ BG     = "#000000"   # transparent key
 BG2    = "#010118"   # dark panel — NOT transparent
 ACCENT = "#00BFFF"
 
+# ── App icon (set once, reused across all windows) ────────────────────────────
+_ICON_PATH = Path(__file__).parent / "data" / "gil.ico"
+_LOGO_PATH = Path(__file__).parent / "data" / "gil_logo.png"
+_HQ_PATH   = Path(__file__).parent / "data" / "gil_icon_hq.png"
+
+
+def _hide_from_taskbar(win) -> None:
+    """Remove a window from the Windows taskbar using extended window styles."""
+    try:
+        import ctypes as _ct
+        hwnd = win.winfo_id()
+        GWL_EXSTYLE      = -20
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_APPWINDOW  = 0x00040000
+        style = _ct.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        _ct.windll.user32.SetWindowLongW(
+            hwnd, GWL_EXSTYLE,
+            (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+        )
+    except Exception:
+        pass
+
+
+def _set_icon(win) -> None:
+    """Apply the GIL icon via iconbitmap (title bar) and wm_iconphoto (taskbar)."""
+    try:
+        if _ICON_PATH.exists():
+            win.iconbitmap(str(_ICON_PATH))
+    except Exception:
+        pass
+    try:
+        from PIL import Image as _PI, ImageTk as _ITK
+        src = (_HQ_PATH   if _HQ_PATH.exists()  else
+               _LOGO_PATH if _LOGO_PATH.exists() else None)
+        if src:
+            img   = _PI.open(str(src)).convert("RGBA").resize((128, 128), _PI.LANCZOS)
+            photo = _ITK.PhotoImage(img)
+            win.wm_iconphoto(True, photo)
+            if not hasattr(win, "_icon_photos"):
+                win._icon_photos = []
+            win._icon_photos.append(photo)
+    except Exception:
+        pass
+
+
+def _tray_image():
+    """Return a PIL Image for the system tray (128×128 RGBA)."""
+    try:
+        from PIL import Image as _PilImg
+        src = _LOGO_PATH if _LOGO_PATH.exists() else _ICON_PATH
+        if src.exists():
+            return _PilImg.open(str(src)).convert("RGBA").resize((128, 128))
+    except Exception:
+        pass
+    # Fallback: plain circle (original tray icon)
+    try:
+        from PIL import Image as _PI, ImageDraw as _PID
+        img  = _PI.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = _PID.Draw(img)
+        draw.ellipse([2,  2,  62, 62], fill=(10,  10,  15))
+        draw.ellipse([6,  6,  58, 58], outline=(0, 191, 255), width=3)
+        draw.ellipse([24, 24, 40, 40], fill=(0, 191, 255))
+        return img
+    except Exception:
+        return None
+
 _ST = {
     "standby": {
         "color": "#2080B0", "glow": "#0A2848", "dim": "#0C1E30",
@@ -51,16 +117,16 @@ N_PTS  = 72
 # (fill_color, center_y, amplitude, freq_cycles, speed)
 # center_y counts from top of screen; ribbons overlap so the full height is covered.
 _WLAYERS = [
-    ("#010A30", 175, 40, 2.0, 0.30),   # deep ocean — wide, slow, dark
-    ("#030F4A", 150, 38, 2.5, 0.48),
-    ("#071E80", 124, 34, 3.0, 0.72),
-    ("#1030C0",  98, 28, 3.6, 1.00),
-    ("#1C52E4",  74, 22, 4.3, 1.34),
-    ("#3070FF",  50, 16, 5.0, 1.76),
-    ("#78AEFF",  28,  9, 5.8, 2.24),   # bright surface ribbon — thin, fast
+    ("#010614", 175, 44, 2.0, 0.28),   # deep space — wide, slow, ultra-dark
+    ("#020A36", 150, 42, 2.5, 0.44),
+    ("#051680", 124, 38, 3.0, 0.66),
+    ("#0C2CC8",  98, 32, 3.6, 0.92),
+    ("#1454F0",  74, 24, 4.3, 1.28),
+    ("#2090FF",  50, 16, 5.0, 1.68),
+    ("#50D0FF",  28,  8, 5.8, 2.18),   # vivid cyan surface — thin, fast
 ]
 # Half-thickness of each ribbon band in pixels
-_WTHICK = [52, 45, 37, 30, 23, 16, 10]
+_WTHICK = [54, 46, 38, 30, 22, 15, 9]
 
 
 # ── Startup registry ──────────────────────────────────────────────────────────
@@ -142,6 +208,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.resizable(False, False)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color="#05050F")
+        _set_icon(self)
         self.lift(); self.focus()
         self._build_ui()
 
@@ -670,6 +737,7 @@ class GILTasksWindow(ctk.CTkToplevel):
         self.geometry("380x560")
         self.resizable(False, True)
         self.configure(fg_color="#05050F")
+        _set_icon(self)
         self.lift(); self.focus()
         self._build()
 
@@ -808,6 +876,7 @@ class ProjectViewWindow(ctk.CTkToplevel):
         self.configure(fg_color="#05050F")
         self._on_show_3d   = on_show_3d
         self._project_name = project_name
+        _set_icon(self)
         self._build(project_name)
         self.lift(); self.focus()
 
@@ -922,72 +991,79 @@ class ProjectViewWindow(ctk.CTkToplevel):
 
 # ── Speaking bubble popup ─────────────────────────────────────────────────────
 class _SpeakBubble(ctk.CTkToplevel):
-    """Box-and-bubble overlay shown when G.I.L. is speaking."""
+    """Floating speech overlay — shown whenever G.I.L. speaks."""
 
-    W = 620
+    W = 680
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.transient(parent)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", 0.0)
         self.configure(fg_color=BG)
         self.attributes("-transparentcolor", BG)
-        self._alpha    = 0.0
-        self._fade_id  = None
-        self._visible  = False
+        self.after(50, lambda: _hide_from_taskbar(self))
+        self._alpha   = 0.0
+        self._fade_id = None
+        self._visible = False
 
-        # ── Outer card ───────────────────────────────────────────────────────
-        outer = ctk.CTkFrame(self, fg_color="#050F25", corner_radius=14)
-        outer.pack(fill="both", expand=True, padx=2, pady=2)
+        # Outer glow border
+        glow = ctk.CTkFrame(self, fg_color="#020C20", corner_radius=16,
+                            border_width=1, border_color="#0C2848")
+        glow.pack(fill="both", expand=True, padx=2, pady=2)
 
-        # Top accent stripe
-        ctk.CTkFrame(outer, height=2, fg_color=ACCENT,
+        # Top accent bar
+        ctk.CTkFrame(glow, height=3, fg_color=ACCENT,
                      corner_radius=0).pack(fill="x")
 
-        content = ctk.CTkFrame(outer, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=14, pady=(10, 12))
+        content = ctk.CTkFrame(glow, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=16, pady=(12, 14))
 
-        # ── G.I.L. identifier box (left) ─────────────────────────────────────
-        gil_box = ctk.CTkFrame(content, fg_color="#020A18", corner_radius=10,
-                               border_width=1, border_color="#0A2040")
-        gil_box.pack(side="left", padx=(0, 14), pady=0, ipadx=10, ipady=6)
-        ctk.CTkLabel(gil_box, text="◈",
-                     font=ctk.CTkFont("Segoe UI", 24, "bold"),
-                     text_color=ACCENT, fg_color="transparent").pack()
-        ctk.CTkLabel(gil_box, text="G.I.L.",
-                     font=ctk.CTkFont("Segoe UI", 8),
-                     text_color="#336688", fg_color="transparent").pack()
+        # Avatar column
+        av_col = ctk.CTkFrame(content, fg_color="transparent")
+        av_col.pack(side="left", padx=(0, 16))
+        av = ctk.CTkFrame(av_col, fg_color="#040C1C", corner_radius=18,
+                          width=52, height=52,
+                          border_width=2, border_color=ACCENT)
+        av.pack()
+        av.pack_propagate(False)
+        ctk.CTkLabel(av, text="◈",
+                     font=ctk.CTkFont("Segoe UI", 20, "bold"),
+                     text_color=ACCENT, fg_color="transparent").pack(expand=True)
+        ctk.CTkLabel(av_col, text="G.I.L.",
+                     font=ctk.CTkFont("Segoe UI", 7, "bold"),
+                     text_color="#1A4060", fg_color="transparent").pack(pady=(4, 0))
 
-        # ── Speech bubble (right) ────────────────────────────────────────────
-        bubble = ctk.CTkFrame(content, fg_color="#020B1C", corner_radius=10,
-                              border_width=1, border_color="#081830")
-        bubble.pack(side="left", fill="both", expand=True)
+        # Speech text
+        text_box = ctk.CTkFrame(content, fg_color="#030A1A", corner_radius=12,
+                                border_width=1, border_color="#0A1E38")
+        text_box.pack(side="left", fill="both", expand=True)
 
         self._lbl = ctk.CTkLabel(
-            bubble, text="",
-            font=ctk.CTkFont("Segoe UI", 11),
-            text_color="#C0D8F8", fg_color="transparent",
-            wraplength=self.W - 160,
+            text_box, text="",
+            font=ctk.CTkFont("Segoe UI", 12),
+            text_color="#C8E4FF", fg_color="transparent",
+            wraplength=self.W - 170,
             justify="left", anchor="w",
         )
-        self._lbl.pack(padx=14, pady=10, fill="both", expand=True)
+        self._lbl.pack(padx=16, pady=12, fill="both", expand=True)
 
         self.withdraw()
 
     def show(self, text: str) -> None:
         self._lbl.configure(text=text)
-        self.geometry(f"{self.W}x90")
+        self.geometry(f"{self.W}x100")
         self.update_idletasks()
-        h  = max(90, self.winfo_reqheight() + 4)
+        h  = max(96, self.winfo_reqheight() + 6)
         sw = self.winfo_screenwidth()
         x  = (sw - self.W) // 2
-        y  = WIN_H + 10
+        y  = WIN_H + 12
         self.geometry(f"{self.W}x{h}+{x}+{y}")
         if not self._visible:
             self._visible = True
             self.deiconify()
-        self._fade_to(0.96)
+        self._fade_to(0.97)
 
     def hide(self) -> None:
         self._visible = False
@@ -1000,7 +1076,7 @@ class _SpeakBubble(ctk.CTkToplevel):
         self._step(target)
 
     def _step(self, target: float) -> None:
-        spd = 0.14 if target > self._alpha else 0.08
+        spd = 0.16 if target > self._alpha else 0.09
         if abs(self._alpha - target) < 0.02:
             self._alpha = target
             self.attributes("-alpha", self._alpha)
@@ -1011,6 +1087,530 @@ class _SpeakBubble(ctk.CTkToplevel):
         self._alpha  = max(0.0, min(1.0, self._alpha))
         self.attributes("-alpha", self._alpha)
         self._fade_id = self.after(16, lambda: self._step(target))
+
+
+# ── Floating chat launcher (bottom-left, always on screen) ───────────────────
+class _FloatingChatButton(ctk.CTkToplevel):
+    """Persistent pill button at bottom-left — always visible, opens chat."""
+    W, H = 130, 50
+
+    def __init__(self, parent, on_click: callable):
+        super().__init__(parent)
+        self.transient(parent)          # child of main window — no taskbar button
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.attributes("-alpha", 0.0)
+        self.configure(fg_color=BG)
+        self.attributes("-transparentcolor", BG)
+        self._on_click = on_click
+        self._alive    = True
+        self.after(50, lambda: _hide_from_taskbar(self))  # belt-and-suspenders
+        self._alpha    = 0.0
+        self._pulse_t  = 0.0
+
+        sw = parent.winfo_screenwidth()
+        sh = parent.winfo_screenheight()
+        self.geometry(f"{self.W}x{self.H}+22+{sh - self.H - 36}")
+
+        cv = tk.Canvas(self, width=self.W, height=self.H,
+                       bg=BG, highlightthickness=0)
+        cv.pack()
+        self._cv = cv
+
+        # Pill background + border
+        self._bg   = cv.create_rectangle(3, 3, self.W - 3, self.H - 3,
+                                          fill="#050518", outline=ACCENT, width=2)
+        # ◈ icon
+        cv.create_oval(12, 12, 36, 36, fill="#07071C", outline=ACCENT, width=1)
+        cv.create_text(24, 24, text="◈", fill=ACCENT,
+                       font=("Segoe UI", 11, "bold"))
+        # Divider
+        cv.create_line(44, 10, 44, self.H - 10, fill="#0D1830", width=1)
+        # Labels
+        self._lbl  = cv.create_text(87, 20, text="Chat",
+                                     fill="#C0E4FF",
+                                     font=("Segoe UI", 11, "bold"))
+        self._hint = cv.create_text(87, 36, text="Ctrl+Shift+C",
+                                     fill="#142030",
+                                     font=("Segoe UI", 7))
+
+        cv.bind("<Button-1>",  lambda e: self._click())
+        cv.bind("<Enter>",     self._hover_in)
+        cv.bind("<Leave>",     self._hover_out)
+        cv.configure(cursor="hand2")
+
+        self._fade_in()
+        self._pulse()
+
+    # ── Interactions ──────────────────────────────────────────────────────────
+
+    def _click(self) -> None:
+        self._cv.itemconfig(self._bg, fill="#0A2040")
+        self.after(120, lambda: self._cv.itemconfig(self._bg, fill="#050518"))
+        self._on_click()
+
+    def _hover_in(self, _) -> None:
+        self._cv.itemconfig(self._bg,  fill="#0A1C34", outline="#60D8FF")
+        self._cv.itemconfig(self._lbl, fill=ACCENT)
+
+    def _hover_out(self, _) -> None:
+        self._cv.itemconfig(self._bg,  fill="#050518", outline=ACCENT)
+        self._cv.itemconfig(self._lbl, fill="#C0E4FF")
+
+    # ── Animations ────────────────────────────────────────────────────────────
+
+    def _fade_in(self) -> None:
+        self._alpha = min(0.93, self._alpha + 0.055)
+        self.attributes("-alpha", self._alpha)
+        if self._alpha < 0.93:
+            self.after(18, self._fade_in)
+
+    def _pulse(self) -> None:
+        if not self._alive:
+            return
+        self._pulse_t += 0.07
+        t = abs(math.sin(self._pulse_t))
+        self._cv.itemconfig(self._bg,
+                             outline=_blend(ACCENT, "#80EEFF", t * 0.55))
+        self.after(40, self._pulse)
+
+    def kill(self) -> None:
+        self._alive = False
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
+# ── Chat window ───────────────────────────────────────────────────────────────
+class ChatWindow(ctk.CTkToplevel):
+    """Full G.I.L. chat interface — voice + text, Hebrew + English."""
+
+    def __init__(self, parent, on_send: callable):
+        super().__init__(parent)
+        self.title("G.I.L. — Chat")
+        self.geometry("560x760")
+        self.minsize(420, 500)
+        ctk.set_appearance_mode("dark")
+        self.configure(fg_color="#020210")
+        _set_icon(self)
+        self._on_send           = on_send
+        self._typing_id         = None
+        self._typing_lbl        = None
+        self._typing_frame_ref  = None
+        self._typing_phase      = 0
+        self._build()
+        self._load_history()   # shows history or welcome card
+        self.lift()
+        self.focus()
+
+    # ── Build ─────────────────────────────────────────────────────────────────
+
+    def _build(self) -> None:
+        # Canvas header — redraws on resize for crisp gradient + elements
+        self._hdr_cv = tk.Canvas(self, height=96, bg="#020210", highlightthickness=0)
+        self._hdr_cv.pack(fill="x")
+        self.bind("<Configure>",
+                  lambda e: self._draw_header() if e.widget is self else None)
+        self.after(20, self._draw_header)
+
+        # Cyan accent bar
+        ctk.CTkFrame(self, height=2, fg_color=ACCENT, corner_radius=0).pack(fill="x")
+
+        # Scroll area
+        self._scroll = ctk.CTkScrollableFrame(
+            self, fg_color="#020210",
+            scrollbar_button_color="#080820",
+            scrollbar_button_hover_color="#10103A",
+        )
+        self._scroll.pack(fill="both", expand=True)
+
+        # Input area
+        ctk.CTkFrame(self, height=1, fg_color="#0A1428").pack(fill="x")
+        bar = ctk.CTkFrame(self, fg_color="#030318", corner_radius=0, height=76)
+        bar.pack(fill="x"); bar.pack_propagate(False)
+
+        self._entry_var = ctk.StringVar()
+        self._entry = ctk.CTkEntry(
+            bar,
+            textvariable=self._entry_var,
+            placeholder_text="Message G.I.L.  —  English or Hebrew…",
+            font=ctk.CTkFont("Segoe UI", 12),
+            fg_color="#06061C",
+            border_color="#0C1630",
+            border_width=2,
+            text_color="#C8E8FF",
+            placeholder_text_color="#3A6080",
+            height=48,
+            corner_radius=24,
+        )
+        self._entry.pack(side="left", fill="x", expand=True, padx=(16, 10), pady=14)
+        self._entry.bind("<Return>",   lambda e: self._send())
+        self._entry.bind("<FocusIn>",  lambda e: self._entry.configure(border_color=ACCENT))
+        self._entry.bind("<FocusOut>", lambda e: self._entry.configure(border_color="#0C1630"))
+
+        ctk.CTkButton(
+            bar, text="➤", width=48, height=48,
+            fg_color=ACCENT, hover_color="#00A8E8",
+            text_color="#000810", font=ctk.CTkFont("Segoe UI", 18, "bold"),
+            corner_radius=24, command=self._send,
+        ).pack(side="right", padx=(0, 16), pady=14)
+
+    # ── Canvas header ─────────────────────────────────────────────────────────
+
+    def _draw_header(self) -> None:
+        cv = self._hdr_cv
+        w  = cv.winfo_width() or 560
+        h  = 96
+        cv.delete("all")
+
+        # Gradient bands (left → right, increasingly blue)
+        bands = ["#030314", "#040418", "#05051C", "#060622", "#070728"]
+        bw = w // len(bands) + 2
+        for i, col in enumerate(bands):
+            cv.create_rectangle(i * bw, 0, (i + 1) * bw, h, fill=col, outline="")
+
+        # Decorative glow orb top-right
+        cv.create_oval(w - 130, -50, w + 30, 110, fill="#06062A", outline="")
+        cv.create_oval(w - 100, -30, w + 10,  90, fill="#07082E", outline="")
+
+        # Avatar glow rings (largest → smallest)
+        ax, ay = 48, 48
+        for r, col in [(30, "#07082A"), (27, "#0A0C30"), (24, "#0E1238")]:
+            cv.create_oval(ax - r, ay - r, ax + r, ay + r, fill=col, outline="")
+        cv.create_oval(ax - 22, ay - 22, ax + 22, ay + 22,
+                       fill="#05051E", outline=ACCENT, width=2)
+        cv.create_text(ax, ay, text="◈", fill=ACCENT, font=("Segoe UI", 17, "bold"))
+
+        # Online indicator dot
+        cv.create_oval(ax + 11, ay + 11, ax + 23, ay + 23,
+                       fill="#020210", outline="")
+        cv.create_oval(ax + 12, ay + 12, ax + 22, ay + 22,
+                       fill="#00EE7A", outline="#020210", width=2)
+
+        # Title
+        cv.create_text(80, 30, text="G.I.L.",
+                       fill="#EEF6FF", font=("Segoe UI", 17, "bold"), anchor="w")
+        cv.create_text(80, 54, text="Generative Intelligence Liaison",
+                       fill="#4A7A9B", font=("Segoe UI", 9), anchor="w")
+        cv.create_text(80, 72, text="online  •  Hebrew & English",
+                       fill="#3A6A88", font=("Segoe UI", 8), anchor="w")
+
+        cv.create_text(w - 14, 88, text="Ctrl+Shift+C",
+                       fill="#2A5070", font=("Segoe UI", 8), anchor="e")
+
+    # ── History loader ────────────────────────────────────────────────────────
+
+    def _load_history(self) -> None:
+        """Load stored messages from previous sessions, then scroll to bottom."""
+        try:
+            from chat_history import load_recent
+            messages = load_recent(limit=80)
+        except Exception:
+            messages = []
+
+        if not messages:
+            self._show_welcome()
+            return
+
+        # Group by calendar day for date separators
+        import datetime as _dt
+
+        prev_day     = None
+        prev_session = None
+
+        for msg in messages:
+            ts      = msg["ts"]
+            day_str = _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+            # Date header when the day changes
+            if day_str != prev_day:
+                prev_day = day_str
+                label    = self._friendly_date(ts)
+                self._date_divider(label)
+
+            # Session separator inside the same day
+            elif msg["is_session_start"] and prev_session is not None:
+                self._session_divider()
+
+            prev_session = msg["session_id"]
+
+            # Render the bubble (no DB save — it's already stored)
+            self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
+
+        # Mark the boundary between history and now
+        self._session_divider("Now")
+        self.after(100, lambda: self._scroll._parent_canvas.yview_moveto(1.0))
+
+    @staticmethod
+    def _friendly_date(ts: float) -> str:
+        import datetime as _dt
+        d     = _dt.datetime.fromtimestamp(ts).date()
+        today = _dt.date.today()
+        delta = (today - d).days
+        if delta == 0:   return "Today"
+        if delta == 1:   return "Yesterday"
+        if delta < 7:    return d.strftime("%A")          # Monday, Tuesday …
+        return d.strftime("%B %d")                        # June 12
+
+    def _date_divider(self, label: str) -> None:
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row.pack(fill="x", pady=(14, 6), padx=14)
+        ctk.CTkFrame(row, height=1, fg_color="#0C1828").pack(
+            side="left", fill="x", expand=True, pady=8)
+        ctk.CTkLabel(row, text=f"  {label}  ",
+                     font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                     text_color="#2A5070",
+                     fg_color="#020210", corner_radius=6).pack(side="left")
+        ctk.CTkFrame(row, height=1, fg_color="#0C1828").pack(
+            side="left", fill="x", expand=True, pady=8)
+
+    def _session_divider(self, label: str = "Earlier") -> None:
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row.pack(fill="x", pady=(10, 4), padx=14)
+        ctk.CTkFrame(row, height=1, fg_color="#070718").pack(
+            side="left", fill="x", expand=True, pady=6)
+        ctk.CTkLabel(row, text=f"  {label}  ",
+                     font=ctk.CTkFont("Segoe UI", 7),
+                     text_color="#152030",
+                     fg_color="#020210").pack(side="left")
+        ctk.CTkFrame(row, height=1, fg_color="#070718").pack(
+            side="left", fill="x", expand=True, pady=6)
+
+    # ── Welcome card ─────────────────────────────────────────────────────────
+
+    def _show_welcome(self) -> None:
+        wrap = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        wrap.pack(fill="x", padx=16, pady=(22, 14))
+
+        card = ctk.CTkFrame(wrap, fg_color="#060622",
+                            corner_radius=20, border_width=1,
+                            border_color="#0E1E3E")
+        card.pack(fill="x")
+
+        # Header row
+        hrow = ctk.CTkFrame(card, fg_color="transparent")
+        hrow.pack(fill="x", padx=18, pady=(18, 12))
+        av = ctk.CTkFrame(hrow, fg_color="#07071E", corner_radius=18,
+                          width=40, height=40, border_width=2, border_color=ACCENT)
+        av.pack(side="left", padx=(0, 14))
+        av.pack_propagate(False)
+        ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 14, "bold"),
+                     text_color=ACCENT).pack(expand=True)
+        tc = ctk.CTkFrame(hrow, fg_color="transparent")
+        tc.pack(side="left")
+        ctk.CTkLabel(tc, text="G.I.L. is online",
+                     font=ctk.CTkFont("Segoe UI", 14, "bold"),
+                     text_color="#9CD4FF", anchor="w").pack(anchor="w")
+        ctk.CTkLabel(tc, text="Your personal AI — always ready",
+                     font=ctk.CTkFont("Segoe UI", 9),
+                     text_color="#4A7898", anchor="w").pack(anchor="w")
+
+        ctk.CTkFrame(card, height=1, fg_color="#0C1C3A").pack(fill="x", padx=14)
+
+        # Capability chips row
+        cf = ctk.CTkFrame(card, fg_color="transparent")
+        cf.pack(fill="x", padx=14, pady=14)
+        for emoji, label in [("Ask", "Questions"), ("Web", "Search"),
+                              ("PC", "Control"), ("Music", "Play"),
+                              ("HE", "Hebrew")]:
+            ch = ctk.CTkFrame(cf, fg_color="#08082C",
+                              corner_radius=12, border_width=1, border_color="#101840")
+            ch.pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(ch, text=f"  {emoji}  ",
+                         font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                         text_color=ACCENT).pack(side="left")
+            ctk.CTkLabel(ch, text=f"{label}  ",
+                         font=ctk.CTkFont("Segoe UI", 8),
+                         text_color="#5A88A8").pack(side="left", pady=6)
+
+    # ── Typing indicator ──────────────────────────────────────────────────────
+
+    def show_typing(self) -> None:
+        def _do():
+            if self._typing_frame_ref:
+                return
+            frame = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            frame.pack(fill="x", pady=(4, 4), padx=14)
+            row = ctk.CTkFrame(frame, fg_color="transparent")
+            row.pack(side="left")
+            # Mini avatar
+            av = ctk.CTkFrame(row, fg_color="#060620", corner_radius=12,
+                              width=24, height=24, border_width=1, border_color=ACCENT)
+            av.pack(side="left", anchor="n", pady=(2, 0))
+            av.pack_propagate(False)
+            ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                         text_color=ACCENT).pack(expand=True)
+            bubble = ctk.CTkFrame(row, fg_color="#05051A", corner_radius=14,
+                                  border_width=1, border_color="#0C1A30")
+            bubble.pack(side="left", padx=(8, 0))
+            lbl = ctk.CTkLabel(bubble, text="  ●  ·  ·  ",
+                               font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                               text_color="#4A80A8")
+            lbl.pack(padx=12, pady=10)
+            self._typing_lbl       = lbl
+            self._typing_frame_ref = frame
+            self._typing_phase     = 0
+            self._animate_dots()
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+        self.after(0, _do)
+
+    def hide_typing(self) -> None:
+        def _do():
+            if self._typing_id:
+                try:
+                    self.after_cancel(self._typing_id)
+                except Exception:
+                    pass
+                self._typing_id = None
+            if self._typing_frame_ref:
+                try:
+                    self._typing_frame_ref.destroy()
+                except Exception:
+                    pass
+                self._typing_frame_ref = None
+                self._typing_lbl       = None
+        self.after(0, _do)
+
+    def _animate_dots(self) -> None:
+        if not self._typing_lbl:
+            return
+        patterns = [
+            "  ●  ·  ·  ", "  ·  ●  ·  ", "  ·  ·  ●  ", "  ·  ●  ·  ",
+        ]
+        try:
+            self._typing_lbl.configure(text=patterns[self._typing_phase % 4])
+        except Exception:
+            return
+        self._typing_phase += 1
+        self._typing_id = self.after(280, self._animate_dots)
+
+    # ── Message bubbles ───────────────────────────────────────────────────────
+
+    def add_message(self, text: str, sender: str) -> None:
+        """Thread-safe. Renders bubble and persists to DB. sender: 'user' or 'gil'."""
+        if not text.strip():
+            return
+        import time as _time
+        ts = _time.time()
+
+        def _do():
+            self.hide_typing()
+            self._render_bubble(text, sender, ts, save=True)
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+
+        self.after(0, _do)
+
+    def _render_bubble(self, text: str, sender: str, ts: float,
+                       save: bool = True) -> None:
+        """
+        Draw one message bubble in self._scroll.
+        save=True  → also persist to chat_history DB (set False when replaying history).
+        Must be called from the main thread.
+        """
+        import datetime as _dt
+        ts_str = _dt.datetime.fromtimestamp(ts).strftime("%H:%M")
+        wl     = max(220, self.winfo_width() - 180)
+
+        if sender == "user":
+            outer = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            outer.pack(fill="x", pady=(5, 2), padx=14)
+            ctk.CTkFrame(outer, fg_color="transparent").pack(
+                side="left", fill="x", expand=True)
+            col = ctk.CTkFrame(outer, fg_color="transparent")
+            col.pack(side="right")
+
+            ctk.CTkLabel(col, text="You",
+                         font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                         text_color="#5A90B8", anchor="e").pack(
+                             anchor="e", padx=4, pady=(0, 3))
+            bubble = ctk.CTkFrame(col, fg_color="#071E40",
+                                  corner_radius=18,
+                                  border_width=1, border_color="#0E3260")
+            bubble.pack(anchor="e")
+            ctk.CTkLabel(bubble, text=text,
+                         font=ctk.CTkFont("Segoe UI", 11),
+                         text_color="#78C8F8",
+                         wraplength=wl, justify="right",
+                         anchor="e").pack(padx=16, pady=12)
+            ctk.CTkLabel(col, text=ts_str,
+                         font=ctk.CTkFont("Segoe UI", 7),
+                         text_color="#4A7090").pack(
+                             anchor="e", padx=4, pady=(3, 0))
+        else:
+            outer = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            outer.pack(fill="x", pady=(2, 5), padx=14)
+
+            avc = ctk.CTkFrame(outer, fg_color="transparent")
+            avc.pack(side="left", anchor="n", padx=(0, 10), pady=(22, 0))
+            av = ctk.CTkFrame(avc, fg_color="#05051C", corner_radius=13,
+                              width=26, height=26,
+                              border_width=1, border_color=ACCENT)
+            av.pack()
+            av.pack_propagate(False)
+            ctk.CTkLabel(av, text="◈",
+                         font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                         text_color=ACCENT).pack(expand=True)
+
+            content = ctk.CTkFrame(outer, fg_color="transparent")
+            content.pack(side="left", fill="x", expand=True, padx=(0, 60))
+
+            ctk.CTkLabel(content, text="G.I.L.",
+                         font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                         text_color="#4A90B0", anchor="w").pack(
+                             anchor="w", padx=2, pady=(0, 3))
+            bubble = ctk.CTkFrame(content, fg_color="#050520",
+                                  corner_radius=18,
+                                  border_width=1, border_color="#0B1C38")
+            bubble.pack(anchor="w", fill="x")
+            brow = ctk.CTkFrame(bubble, fg_color="transparent")
+            brow.pack(fill="x")
+            ctk.CTkFrame(brow, width=3, fg_color=ACCENT,
+                         corner_radius=1).pack(
+                             side="left", fill="y", padx=(10, 0), pady=12)
+            ctk.CTkLabel(brow, text=text,
+                         font=ctk.CTkFont("Segoe UI", 11),
+                         text_color="#A8DAFC",
+                         wraplength=wl, justify="left",
+                         anchor="w").pack(
+                             side="left", padx=(10, 16), pady=12)
+            ctk.CTkLabel(content, text=ts_str,
+                         font=ctk.CTkFont("Segoe UI", 7),
+                         text_color="#4A7090").pack(
+                             anchor="w", padx=2, pady=(3, 0))
+
+        # Persist to DB (background thread so UI never blocks)
+        if save:
+            threading.Thread(
+                target=self._persist, args=(text, sender),
+                daemon=True, name="GIL-HistSave",
+            ).start()
+
+    @staticmethod
+    def _persist(text: str, sender: str) -> None:
+        try:
+            from chat_history import save_message
+            save_message(sender, text)
+        except Exception:
+            pass
+
+    # ── Send ──────────────────────────────────────────────────────────────────
+
+    def _send(self) -> None:
+        text = self._entry_var.get().strip()
+        if not text:
+            return
+        self._entry_var.set("")
+        self.add_message(text, "user")
+        self.show_typing()
+        threading.Thread(target=self._on_send, args=(text,),
+                         daemon=True, name="GIL-ChatSend").start()
 
 
 # ── Main window — top wave bar ────────────────────────────────────────────────
@@ -1033,10 +1633,12 @@ class GILWindow(ctk.CTk):
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=BG)
         self.title("G.I.L.")
+        _set_icon(self)
 
         self.overrideredirect(True)
         self.attributes("-transparentcolor", BG)
         self.attributes("-topmost", True)
+        self.after(100, lambda: _hide_from_taskbar(self))
         self.attributes("-alpha", 0.0)
 
         self.update_idletasks()
@@ -1066,6 +1668,8 @@ class GILWindow(ctk.CTk):
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         # Right-click menu
         self.canvas.bind("<Button-3>", self._show_menu)
+        # Cursor change on hover for the chat button
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
 
     def _create_speak_bubble(self) -> None:
         self._speak_bubble = _SpeakBubble(self)
@@ -1099,11 +1703,39 @@ class GILWindow(ctk.CTk):
             width=min(sw - 80, 900),
         )
 
+        # ── Chat button (right side, always visible) ──────────────────────────
+        _BW, _BH = 80, 26
+        _bx1 = sw - _BW - 18
+        _bx2 = sw - 18
+        _by1 = (WIN_H - _BH) // 2
+        _by2 = (WIN_H + _BH) // 2
+        self._chat_btn_bounds = (_bx1, _by1, _bx2, _by2)
+        self.canvas.create_rectangle(_bx1, _by1, _bx2, _by2,
+                                     fill="#040418", outline=ACCENT, width=1,
+                                     tags="chat_btn")
+        self.canvas.create_text((_bx1 + _bx2) // 2, WIN_H // 2,
+                                 text="⌨  Chat", fill=ACCENT,
+                                 font=("Segoe UI", 9, "bold"),
+                                 tags="chat_btn")
+
     # ── Interaction ────────────────────────────────────────────────────────────
 
     def _on_canvas_click(self, event) -> None:
+        if hasattr(self, "_chat_btn_bounds"):
+            x1, y1, x2, y2 = self._chat_btn_bounds
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                self._open_chat_window()
+                return
         if event.y < WIN_H - 20:
             self._on_activate_click()
+
+    def _on_canvas_motion(self, event) -> None:
+        if hasattr(self, "_chat_btn_bounds"):
+            x1, y1, x2, y2 = self._chat_btn_bounds
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                self.canvas.configure(cursor="hand2")
+                return
+        self.canvas.configure(cursor="")
 
     # ── Context menu ──────────────────────────────────────────────────────────
 
@@ -1116,6 +1748,7 @@ class GILWindow(ctk.CTk):
                        relief="flat", bd=0)
         menu.add_command(label="  Activate G.I.L.",  command=self._on_activate_click)
         menu.add_separator()
+        menu.add_command(label="  Chat with G.I.L.", command=self._open_chat_window)
         menu.add_command(label="  Tasks & Learning", command=self._open_tasks_window)
         menu.add_command(label="  Settings",         command=self.open_settings)
         menu.add_separator()
@@ -1124,6 +1757,41 @@ class GILWindow(ctk.CTk):
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _open_chat_window(self) -> None:
+        send_fn = getattr(self, "_chat_send_fn", None)
+        if not send_fn:
+            return
+        if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
+            self._chat_win.lift()
+            self._chat_win.focus()
+            self._chat_win.state("zoomed")
+        else:
+            self._chat_win = ChatWindow(self, send_fn)
+            self._chat_win.after(80, lambda: self._chat_win.state("zoomed"))
+
+    def add_chat_message(self, text: str, sender: str) -> None:
+        """Thread-safe — safely no-ops when the chat window is not open."""
+        def _do():
+            if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
+                self._chat_win.add_message(text, sender)
+        self.after(0, _do)
+
+    def chat_show_typing(self) -> None:
+        def _do():
+            if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
+                self._chat_win.show_typing()
+        self.after(0, _do)
+
+    def chat_hide_typing(self) -> None:
+        def _do():
+            if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
+                self._chat_win.hide_typing()
+        self.after(0, _do)
+
+    def _create_floating_chat_button(self) -> None:
+        if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
+            self._float_btn = _FloatingChatButton(self, self._open_chat_window)
 
     def _open_tasks_window(self) -> None:
         if hasattr(self, "_tasks_win"):
@@ -1284,6 +1952,7 @@ class GILWindow(ctk.CTk):
         self.deiconify()
         self.attributes("-topmost", True)
         self.lift()
+        self.after(0,   lambda: _hide_from_taskbar(self))
         self.after(300, lambda: self.attributes("-topmost", True))
 
     def open_settings(self) -> None:

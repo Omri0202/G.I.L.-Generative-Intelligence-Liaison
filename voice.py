@@ -16,6 +16,12 @@ import ctypes
 ELEVENLABS_API_KEY  = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
 
+_HE_VOICE = "he-IL-AvriNeural"   # Hebrew male voice (edge-tts)
+_HE_RE    = re.compile(r'[֐-׿]')
+
+def _is_hebrew(text: str) -> bool:
+    return bool(_HE_RE.search(text))
+
 
 def _load_voice() -> str:
     if os.getenv("GIL_VOICE"):
@@ -85,6 +91,7 @@ def speak(text: str) -> bool:
     finally:
         _stop_flag[0] = False
         _speak_lock.release()
+
     return True
 
 
@@ -112,6 +119,7 @@ async def _edge_generate(text: str, voice: str, output_path: str) -> None:
 
 def _speak_edge_tts(text: str) -> None:
     tmp_path = None
+    voice    = _HE_VOICE if _is_hebrew(text) else EDGE_TTS_VOICE
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             tmp_path = f.name
@@ -124,7 +132,7 @@ def _speak_edge_tts(text: str) -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(_edge_generate(text, EDGE_TTS_VOICE, tmp_path))
+                loop.run_until_complete(_edge_generate(text, voice, tmp_path))
             except Exception as exc:
                 result[0] = exc
             finally:
