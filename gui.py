@@ -1141,11 +1141,19 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self.after(100, self._place)
 
     def _place(self) -> None:
-        """Move to the correct bottom-left position once the window is mapped."""
-        sh = self.winfo_screenheight()
-        # 4 px above the taskbar edge — as low as possible without hiding behind it
-        y  = sh - self.H - 4
-        self.geometry(f"{self.W}x{self.H}+16+{y}")
+        """Pin to the bottom-left corner using the Windows work-area API.
+        This is DPI-safe and accounts for taskbar height/position correctly."""
+        import ctypes, ctypes.wintypes as _wt
+        try:
+            # SPI_GETWORKAREA (0x30) — returns usable screen rect excl. taskbar
+            rc = _wt.RECT()
+            ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0)
+            x = rc.left + 16
+            y = rc.bottom - self.H - 4   # 4 px above where taskbar starts
+        except Exception:
+            sh = self.winfo_screenheight()
+            x, y = 16, sh - self.H - 52
+        self.geometry(f"{self.W}x{self.H}+{x}+{y}")
         _hide_from_taskbar(self)
         self._fade_in()
         self._pulse()
