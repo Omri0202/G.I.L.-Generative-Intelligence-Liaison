@@ -38,7 +38,7 @@ def _write_version(new_ver: str) -> None:
         else:
             lines.append(line)
     vfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"[RELEASE] version.py updated → {new_ver}")
+    print(f"[RELEASE] version.py updated to {new_ver}")
 
 
 def _build() -> Path:

@@ -372,7 +372,7 @@ def main() -> None:
     print("  Share the whole 'GIL' folder — anyone can run GIL.exe.\n")
     print("  For a single-file installer:")
     print("  1. Install Inno Setup 6  (https://jrsoftware.org)")
-    print("  2. Open gil_installer.iss → Compile")
+    print("  2. Open gil_installer.iss - Compile")
     print("  3. Share GIL_Setup.exe\n")
 
 
