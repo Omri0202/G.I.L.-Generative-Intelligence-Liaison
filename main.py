@@ -25,6 +25,10 @@ if ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
     ctypes.windll.user32.MessageBoxW(0, "G.I.L. is already running.", "G.I.L.", 0)
     sys.exit(0)
 
+from logger import get as _get_log
+
+log = _get_log("main")
+
 from auth import run_login
 import context_engine
 import goal_tracker
@@ -49,16 +53,16 @@ def main() -> None:
             sys.exit(0)
         load_dotenv(override=True)
 
-    print("=" * 52)
-    print("  PROJECT G.I.L. — GENERATIVE INTELLIGENCE LIAISON")
-    print("=" * 52)
+    log.info("=" * 52)
+    log.info("  G.I.L. starting up")
+    log.info("=" * 52)
 
     username = run_login()
     if not username:
-        print("[G.I.L.] Authentication aborted.")
+        log.warning("authentication aborted — exiting")
         sys.exit(0)
 
-    print(f"[G.I.L.] Identity confirmed: {username}")
+    log.info("identity confirmed: %s", username)
 
     # ── Chat history ──────────────────────────────────────────────────────────
     try:
@@ -66,7 +70,7 @@ def main() -> None:
         init_session()
         clear_old(days=30)   # prune messages older than 30 days on startup
     except Exception as exc:
-        print(f"[G.I.L.] Chat history init failed: {exc}")
+        log.error("Chat history init failed", exc_info=True)
 
     # ── Intelligence engines ──────────────────────────────────────────────────
     context_engine.start()
@@ -130,7 +134,7 @@ def main() -> None:
         )
         gmail_recap.start_periodic_check(interval_secs=1800)
     except Exception as exc:
-        print(f"[G.I.L.] Gmail recap disabled: {exc}")
+        log.warning("Gmail recap disabled: %s", exc)
 
     try:
         import whatsapp_recap
@@ -139,13 +143,13 @@ def main() -> None:
         )
         whatsapp_recap.start_periodic_check(interval_secs=1800)
     except Exception as exc:
-        print(f"[G.I.L.] WhatsApp recap disabled: {exc}")
+        log.warning("WhatsApp recap disabled: %s", exc)
 
     try:
         import notes as _notes_mod
         _notes_mod.start_clipboard_watcher()
     except Exception as exc:
-        print(f"[G.I.L.] Clipboard watcher disabled: {exc}")
+        log.warning("Clipboard watcher disabled: %s", exc)
 
     try:
         import meeting_detector as _meet_det
@@ -153,7 +157,7 @@ def main() -> None:
         _meet_det.set_mode_callback(_meet_modes.set_mode)
         _meet_det.start_meeting_watcher()
     except Exception as exc:
-        print(f"[G.I.L.] Meeting detector disabled: {exc}")
+        log.warning("Meeting detector disabled: %s", exc)
 
     goal_tracker.on_checkin(
         lambda msg: window.after(0, lambda m=msg: window.show_proactive_suggestion(m))
@@ -203,9 +207,9 @@ def main() -> None:
             if isinstance(topics, list) and topics:
                 from memory import record_task
                 record_task(_j.dumps(topics))
-                print(f"[G.I.L.] Session topics saved: {topics}")
+                log.info("session topics saved: %s", topics)
         except Exception as exc:
-            print(f"[G.I.L.] Summary save failed: {exc}")
+            log.warning("Summary save failed: %s", exc)
 
     def _periodic_summary():
         while True:
@@ -231,7 +235,7 @@ def main() -> None:
     from gui import _set_startup, _get_startup_enabled
     if not _get_startup_enabled():
         _set_startup(True)
-        print("[G.I.L.] Registered for Windows startup.")
+        log.info("registered for Windows startup")
 
     # ── Tray + watcher process ────────────────────────────────────────────────
     from tray_manager import start_tray
@@ -255,7 +259,7 @@ def main() -> None:
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
         )
     except Exception as exc:
-        print(f"[G.I.L.] Watcher start failed: {exc}")
+        log.warning("watcher start failed: %s", exc)
 
     # Check for updates 30 s after launch — silent, never blocks startup
     try:
@@ -272,7 +276,7 @@ def main() -> None:
         end_session()
     except Exception:
         pass
-    print("[G.I.L.] Session terminated.")
+    log.info("session terminated")
 
 
 if __name__ == "__main__":

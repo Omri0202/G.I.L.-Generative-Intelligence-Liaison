@@ -1,7 +1,7 @@
 """
-gil_brain.py — Project G.I.L.
+gil_brain.py â€” Project G.I.L.
 Cognitive core powered by Ollama (local Mistral 7B).
-Runs entirely on your machine — no API key, no internet required for AI.
+Runs entirely on your machine â€” no API key, no internet required for AI.
 """
 
 import json
@@ -10,9 +10,12 @@ import re
 import time
 import requests
 from datetime import datetime
+from logger import get as _get_log
+
+log = _get_log("brain")
 
 # Strips conversational preamble so saved topics are clean.
-# "could you tell me about Montenegro" → "Montenegro"
+# "could you tell me about Montenegro" â†’ "Montenegro"
 _PREAMBLE_RE = re.compile(
     r"^(could you |can you |please |hey\s+gil[,\s]*|gil[,\s]*|"
     r"tell me about |tell me |what (is|are|was|were|do you know about)\s+(the\s+)?|"
@@ -64,7 +67,7 @@ _groq_key_index = 0
 
 
 def _load_user_profile() -> str:
-    """Always-present identity layer — never depends on DB search relevance."""
+    """Always-present identity layer â€” never depends on DB search relevance."""
     try:
         from pathlib import Path
         import json as _json
@@ -97,44 +100,44 @@ def _load_user_profile() -> str:
 _groq_key_lock  = __import__("threading").Lock()
 
 _SYSTEM = """\
-You are G.I.L. (Generative Intelligence Liaison) — the personal AI of {username}. \
+You are G.I.L. (Generative Intelligence Liaison) â€” the personal AI of {username}. \
 You are the most capable AI assistant ever built: sharp, autonomous, multi-tasking, like JARVIS. \
 You act immediately and handle multiple requests in a single response.
 
-━━ PERSONALITY ━━
-• Never say "Certainly", "Of course", "As an AI", "I cannot", "How can I help", "At your service".
-• Address user as "{username}" or "Sir". Short. Confident. Never apologetic.
-• Speech is spoken aloud (TTS) — no markdown, no bullet points in speech, 1-3 sentences max.
-• Respond in {username}'s language. If they write Hebrew, reply Hebrew (but keep JSON keys in English).
+â”â” PERSONALITY â”â”
+â€¢ Never say "Certainly", "Of course", "As an AI", "I cannot", "How can I help", "At your service".
+â€¢ Address user as "{username}" or "Sir". Short. Confident. Never apologetic.
+â€¢ Speech is spoken aloud (TTS) â€” no markdown, no bullet points in speech, 1-3 sentences max.
+â€¢ Respond in {username}'s language. If they write Hebrew, reply Hebrew (but keep JSON keys in English).
 
-━━ MULTI-TASK — CRITICAL ━━
+â”â” MULTI-TASK â€” CRITICAL â”â”
 When the user asks for multiple things in one message, return ALL of them.
-Use the "actions" array — include EVERY action needed:
+Use the "actions" array â€” include EVERY action needed:
 {{"speech": "...", "actions": [{{"action": "...", "target": "..."}}, {{"action": "...", "target": "..."}}], "report": null}}
 Single task: {{"speech": "...", "actions": [{{"action": "...", "target": "..."}}], "report": null}}
 No action needed: {{"speech": "...", "actions": [], "report": null}}
 
-━━ INTELLIGENCE RULES ━━
-• CONTEXT: Read screen context, active projects, memory, calendar — reference them naturally.
-• MEMORY: When RELEVANT MEMORIES appear — weave them in. Never say "I don't have memory."
-• JUDGMENT: Challenge flawed ideas in one sentence. Question destructive actions before executing.
-• FOLLOW-UP: Only ask a follow-up if genuinely needed. Do NOT ask "anything else?" after every reply.
-• INFERENCE: If user says "open it" / "play that" / "go there" — infer from context. Never ask "which one?".
-• SCREEN-AWARE: If screen shows an error, crash, or something notable — mention it proactively once.
+â”â” INTELLIGENCE RULES â”â”
+â€¢ CONTEXT: Read screen context, active projects, memory, calendar â€” reference them naturally.
+â€¢ MEMORY: When RELEVANT MEMORIES appear â€” weave them in. Never say "I don't have memory."
+â€¢ JUDGMENT: Challenge flawed ideas in one sentence. Question destructive actions before executing.
+â€¢ FOLLOW-UP: Only ask a follow-up if genuinely needed. Do NOT ask "anything else?" after every reply.
+â€¢ INFERENCE: If user says "open it" / "play that" / "go there" â€” infer from context. Never ask "which one?".
+â€¢ SCREEN-AWARE: If screen shows an error, crash, or something notable â€” mention it proactively once.
 
-━━ HARD RULES ━━
-CAMERA: "camera"/"webcam"/"your eyes" → open_camera. NEVER open_app for camera.
-  If asked "is camera open" → answer ONLY from CAMERA STATE below.
-WEBSITE: Any build/create/make/generate + website/page/web app → build_website. NEVER use "build" for websites.
-VOLUME: "volume"/"mute" with no TV mention → pc_volume. Only "tv" action when user explicitly says TV.
+â”â” HARD RULES â”â”
+CAMERA: "camera"/"webcam"/"your eyes" â†’ open_camera. NEVER open_app for camera.
+  If asked "is camera open" â†’ answer ONLY from CAMERA STATE below.
+WEBSITE: Any build/create/make/generate + website/page/web app â†’ build_website. NEVER use "build" for websites.
+VOLUME: "volume"/"mute" with no TV mention â†’ pc_volume. Only "tv" action when user explicitly says TV.
 SPOTIFY: Always "spotify" action for music. NEVER open_app or open_url for Spotify.
-REMINDER: "remind me to X in N minutes" → action "reminder", target = full text verbatim.
+REMINDER: "remind me to X in N minutes" â†’ action "reminder", target = full text verbatim.
 MODES: dnd=silent+hidden|study=Pomodoro+quiet|fun=Spotify+relaxed|normal=default
 
-━━ WHO YOU'RE TALKING TO ━━
+â”â” WHO YOU'RE TALKING TO â”â”
 {user_profile}
 
-━━ TIME & CONTEXT ━━
+â”â” TIME & CONTEXT â”â”
 {datetime}
 {memory_context}
 SCREEN: {screen_context}
@@ -143,35 +146,35 @@ DESKTOP PROJECTS: {projects_context}
 {credentials}
 CAMERA STATE: {camera_state}
 
-━━ ACTIONS (action → target format) ━━
-open_app → app name | open_url → full URL | web_search → query string | web_research → question (fetches live results and speaks a summary — use instead of web_search when user wants an answer spoken aloud)
-system_vitals → null | take_screenshot → null | identify_song → null
-sign_in → service | save_credential → "svc|email|pw" | delete_credential → svc | list_credentials → null
-show_settings → null | note → text | list_notes → null | clip_history → null
-create_project → name | add_task → "task|project" | complete_task → task | list_tasks → null
-build → "description|folder-name" (ONLY for code/software projects, NEVER websites)
-open_terminal → command | prompt_project → "folder|task"
-focus_window → app | arrange_windows → "app1|app2" | close_window → app
-minimize_all → null | maximize_window → app
-open_file → path | read_file → path | list_directory → path | find_file → filename
-set_clipboard → text | get_clipboard → null
-create_3d → scene description
-tv → on|off|mute|unmute|volume up|volume down|volume up N|volume down N|volume N|hdmi N|netflix|youtube
-set_mode → dnd|study|fun|normal
-pc → sleep|lock|restart|shutdown|cancel
-pc_volume → up N|down N|set N|mute|unmute
-weather → city or blank
-reminder → full reminder text | list_reminders → null
-spotify → play|pause|next|previous|play SONG|volume N|what's playing|shuffle on|shuffle off
-briefing → city or blank
-nearby → place type (e.g. "restaurants", "gyms", "coffee shops")
-directions → destination | my_location → null | food_delivery → null
-news → topic or blank | open_article → index number (0-based)
-calendar → today|tomorrow|week | add_event → "title | YYYY-MM-DD HH:MM | duration_minutes"
-look → question or blank | open_camera → null | close_camera → null
-build_website → detailed description of the website to build
+â”â” ACTIONS (action â†’ target format) â”â”
+open_app â†’ app name | open_url â†’ full URL | web_search â†’ query string | web_research â†’ question (fetches live results and speaks a summary â€” use instead of web_search when user wants an answer spoken aloud)
+system_vitals â†’ null | take_screenshot â†’ null | identify_song â†’ null
+sign_in â†’ service | save_credential â†’ "svc|email|pw" | delete_credential â†’ svc | list_credentials â†’ null
+show_settings â†’ null | note â†’ text | list_notes â†’ null | clip_history â†’ null
+create_project â†’ name | add_task â†’ "task|project" | complete_task â†’ task | list_tasks â†’ null
+build â†’ "description|folder-name" (ONLY for code/software projects, NEVER websites)
+open_terminal â†’ command | prompt_project â†’ "folder|task"
+focus_window â†’ app | arrange_windows â†’ "app1|app2" | close_window â†’ app
+minimize_all â†’ null | maximize_window â†’ app
+open_file â†’ path | read_file â†’ path | list_directory â†’ path | find_file â†’ filename
+set_clipboard â†’ text | get_clipboard â†’ null
+create_3d â†’ scene description
+tv â†’ on|off|mute|unmute|volume up|volume down|volume up N|volume down N|volume N|hdmi N|netflix|youtube
+set_mode â†’ dnd|study|fun|normal
+pc â†’ sleep|lock|restart|shutdown|cancel
+pc_volume â†’ up N|down N|set N|mute|unmute
+weather â†’ city or blank
+reminder â†’ full reminder text | list_reminders â†’ null
+spotify â†’ play|pause|next|previous|play SONG|volume N|what's playing|shuffle on|shuffle off
+briefing â†’ city or blank
+nearby â†’ place type (e.g. "restaurants", "gyms", "coffee shops")
+directions â†’ destination | my_location â†’ null | food_delivery â†’ null
+news â†’ topic or blank | open_article â†’ index number (0-based)
+calendar â†’ today|tomorrow|week | add_event â†’ "title | YYYY-MM-DD HH:MM | duration_minutes"
+look â†’ question or blank | open_camera â†’ null | close_camera â†’ null
+build_website â†’ detailed description of the website to build
 
-━━ EXAMPLES ━━
+â”â” EXAMPLES â”â”
 User: open vs code
 {{"speech": "VS Code.", "actions": [{{"action": "open_app", "target": "visual studio code"}}], "report": null}}
 
@@ -179,7 +182,7 @@ User: open chrome and turn volume to 40
 {{"speech": "Chrome up, volume at 40.", "actions": [{{"action": "open_app", "target": "chrome"}}, {{"action": "pc_volume", "target": "set 40"}}], "report": null}}
 
 User: play Blinding Lights, mute the TV, and take a screenshot
-{{"speech": "Done — all three.", "actions": [{{"action": "spotify", "target": "play Blinding Lights"}}, {{"action": "tv", "target": "mute"}}, {{"action": "take_screenshot", "target": ""}}], "report": null}}
+{{"speech": "Done â€” all three.", "actions": [{{"action": "spotify", "target": "play Blinding Lights"}}, {{"action": "tv", "target": "mute"}}, {{"action": "take_screenshot", "target": ""}}], "report": null}}
 
 User: open github
 {{"speech": "GitHub.", "actions": [{{"action": "open_url", "target": "https://github.com"}}], "report": null}}
@@ -212,10 +215,10 @@ User: do not disturb
 {{"speech": "Going silent.", "actions": [{{"action": "set_mode", "target": "dnd"}}], "report": null}}
 
 User: fun mode
-{{"speech": "Fun mode — Spotify's going. What are we playing?", "actions": [{{"action": "set_mode", "target": "fun"}}], "report": null}}
+{{"speech": "Fun mode â€” Spotify's going. What are we playing?", "actions": [{{"action": "set_mode", "target": "fun"}}], "report": null}}
 
 User: study mode
-{{"speech": "Study mode — Pomodoro on, no interruptions.", "actions": [{{"action": "set_mode", "target": "study"}}], "report": null}}
+{{"speech": "Study mode â€” Pomodoro on, no interruptions.", "actions": [{{"action": "set_mode", "target": "study"}}], "report": null}}
 
 User: remind me to call mom in 30 minutes
 {{"speech": "Reminder set.", "actions": [{{"action": "reminder", "target": "remind me to call mom in 30 minutes"}}], "report": null}}
@@ -239,7 +242,7 @@ User: what do you see
 {{"speech": "Looking.", "actions": [{{"action": "look", "target": ""}}], "report": null}}
 
 User: build me a website for my coffee shop
-{{"speech": "On it — about 30 seconds.", "actions": [{{"action": "build_website", "target": "coffee shop website with menu, story, gallery, and contact"}}], "report": null}}
+{{"speech": "On it â€” about 30 seconds.", "actions": [{{"action": "build_website", "target": "coffee shop website with menu, story, gallery, and contact"}}], "report": null}}
 
 User: make me a drummer website and open youtube
 {{"speech": "Building the site and opening YouTube.", "actions": [{{"action": "build_website", "target": "drumming website with artist bio, tour dates, gallery, and listen section"}}, {{"action": "open_url", "target": "https://youtube.com"}}], "report": null}}
@@ -257,7 +260,7 @@ CRITICAL: Return ONE valid JSON object. Use "actions" array always. Nothing outs
 """
 
 
-# ── Sub-agent routing ─────────────────────────────────────────────────────────
+# â”€â”€ Sub-agent routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Detects intent type and returns a specialized prompt suffix.
 # Appended to the base system prompt to sharpen the brain for that domain.
 
@@ -281,29 +284,29 @@ _CREATIVE_RE = re.compile(
 )
 
 _SUB_CODE = """\
-━━ CODING AGENT MODE ━━
+â”â” CODING AGENT MODE â”â”
 You are now acting as a senior software engineer. Extra rules for this query:
-• Read SCREEN context carefully — if an error message or code is visible, address it directly.
-• Give concrete, copy-paste-ready code snippets when helpful (the TTS layer will skip code blocks).
-• Diagnose root cause before suggesting a fix. Don't just say "try this" — explain why it works.
-• If the active file is visible in context, reference it by name.
-• Keep speech short (1–2 sentences), put detailed code/explanation in "report" field."""
+â€¢ Read SCREEN context carefully â€” if an error message or code is visible, address it directly.
+â€¢ Give concrete, copy-paste-ready code snippets when helpful (the TTS layer will skip code blocks).
+â€¢ Diagnose root cause before suggesting a fix. Don't just say "try this" â€” explain why it works.
+â€¢ If the active file is visible in context, reference it by name.
+â€¢ Keep speech short (1â€“2 sentences), put detailed code/explanation in "report" field."""
 
 _SUB_RESEARCH = """\
-━━ RESEARCH AGENT MODE ━━
+â”â” RESEARCH AGENT MODE â”â”
 You are now acting as a research analyst. Extra rules for this query:
-• Lead with the single most useful fact in your speech (1–2 sentences).
-• Put deeper detail, sources, or structured breakdown in the "report" field.
-• If you know the topic well, be specific — cite numbers, names, dates where relevant.
-• Don't hedge with "I'm not sure" unless genuinely uncertain. Be direct."""
+â€¢ Lead with the single most useful fact in your speech (1â€“2 sentences).
+â€¢ Put deeper detail, sources, or structured breakdown in the "report" field.
+â€¢ If you know the topic well, be specific â€” cite numbers, names, dates where relevant.
+â€¢ Don't hedge with "I'm not sure" unless genuinely uncertain. Be direct."""
 
 _SUB_CREATIVE = """\
-━━ CREATIVE AGENT MODE ━━
+â”â” CREATIVE AGENT MODE â”â”
 You are now acting as a creative director and copywriter. Extra rules for this query:
-• Generate fresh, specific, high-quality content — not generic filler.
-• For drafts/writing: put the full output in "report", summarize in speech ("Here's a draft — check the panel.").
-• For ideas/brainstorming: give 3 concrete options in speech, more in report.
-• Match tone to context — professional for emails, energetic for marketing, etc."""
+â€¢ Generate fresh, specific, high-quality content â€” not generic filler.
+â€¢ For drafts/writing: put the full output in "report", summarize in speech ("Here's a draft â€” check the panel.").
+â€¢ For ideas/brainstorming: give 3 concrete options in speech, more in report.
+â€¢ Match tone to context â€” professional for emails, energetic for marketing, etc."""
 
 
 def _route_to_subagent(user_input: str) -> str:
@@ -324,7 +327,7 @@ class GILBrain:
 
     def query(self, user_input: str, project_context: str = "", camera_state: str = "closed") -> dict:
         global _groq_key_index
-        print(f"[G.I.L. BRAIN] Query: {user_input}")
+        log.info("query: %s", user_input[:80])
         self.history.append({"role": "user", "content": user_input})
 
         now = datetime.now()
@@ -351,7 +354,7 @@ class GILBrain:
         except Exception:
             memory_context = "LAST SESSION: No recent session on record."
 
-        # Screen context — use rich context_engine if available, fall back to screen.py
+        # Screen context â€” use rich context_engine if available, fall back to screen.py
         try:
             from context_engine import get_screen_context, get_desktop_projects
             screen_context   = get_screen_context()
@@ -388,14 +391,14 @@ class GILBrain:
         except Exception:
             session_context = ""
 
-        # Location context — cached, non-blocking
+        # Location context â€” cached, non-blocking
         try:
             from location import build_location_context
             location_context = build_location_context()
         except Exception:
             location_context = ""
 
-        # Calendar context — today's events
+        # Calendar context â€” today's events
         try:
             from gcalendar import build_calendar_context
             cal_context = build_calendar_context()
@@ -429,7 +432,7 @@ class GILBrain:
             camera_state=camera_state,
         ) + project_block + extra_str
 
-        # ── Multi-agent routing ───────────────────────────────────────────────
+        # â”€â”€ Multi-agent routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Detect intent type and append a specialized sub-prompt that sharpens
         # the brain's focus. This lets GIL behave like a specialist for that domain.
         _sub = _route_to_subagent(user_input)
@@ -448,7 +451,7 @@ class GILBrain:
 
         if not GROQ_KEYS:
             self.history.pop()
-            return {"speech": "No Groq API key is configured — check your .env file.", "action": None, "target": None, "report": None}
+            return {"speech": "No Groq API key is configured â€” check your .env file.", "action": None, "target": None, "report": None}
 
         try:
             with _groq_key_lock:
@@ -461,11 +464,11 @@ class GILBrain:
                     _groq_key_index += 1
                     _cur_idx = _groq_key_index
                 next_key = GROQ_KEYS[_cur_idx % len(GROQ_KEYS)]
-                print(f"[G.I.L. BRAIN] Key {(_cur_idx - 1) % len(GROQ_KEYS) + 1} rate limited — rotating to key {_cur_idx % len(GROQ_KEYS) + 1}.")
+                log.warning("Groq key rate-limited, rotating")
                 resp = _try_groq(next_key)
 
             if resp.status_code == 429:
-                # Both keys rate-limited on primary model — try fallback models
+                # Both keys rate-limited on primary model â€” try fallback models
                 print(f"[G.I.L. BRAIN] All keys rate-limited on {GROQ_MODEL}. Trying fallback models...")
                 fallback_resp = None
                 for fb_model in _FALLBACK_MODELS:
@@ -476,7 +479,7 @@ class GILBrain:
                             r = requests.post(GROQ_URL, json=fb_payload, headers=hdrs, timeout=15)
                             if r.status_code != 429:
                                 fallback_resp = r
-                                print(f"[G.I.L. BRAIN] Fallback succeeded on {fb_model}.")
+                                log.info("Fallback succeeded on %s", fb_model)
                                 break
                         except Exception:
                             continue
@@ -484,33 +487,33 @@ class GILBrain:
                         break
                 if fallback_resp is None:
                     self.history.pop()
-                    print("[G.I.L. BRAIN] All models rate-limited.")
-                    return {"speech": "I'm rate-limited across all models right now — give me 30 seconds and ask again.", "action": None, "target": None, "report": None}
+                    log.warning("All Groq models rate-limited")
+                    return {"speech": "I'm rate-limited across all models right now â€” give me 30 seconds and ask again.", "action": None, "target": None, "report": None}
                 resp = fallback_resp
 
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
         except requests.exceptions.ConnectionError:
             self.history.pop()
-            print("[G.I.L. BRAIN] No internet connection.")
+            log.error("No internet connection")
             return _err("No connection. Check your internet.")
         except requests.exceptions.Timeout:
             self.history.pop()
-            print("[G.I.L. BRAIN] Groq timed out.")
+            log.warning("Groq request timed out")
             return {"speech": "My neural core is lagging. Ask me again.", "action": None, "target": None, "report": None}
         except Exception as exc:
             self.history.pop()
-            print(f"[G.I.L. BRAIN ERROR] {exc}")
+            log.error("Brain error: %s", exc, exc_info=True)
             return {"speech": "Groq is unavailable right now. Try again in a moment.", "action": None, "target": None, "report": None}
 
-        print(f"[G.I.L. BRAIN] Raw: {raw}")
+        log.debug("raw response: %s", raw[:200])
         parsed = _parse_json(raw)
         self.history.append({"role": "assistant", "content": raw})
 
         if len(self.history) > 40:
             self.history = self.history[-40:]
 
-        # Persist this task to memory — skip trivial replies and garbled/non-Latin STT
+        # Persist this task to memory â€” skip trivial replies and garbled/non-Latin STT
         try:
             if len(user_input.split()) > 4:
                 _ascii_frac = sum(1 for c in user_input if ord(c) < 128) / max(len(user_input), 1)
@@ -526,7 +529,7 @@ class GILBrain:
 
     def proactive_query(self) -> dict | None:
         """
-        Call this from a background timer (e.g. every 5–10 minutes) to let G.I.L.
+        Call this from a background timer (e.g. every 5â€“10 minutes) to let G.I.L.
         proactively notice something and speak without being prompted.
         Returns None if G.I.L. has nothing useful to add right now.
 
@@ -542,9 +545,9 @@ class GILBrain:
             threading.Thread(target=_proactive_loop, daemon=True).start()
         """
         prompt = (
-            "[PROACTIVE — do not announce you are doing a proactive check] "
+            "[PROACTIVE â€” do not announce you are doing a proactive check] "
             f"Based on the current screen context, time of day, memory, and what {self.username} "
-            "has been doing: is there something genuinely useful you can say right now — "
+            "has been doing: is there something genuinely useful you can say right now â€” "
             "a suggestion, observation, warning, or question? "
             "Only speak if you have something specific and actionable. "
             'If not, return: {"speech": "", "action": null, "target": null, "report": null}'
@@ -583,12 +586,12 @@ def _parse_json(raw: str) -> dict:
     if parsed is None:
         m = re.search(r'"speech"\s*:\s*"([^"]+)"', cleaned)
         if m:
-            print("[G.I.L. BRAIN] Partial parse — extracted speech only.")
+            print("[G.I.L. BRAIN] Partial parse â€” extracted speech only.")
             return {"speech": m.group(1), "action": None, "target": None, "report": None, "extra_actions": []}
-        print(f"[G.I.L. BRAIN] JSON parse failed. Raw: {raw[:120]}")
+        log.error("JSON parse failed. Raw: %s", raw[:120])
         return {"speech": "", "action": None, "target": None, "report": None, "extra_actions": []}
 
-    # Normalise new "actions" array format → legacy action/target + extra_actions
+    # Normalise new "actions" array format â†’ legacy action/target + extra_actions
     actions = parsed.get("actions") or []
     if actions:
         first = actions[0] if actions else {}
@@ -604,5 +607,6 @@ def _parse_json(raw: str) -> dict:
 
 
 def _err(msg: str) -> dict:
-    print(f"[G.I.L. BRAIN] Silent error: {msg}")
+    log.debug("silent error: %s", msg)
     return {"speech": "", "action": None, "target": None, "report": None}
+

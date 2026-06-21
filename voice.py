@@ -12,6 +12,9 @@ import tempfile
 import threading
 import time
 import ctypes
+from logger import get as _get_log
+
+log = _get_log("voice")
 
 ELEVENLABS_API_KEY  = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
@@ -63,7 +66,7 @@ def speak(text: str) -> bool:
     Mic stays live during playback so the user can say "stop" to interrupt.
     """
     if not _speak_lock.acquire(blocking=False):
-        print(f"[G.I.L. VOICE] Skipped (voice busy): {text[:40]!r}")
+        log.debug("skipped (busy): %r", text[:40])
         try:
             from ears import unmute
             unmute()
@@ -75,13 +78,13 @@ def speak(text: str) -> bool:
         text = _clean(text)
         if not text:
             return False
-        print(f"[G.I.L. VOICE] {text}")
+        log.info("%s", text[:120])
         try:
             if _el_key_valid:
                 try:
                     _speak_elevenlabs(text)
                 except Exception as _el_exc:
-                    print(f"[G.I.L. VOICE] ElevenLabs failed ({_el_exc}), falling back to edge-tts.")
+                    log.warning("ElevenLabs failed (%s), falling back to edge-tts", _el_exc)
                     _speak_edge_tts(text)
             else:
                 _speak_edge_tts(text)
@@ -151,7 +154,7 @@ def _speak_edge_tts(text: str) -> None:
         _play_mp3_winmm(tmp_path)
 
     except Exception as exc:
-        print(f"[G.I.L. VOICE] edge-tts failed ({exc}), falling back to SAPI.")
+        log.warning("edge-tts failed (%s), falling back to SAPI", exc)
         _speak_sapi(text)
     finally:
         if tmp_path:
@@ -189,7 +192,7 @@ def _speak_elevenlabs(text: str) -> None:
             except Exception:
                 pass
     except Exception as exc:
-        print(f"[G.I.L. VOICE] ElevenLabs error: {exc}. Falling back to edge-tts.")
+        log.warning("ElevenLabs error: %s", exc)
         _speak_edge_tts(text)
 
 
@@ -212,7 +215,7 @@ def _play_mp3_winmm(filepath: str) -> None:
                 break
             time.sleep(0.05)
     except Exception as exc:
-        print(f"[G.I.L. VOICE] WinMM playback failed: {exc}")
+        log.error("WinMM playback failed: %s", exc, exc_info=True)
     finally:
         try:
             winmm.mciSendStringW("stop gil_audio", None, 0, None)
@@ -279,4 +282,4 @@ def _speak_sapi(text: str) -> None:
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except Exception as exc:
-        print(f"[G.I.L. VOICE] SAPI error: {exc}")
+        log.error("SAPI error: %s", exc, exc_info=True)

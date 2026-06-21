@@ -33,6 +33,10 @@ from wake_phrase import (
     GIL_VARIANTS, contains_wake_phrase, strip_wake_phrase,
     is_addressed, edit_distance,
 )
+from logger import get as _get_log
+
+log = _get_log("engine")
+
 from action_handlers import (
     handle_save_credential, handle_list_credentials, handle_delete_credential,
     handle_create_project, handle_add_task, handle_complete_task,
@@ -151,9 +155,9 @@ class ConversationEngine:
             keyboard.add_hotkey("ctrl+shift+c",
                                 lambda: self.window.after(0, self.window._open_chat_window),
                                 suppress=False)
-            print("[G.I.L.] Hotkeys active: Ctrl+Shift+G (activate)  Ctrl+Shift+C (chat)")
+            log.info("hotkeys registered: Ctrl+Shift+G / Ctrl+Shift+C")
         except Exception:
-            print("[G.I.L.] keyboard library not available — hotkeys disabled.")
+            log.warning("keyboard library unavailable — hotkeys disabled")
 
         # ── Double-clap wake ──────────────────────────────────────────────────
         _clap_on = True
@@ -166,9 +170,9 @@ class ConversationEngine:
             pass
         if _clap_on:
             start_clap_detector(self._manual_activate)
-            print("[G.I.L.] Clap detector active.")
+            log.info("clap detector active")
         else:
-            print("[G.I.L.] Clap detector disabled.")
+            log.info("clap detector disabled")
 
         print("[G.I.L.] Listening. Say 'Hello G.I.L.' to begin.\n")
         listen_forever(self.on_utterance)
@@ -184,7 +188,7 @@ class ConversationEngine:
             gw.start()
             self._gesture_watcher[0] = gw
         except Exception as exc:
-            print(f"[G.I.L. GESTURE] Failed to start: {exc}")
+            log.warning("Gesture watcher failed to start: %s", exc)
 
     def _stop_gesture_watcher(self) -> None:
         if self._gesture_watcher[0]:
@@ -255,17 +259,17 @@ class ConversationEngine:
         from ears import mute, unmute
 
         if not self.processing_lock.acquire(blocking=False):
-            print(f"[G.I.L.] Busy — ignored: '{text[:40]}'")
+            log.debug("busy — ignored: %r", text[:40])
             return
         try:
             # Post-speech echo cooldown
             if time.time() - self._last_spoke_at[0] < 2.0:
-                print(f"[G.I.L.] Echo suppressed (cooldown): '{text[:40]}'")
+                log.debug("echo suppressed (cooldown): %r", text[:40])
                 return
             # Similarity filter (8-second window)
             if self._last_said[0] and time.time() - self._last_spoke_at[0] < 8.0:
                 if self._word_overlap(text, self._last_said[0]) > 0.5:
-                    print(f"[G.I.L.] Echo suppressed (similarity): '{text[:40]}'")
+                    log.debug("echo suppressed (similarity): %r", text[:40])
                     return
 
             self.window.add_chat_message(text, "user")
@@ -283,7 +287,7 @@ class ConversationEngine:
     def _process_chat(self, text: str) -> None:
         """Typed chat message — skips mic echo filters."""
         if not self.processing_lock.acquire(blocking=False):
-            print(f"[G.I.L. CHAT] Busy — dropped: '{text[:40]}'")
+            log.debug("chat busy — dropped: %r", text[:40])
             self.window.chat_hide_typing()
             return
         try:
@@ -382,7 +386,7 @@ class ConversationEngine:
                     if msgs:
                         self._pending_recap[0] = {"type": "wa", "items": msgs}
                 except Exception as exc:
-                    print(f"[G.I.L. WHATSAPP] {exc}")
+                    log.error("WhatsApp recap: %s", exc, exc_info=True)
                     speech = "I couldn't reach WhatsApp right now. Want me to open it?"
                 window.set_state("speaking", said=speech)
                 speak(speech)
@@ -447,10 +451,10 @@ class ConversationEngine:
                         msg = (f"Got it. I'll recognize you as {self.username} from now on." if ok
                                else "Couldn't see your face clearly — try better lighting.")
                         if not ok:
-                            print(f"[G.I.L. FACE] Enroll failed: {detail}")
+                            log.warning("Face enroll failed: %s", detail)
                     except Exception as exc:
                         msg = "Face enrollment failed — make sure the camera is open."
-                        print(f"[G.I.L. FACE] Error: {exc}")
+                        log.error("Face enroll error", exc_info=True)
                 window.set_state("speaking", said=msg)
                 speak(msg)
                 self._last_spoke_at[0] = time.time() - 1.5
@@ -504,7 +508,7 @@ class ConversationEngine:
                             else:                          msg = "I can't detect a face — try looking straight at the camera."
                     except Exception as exc:
                         msg = "Face recognition isn't available right now."
-                        print(f"[G.I.L. FACE] Query error: {exc}")
+                        log.error("Face query error", exc_info=True)
                 unmute(); window.set_state("speaking", said=msg); speak(msg)
                 self._last_spoke_at[0] = time.time() - 1.5
                 self._last_said[0] = msg
@@ -581,7 +585,7 @@ class ConversationEngine:
                                      daemon=True, name="GIL-CamFocus").start()
                     speech = "Camera's up."
                 except Exception as exc:
-                    print(f"[G.I.L. EYES] Camera failed: {exc}")
+                    log.error("Camera open failed", exc_info=True)
                     speech = "Couldn't open the camera. Make sure it's connected."
             window.set_state("speaking", said=speech); speak(speech)
             self._last_spoke_at[0] = time.time() - 1.5
@@ -647,7 +651,7 @@ class ConversationEngine:
                                          daemon=True, name="GIL-CamFocus").start()
                         cam_open = True
                     except Exception as exc:
-                        print(f"[G.I.L. EYES] Camera open failed: {exc}")
+                        log.error("Camera open failed", exc_info=True)
                 if cam_open and self._camera_win[0]:
                     frame = self._camera_win[0].get_current_frame()
                 else:
@@ -660,7 +664,7 @@ class ConversationEngine:
                         from eyes import analyze_frame
                         result = analyze_frame(frame, question=q)
                     except Exception as exc:
-                        print(f"[G.I.L. EYES] analyze_frame error: {exc}")
+                        log.error("Vision analysis failed", exc_info=True)
                         result = "Vision analysis failed."
                 unmute(); window.set_state("speaking", said=result); speak(result)
                 self._last_spoke_at[0] = time.time() - 1.5
@@ -893,7 +897,7 @@ class ConversationEngine:
             response = self.brain.query(text, project_context=project_ctx,
                                          camera_state=_cam_state)
         except Exception as exc:
-            print(f"[G.I.L. BRAIN ERROR] {exc}")
+            log.error("Brain error", exc_info=True)
             unmute()
             window.set_state("listening" if self.conv.active else "standby")
             return
@@ -915,7 +919,7 @@ class ConversationEngine:
             any(w in lower for w in self._WEBGEN_WORDS)
             or any(w in target.lower() for w in self._WEBGEN_WORDS)
         ):
-            print(f"[G.I.L.] Rerouting '{action}' -> build_website")
+            log.debug("rerouting %r -> build_website", action)
             action = "build_website"
             target = target or text
 
@@ -995,7 +999,7 @@ class ConversationEngine:
                         "set_clipboard", "get_clipboard"):
             result = self._execute_action(action, target)
             if result and action in ("read_file", "list_directory", "find_file", "get_clipboard"):
-                print(f"[G.I.L. ACTIONS] {result[:200]}")
+                log.info("action result: %s", result[:200])
         elif action == "tv":
             threading.Thread(target=lambda: self._execute_action("tv", target),
                              daemon=True, name="GIL-TV").start()
@@ -1117,7 +1121,7 @@ class ConversationEngine:
                     except Exception as exc:
                         unmute()
                         _fail = "Camera failed to start. Make sure it's connected."
-                        print(f"[G.I.L. EYES] {exc}")
+                        log.error("Camera error", exc_info=True)
                         window.set_state("speaking", said=_fail); speak(_fail)
                         self._last_spoke_at[0] = time.time() - 1.5
                         self._last_said[0] = _fail
@@ -1180,7 +1184,7 @@ class ConversationEngine:
             ):
                 ea_action = "build_website"
                 ea_target = ea_target or text
-            print(f"[G.I.L.] Extra action: {ea_action} -> {ea_target[:60]}")
+            log.debug("extra action: %s -> %s", ea_action, ea_target[:60])
             threading.Thread(target=self._dispatch_instant, args=(ea_action, ea_target),
                              daemon=True, name=f"GIL-extra-{ea_action}").start()
 
@@ -1230,7 +1234,7 @@ class ConversationEngine:
     # ── STT callback ──────────────────────────────────────────────────────────
 
     def on_utterance(self, text: str) -> None:
-        print(f"[G.I.L. EARS] Heard: '{text}'")
+        log.info("heard: %r", text[:100])
         lower = text.lower().replace(".", "").replace(",", "")
 
         # "Gil stop" — kill TTS immediately
@@ -1301,7 +1305,7 @@ class ConversationEngine:
                         pass
                 return
         except Exception as exc:
-            print(f"[G.I.L.] Visualizer error: {exc}")
+            log.warning("Visualizer error: %s", exc)
 
         # Song ID
         _SONG_TRIGGERS = {
@@ -1357,11 +1361,11 @@ class ConversationEngine:
                                  daemon=True, name="GIL-Trigger").start()
                 return
         except Exception as exc:
-            print(f"[G.I.L.] Trigger check failed: {exc}")
+            log.warning("Trigger check failed: %s", exc)
 
         # Wake phrase
         if contains_wake_phrase(lower):
-            print(f"[G.I.L.] Wake phrase detected: '{text}'")
+            log.info("wake phrase: %r", text[:80])
             if not self.conv.active:
                 self.conv.activate()
                 from ears import set_passive
@@ -1386,7 +1390,7 @@ class ConversationEngine:
                 threading.Thread(target=self._process, args=(text,),
                                  daemon=True, name="GIL-Process").start()
             else:
-                print(f"[G.I.L.] Not addressed — ignored: '{text[:50]}'")
+                log.debug("not addressed — ignored: %r", text[:50])
 
     # ── Manual activate ───────────────────────────────────────────────────────
 
@@ -1400,4 +1404,4 @@ class ConversationEngine:
         self.window.set_state("listening")
         if not already_active or time.time() - self._last_spoke_at[0] > 30:
             self._speak_wake_prompt()
-        print("[G.I.L.] Manually activated.")
+        log.info("manually activated")
