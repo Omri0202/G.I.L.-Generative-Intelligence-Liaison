@@ -176,6 +176,13 @@ def main() -> None:
     context_engine.on_context_changed(_on_ctx_change)
 
     # ── Session summary (every 10 min + on shutdown) ──────────────────────────
+    def _save_session_memory() -> None:
+        try:
+            from session_memory import save as _save_mem
+            _save_mem(engine.brain.history)
+        except Exception as exc:
+            log.warning("session memory save failed: %s", exc)
+
     def _save_summary() -> None:
         try:
             brain     = engine.brain
@@ -216,6 +223,7 @@ def main() -> None:
             time.sleep(600)
             try:
                 _save_summary()
+                _save_session_memory()
             except Exception:
                 pass
 
@@ -224,6 +232,7 @@ def main() -> None:
     def _on_shutdown(msg: str) -> None:
         from voice import speak
         _save_summary()
+        _save_session_memory()
         try:
             speak(msg)
         except Exception:

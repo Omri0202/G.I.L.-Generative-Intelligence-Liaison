@@ -13,10 +13,17 @@ Requirements:
 """
 
 import sys
+import io
 import json
 import shutil
 import subprocess
 from pathlib import Path
+
+# Force UTF-8 stdout
+try:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 ROOT = Path(__file__).parent
 

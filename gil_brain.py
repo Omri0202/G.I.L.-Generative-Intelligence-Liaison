@@ -323,10 +323,20 @@ def _route_to_subagent(user_input: str) -> str:
 class GILBrain:
     def __init__(self, username: str):
         self.username = username
-        self.history: list[dict] = []
+        # Seed with previous session so GIL remembers what you were working on
+        try:
+            from session_memory import load as _load_mem
+            self.history: list[dict] = _load_mem()
+        except Exception:
+            self.history: list[dict] = []
 
-    def query(self, user_input: str, project_context: str = "", camera_state: str = "closed") -> dict:
+    def query(self, user_input: str, project_context: str = "",
+              camera_state: str = "closed", _retry: int = 0) -> dict:
         global _groq_key_index
+        if _retry > 2:
+            log.error("Groq timed out 3 times — giving up")
+            return {"speech": "My connection to Groq keeps timing out. Check your internet and try again.",
+                    "action": None, "target": None, "report": None}
         log.info("query: %s", user_input[:80])
         self.history.append({"role": "user", "content": user_input})
 
@@ -499,8 +509,10 @@ class GILBrain:
             return _err("No connection. Check your internet.")
         except requests.exceptions.Timeout:
             self.history.pop()
-            log.warning("Groq request timed out")
-            return {"speech": "My neural core is lagging. Ask me again.", "action": None, "target": None, "report": None}
+            log.warning("Groq timed out — retrying in 3 s")
+            time.sleep(3)
+            return self.query(user_input, project_context=project_context,
+                              camera_state=camera_state, _retry=_retry + 1)
         except Exception as exc:
             self.history.pop()
             log.error("Brain error: %s", exc, exc_info=True)

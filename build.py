@@ -15,9 +15,16 @@ They double-click GIL.exe, complete the setup wizard, and they're running.
 
 import os
 import sys
+import io
 import shutil
 import subprocess
 from pathlib import Path
+
+# Force UTF-8 stdout so Unicode chars in print() never crash the build
+try:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 ROOT    = Path(__file__).parent
 DIST    = ROOT / "dist" / "GIL"
