@@ -1948,6 +1948,16 @@ class GILWindow(ctk.CTk):
             self._toast = _ProactiveToast(self)
         self._toast.show(message)
 
+    def show_update_toast(self, info: dict) -> None:
+        """Show the update-available notification. info = {version, download_url, notes}"""
+        if hasattr(self, "_update_toast"):
+            try:
+                self._update_toast.destroy()
+            except Exception:
+                pass
+        self._update_toast = _UpdateToast(self, info, on_update=None)
+        self._update_toast.deiconify()
+
     def show_window(self) -> None:
         self.deiconify()
         self.attributes("-topmost", True)
@@ -2082,6 +2092,148 @@ class _WebGenPanel(ctk.CTkToplevel):
             self.after(16, self._fade_out)
         else:
             self.withdraw()
+
+
+# ── Update toast ─────────────────────────────────────────────────────────────
+class _UpdateToast(ctk.CTkToplevel):
+    """Non-intrusive update notification shown at the bottom of the screen."""
+
+    W = 420
+
+    def __init__(self, parent, info: dict, on_update: callable):
+        super().__init__(parent)
+        self.transient(parent)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.attributes("-alpha", 0.0)
+        self.configure(fg_color=BG)
+        self.attributes("-transparentcolor", BG)
+        self._alpha    = 0.0
+        self._fade_id  = None
+        self._info     = info
+        self._on_update = on_update
+        self._downloading = False
+
+        sw = parent.winfo_screenwidth()
+        sh = parent.winfo_screenheight()
+        self.geometry(f"{self.W}x90+{(sw - self.W) // 2}+{sh - 120}")
+
+        # Card
+        card = ctk.CTkFrame(self, fg_color="#040420", corner_radius=14,
+                            border_width=1, border_color=ACCENT)
+        card.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # Top stripe
+        ctk.CTkFrame(card, height=2, fg_color=ACCENT, corner_radius=0).pack(fill="x")
+
+        content = ctk.CTkFrame(card, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=14, pady=10)
+
+        left = ctk.CTkFrame(content, fg_color="transparent")
+        left.pack(side="left", fill="both", expand=True)
+
+        ctk.CTkLabel(left, text=f"G.I.L. v{info['version']} available",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=ACCENT, anchor="w").pack(anchor="w")
+        self._status = ctk.CTkLabel(left, text="New features and improvements.",
+                                     font=ctk.CTkFont("Segoe UI", 9),
+                                     text_color="#3A6A88", anchor="w")
+        self._status.pack(anchor="w")
+
+        # Progress bar (hidden until download starts)
+        self._bar = ctk.CTkProgressBar(card, height=3, progress_color=ACCENT,
+                                        fg_color="#040420", corner_radius=0)
+        self._bar.set(0)
+
+        # Buttons
+        btn_col = ctk.CTkFrame(content, fg_color="transparent")
+        btn_col.pack(side="right", padx=(10, 0))
+
+        self._update_btn = ctk.CTkButton(
+            btn_col, text="Update", width=76, height=30,
+            fg_color=ACCENT, hover_color="#00A0D8",
+            text_color="#000810", font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            corner_radius=15, command=self._start_update,
+        )
+        self._update_btn.pack(pady=(0, 4))
+
+        ctk.CTkButton(
+            btn_col, text="Later", width=76, height=26,
+            fg_color="transparent", hover_color="#07071E",
+            text_color="#2A5070", font=ctk.CTkFont("Segoe UI", 9),
+            corner_radius=13, command=self._dismiss,
+        ).pack()
+
+        self._fade_in()
+
+    def _start_update(self) -> None:
+        if self._downloading:
+            return
+        self._downloading = True
+        self._update_btn.configure(state="disabled", text="Downloading…")
+        self._status.configure(text="Downloading update…")
+        self._bar.pack(fill="x", side="bottom")
+        self._bar.set(0)
+        threading.Thread(target=self._download, daemon=True,
+                         name="GIL-Update").start()
+
+    def _download(self) -> None:
+        import updater as _u
+        ok, msg = _u.download_and_install(
+            self._info["download_url"],
+            on_progress=lambda f: self.after(0, lambda v=f: self._bar.set(v)),
+        )
+        def _done():
+            if ok:
+                self._bar.set(1.0)
+                self._status.configure(text="Done! Restart GIL to apply.",
+                                        text_color="#3AE870")
+                self._update_btn.configure(
+                    state="normal", text="Restart now",
+                    command=self._restart,
+                )
+            else:
+                self._status.configure(text=msg, text_color="#E05050")
+                self._update_btn.configure(state="normal", text="Retry",
+                                            command=self._start_update)
+                self._downloading = False
+        self.after(0, _done)
+
+    def _restart(self) -> None:
+        import subprocess
+        exe = sys.executable
+        subprocess.Popen([exe] + sys.argv)
+        sys.exit(0)
+
+    def _dismiss(self) -> None:
+        self._fade_to(0.0)
+
+    def _fade_in(self) -> None:
+        self._alpha = min(0.96, self._alpha + 0.07)
+        self.attributes("-alpha", self._alpha)
+        if self._alpha < 0.96:
+            self._fade_id = self.after(16, self._fade_in)
+        else:
+            self.deiconify()
+
+    def _fade_to(self, target: float) -> None:
+        if self._fade_id:
+            try: self.after_cancel(self._fade_id)
+            except Exception: pass
+        self._step(target)
+
+    def _step(self, target: float) -> None:
+        spd = 0.14 if target > self._alpha else 0.09
+        if abs(self._alpha - target) < 0.02:
+            self._alpha = target
+            self.attributes("-alpha", self._alpha)
+            if target == 0.0:
+                self.destroy()
+            return
+        self._alpha += (target - self._alpha) * spd
+        self._alpha  = max(0.0, min(1.0, self._alpha))
+        self.attributes("-alpha", self._alpha)
+        self._fade_id = self.after(16, lambda: self._step(target))
 
 
 # ── Proactive toast ───────────────────────────────────────────────────────────

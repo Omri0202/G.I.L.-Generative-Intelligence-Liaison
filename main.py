@@ -257,6 +257,13 @@ def main() -> None:
     except Exception as exc:
         print(f"[G.I.L.] Watcher start failed: {exc}")
 
+    # Check for updates 30 s after launch — silent, never blocks startup
+    try:
+        from updater import check_and_notify as _check_update
+        window.after(30_000, lambda: _check_update(window))
+    except Exception:
+        pass
+
     window.after(500, window.show_window)
     window.mainloop()
     session_manager.trigger_shutdown(username)
