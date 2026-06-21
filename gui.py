@@ -1143,8 +1143,8 @@ class _FloatingChatButton(ctk.CTkToplevel):
     def _place(self) -> None:
         """Move to the correct bottom-left position once the window is mapped."""
         sh = self.winfo_screenheight()
-        # sit just above the taskbar (taskbar is ~48 px on most Windows installs)
-        y  = sh - self.H - 48
+        # 4 px above the taskbar edge — as low as possible without hiding behind it
+        y  = sh - self.H - 4
         self.geometry(f"{self.W}x{self.H}+16+{y}")
         _hide_from_taskbar(self)
         self._fade_in()
@@ -2002,7 +2002,8 @@ class GILWindow(ctk.CTk):
         self._toast.show(message)
 
     def show_update_toast(self, info: dict) -> None:
-        """Show the update-available notification. info = {version, download_url, notes}"""
+        """Show the update notification on screen AND post it into the chat."""
+        # 1. Floating toast at the bottom of the screen
         if hasattr(self, "_update_toast"):
             try:
                 self._update_toast.destroy()
@@ -2010,6 +2011,15 @@ class GILWindow(ctk.CTk):
                 pass
         self._update_toast = _UpdateToast(self, info, on_update=None)
         self._update_toast.deiconify()
+
+        # 2. Message inside the chat window (if open)
+        notes = info.get("notes", "").strip()
+        chat_msg = (
+            f"Update available: G.I.L. v{info['version']}.\n"
+            f"{notes + chr(10) if notes else ''}"
+            "Click the notification at the bottom of your screen to install."
+        )
+        self.add_chat_message(chat_msg, "gil")
 
     def show_window(self) -> None:
         self.deiconify()
