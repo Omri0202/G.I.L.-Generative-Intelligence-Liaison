@@ -17,132 +17,163 @@ _CLAUDE_MODEL  = "claude-sonnet-4-6"   # same model powering Claude Code
 # ── System prompt ─────────────────────────────────────────────────────────────
 # Extremely prescriptive — tells the LLM exactly what HTML/CSS/JS patterns to use.
 
-_SYSTEM = """You are an elite front-end developer and UI/UX designer building award-winning websites.
-Generate a COMPLETE, STUNNING, production-ready single-file HTML website.
-Output ONLY raw HTML starting with <!DOCTYPE html>. No markdown, no fences, no explanation.
+_SYSTEM = """\
+You are a world-class front-end developer. Build a COMPLETE, STUNNING, single-file website.
+Output ONLY raw HTML starting with <!DOCTYPE html>. No markdown, no fences.
 
-ABSOLUTE RULES
-- Single HTML file: <style> in <head>, all <script> before </body>.
-- Real, specific content — invent names, stories, stats, testimonials. ZERO Lorem Ipsum.
-- Fully responsive: mobile-first, breakpoints at 1024px, 768px, 480px.
-- IMAGES: use ONLY the exact image paths provided in the request (img1, img2, img3...).
-  Hero bg: background: linear-gradient(to bottom,rgba(0,0,0,.6),rgba(0,0,0,.2)), url(img1) center/cover no-repeat fixed;
-  If more images needed than provided, reuse the provided ones with different CSS effects.
+RULE 1 - CONTRAST (check EVERY element):
+  Dark background (hex < #666): ALL text MUST be #F0F0FF or lighter.
+  Light background (hex > #AAA): ALL text MUST be #111118 or darker.
+  Applies to nav, headings, body, cards, footer — EVERYTHING.
 
-ALWAYS IN <head>
+RULE 2 - IMAGES: use ONLY these exact placeholder strings:
+  Hero:   HERO_IMG
+  Cards:  CARD_IMG_1   CARD_IMG_2   CARD_IMG_3
+  Hero CSS: background:linear-gradient(rgba(0,0,0,.62),rgba(0,0,0,.32)),url(HERO_IMG) center/cover no-repeat fixed;
+  Card <img>: <img src="CARD_IMG_1" alt="..." loading="lazy">
+  Do NOT use loremflickr or any other image URL.
+
+RULE 3 - GSAP classes (required on exact elements):
+  Main h1:             class="hero-title"
+  Hero paragraph:      class="hero-sub"
+  Hero CTA container:  class="hero-cta"
+  Every section h2/h3: add class="reveal"
+  Every card grid div: add class="stagger"
+  Left split column:   class="reveal-left"
+  Right split column:  class="reveal-right"
+  Animated number:     <span data-count="12000" data-suf="+">0</span>
+
+ALWAYS IN <head>:
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-[correct Google Fonts pairing for the subject]
+<link href="https://fonts.googleapis.com/css2?family=DISPLAY:wght@700;800;900&family=BODY:wght@300;400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css">
 
-ALWAYS BEFORE </body>
+ALWAYS BEFORE </body>:
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
 <script>
 gsap.registerPlugin(ScrollTrigger);
-gsap.timeline()
-  .from('.hero-title',{y:70,opacity:0,duration:1.1,ease:'power3.out'})
-  .from('.hero-sub',  {y:45,opacity:0,duration:0.9,ease:'power3.out'},'-=0.7')
-  .from('.hero-cta',  {y:30,opacity:0,duration:0.8,ease:'power3.out'},'-=0.6');
+gsap.timeline({defaults:{ease:'power3.out'}})
+  .from('.hero-title',{y:80,opacity:0,duration:1.2})
+  .from('.hero-sub',{y:50,opacity:0,duration:1.0},'-=0.8')
+  .from('.hero-cta',{y:35,opacity:0,duration:0.9},'-=0.7');
 gsap.utils.toArray('.reveal').forEach(el=>
-  gsap.from(el,{y:55,opacity:0,duration:0.9,ease:'power2.out',
+  gsap.from(el,{y:60,opacity:0,duration:1.0,ease:'power2.out',
     scrollTrigger:{trigger:el,start:'top 88%'}}));
 gsap.utils.toArray('.stagger').forEach(p=>
-  gsap.from(p.children,{y:40,opacity:0,duration:0.8,stagger:0.13,ease:'power2.out',
-    scrollTrigger:{trigger:p,start:'top 86%'}}));
+  gsap.from(p.children,{y:50,opacity:0,duration:0.85,stagger:0.15,ease:'power2.out',
+    scrollTrigger:{trigger:p,start:'top 85%'}}));
+gsap.utils.toArray('.reveal-left').forEach(el=>
+  gsap.from(el,{x:-70,opacity:0,duration:1.0,ease:'power2.out',
+    scrollTrigger:{trigger:el,start:'top 85%'}}));
+gsap.utils.toArray('.reveal-right').forEach(el=>
+  gsap.from(el,{x:70,opacity:0,duration:1.0,ease:'power2.out',
+    scrollTrigger:{trigger:el,start:'top 85%'}}));
 document.querySelectorAll('[data-count]').forEach(el=>{
   const end=+el.dataset.count,suf=el.dataset.suf||'';
-  gsap.from({v:0},{v:end,duration:2.2,ease:'power1.out',
+  gsap.from({v:0},{v:end,duration:2.5,ease:'power1.out',
     scrollTrigger:{trigger:el,start:'top 80%'},
     onUpdate(){el.textContent=Math.round(this.targets()[0].v).toLocaleString()+suf}});
 });
+const nav=document.querySelector('.navbar');
+if(nav)ScrollTrigger.create({start:'top -80',
+  onUpdate:s=>nav.classList.toggle('scrolled',s.progress>0)});
 </script>
 
-CSS DESIGN SYSTEM (always use :root variables)
-:root {
-  --bg:#0A0A0F; --bg2:#111118; --bg3:#1A1A25; --card:#13131E;
+USE THIS CSS TEMPLATE EXACTLY (fill --accent, --font-d, --font-b for the subject):
+<style>
+:root{
+  --bg:#0A0A10;--bg2:#13131E;--card:#0E0E1A;
   --border:rgba(255,255,255,0.07);
-  --accent:#YOUR_COLOR; --accent2:#YOUR_COLOR2; --accent-rgb:R,G,B;
-  --text:#F0F0FF; --muted:rgba(200,200,220,0.65);
-  --radius:14px; --radius-lg:24px;
+  --accent:#FILL;--accent2:#FILL;--accent-rgb:R,G,B;
+  --text:#F0F0FF;--muted:rgba(220,220,240,0.60);
+  --font-d:'Display',sans-serif;--font-b:'Body',sans-serif;
+  --radius:16px;--radius-lg:28px;
+  --glow:0 0 40px rgba(var(--accent-rgb),.45);
+  --shadow:0 8px 40px rgba(0,0,0,.4);
 }
-[Override entire palette for light-theme subjects: wellness, blog, portfolio]
-
-/* Gradient text — wrap key headline word in this span */
-.gradient-text{background:linear-gradient(135deg,var(--accent),var(--accent2));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
-
-/* Glassmorphism card */
-.glass{background:rgba(255,255,255,0.04);backdrop-filter:blur(12px) saturate(180%);
-  border:1px solid var(--border);border-radius:var(--radius-lg);}
-
-/* Buttons */
-.btn-primary{display:inline-flex;align-items:center;gap:8px;padding:15px 36px;border-radius:50px;
-  background:var(--accent);color:#000;font-weight:700;text-decoration:none;
-  transition:transform .2s,box-shadow .2s;}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 0 32px rgba(var(--accent-rgb),.45);}
-.btn-ghost{display:inline-flex;align-items:center;gap:8px;padding:14px 34px;border-radius:50px;
-  border:2px solid var(--accent);color:var(--accent);text-decoration:none;font-weight:600;
-  transition:all .2s;}
+/* LIGHT THEME override: --bg:#FAFAFA;--text:#111118;--muted:rgba(20,20,40,.6);--card:#FFF;--border:rgba(0,0,0,.08); */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--text);font-family:var(--font-b);overflow-x:hidden;line-height:1.6;}
+img{max-width:100%;height:auto;display:block;}
+.gradient-text{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+.glass{background:rgba(255,255,255,0.04);backdrop-filter:blur(16px) saturate(180%);border:1px solid var(--border);border-radius:var(--radius-lg);}
+.btn{display:inline-flex;align-items:center;gap:10px;text-decoration:none;font-weight:700;border-radius:50px;transition:all .25s;cursor:pointer;}
+.btn-primary{background:var(--accent);color:#000;padding:16px 38px;border:none;}
+.btn-primary:hover{transform:translateY(-3px);box-shadow:var(--glow);}
+.btn-ghost{border:2px solid var(--accent);color:var(--accent);padding:14px 36px;background:transparent;}
 .btn-ghost:hover{background:var(--accent);color:#000;}
+.navbar{position:fixed;top:0;left:0;right:0;z-index:1000;height:68px;display:flex;align-items:center;justify-content:space-between;padding:0 5vw;backdrop-filter:blur(20px) saturate(200%);background:rgba(10,10,16,.82);border-bottom:1px solid var(--border);transition:box-shadow .3s;}
+.navbar.scrolled{box-shadow:0 4px 30px rgba(0,0,0,.5);}
+.nav-logo{font-family:var(--font-d);font-weight:900;font-size:1.4rem;color:var(--text);text-decoration:none;}
+.nav-links{display:flex;gap:2rem;list-style:none;}
+.nav-links a{color:var(--muted);text-decoration:none;transition:color .2s;font-weight:500;}
+.nav-links a:hover{color:var(--accent);}
+.hero{min-height:100vh;display:flex;align-items:center;position:relative;overflow:hidden;padding:100px 5vw 80px;}
+.hero-content{max-width:680px;position:relative;z-index:2;}
+.hero-title{font-family:var(--font-d);font-size:clamp(3rem,8vw,7rem);font-weight:900;line-height:1.0;letter-spacing:-0.04em;margin-bottom:1.5rem;color:#FFFFFF;}
+.hero-sub{font-size:clamp(1.1rem,2.5vw,1.35rem);color:rgba(255,255,255,.85);max-width:560px;line-height:1.7;margin-bottom:2.5rem;}
+.hero-cta{display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin-bottom:2rem;}
+section{padding:clamp(60px,10vw,120px) 5vw;}
+.container{max-width:1200px;margin:0 auto;}
+.section-label{font-size:.8rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);margin-bottom:1rem;}
+.section-title{font-family:var(--font-d);font-size:clamp(2rem,5vw,3.5rem);font-weight:800;margin-bottom:1.5rem;line-height:1.1;color:var(--text);}
+.section-sub{font-size:1.1rem;color:var(--muted);max-width:600px;line-height:1.7;margin-bottom:3rem;}
+.grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:2rem;}
+.card{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;transition:transform .3s,box-shadow .3s;}
+.card:hover{transform:translateY(-8px);box-shadow:var(--shadow);}
+.card-img{width:100%;height:220px;object-fit:cover;}
+.card-body{padding:1.5rem;}
+.card-icon{font-size:2.2rem;color:var(--accent);margin-bottom:1rem;}
+.card-title{font-weight:700;font-size:1.2rem;margin-bottom:.5rem;color:var(--text);}
+.card-text{color:var(--muted);line-height:1.6;}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:2rem;text-align:center;}
+.stat-number{font-family:var(--font-d);font-size:clamp(2.5rem,6vw,4rem);font-weight:900;color:var(--accent);}
+.stat-label{color:var(--muted);font-size:.95rem;margin-top:.5rem;}
+.testimonial-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2rem;}
+.testimonial-text{font-size:1.05rem;color:var(--text);line-height:1.7;font-style:italic;margin-bottom:1.5rem;}
+.testimonial-author{display:flex;align-items:center;gap:1rem;}
+.testimonial-avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;border:2px solid var(--accent);}
+.testimonial-name{font-weight:700;color:var(--text);}
+.testimonial-meta{color:var(--muted);font-size:.85rem;}
+footer{background:var(--bg2);border-top:1px solid var(--border);padding:clamp(50px,8vw,90px) 5vw 30px;}
+.footer-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:3rem;margin-bottom:3rem;}
+.footer-brand{font-family:var(--font-d);font-size:1.5rem;font-weight:900;color:var(--text);}
+.footer-tagline{color:var(--muted);margin:.75rem 0 1.5rem;}
+.footer-socials{display:flex;gap:.75rem;}
+.footer-socials a{width:40px;height:40px;border-radius:50%;background:var(--card);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted);text-decoration:none;transition:all .2s;}
+.footer-socials a:hover{border-color:var(--accent);color:var(--accent);}
+.footer-heading{font-weight:700;color:var(--text);margin-bottom:1.25rem;}
+.footer-links{list-style:none;display:flex;flex-direction:column;gap:.6rem;}
+.footer-links a{color:var(--muted);text-decoration:none;font-size:.9rem;transition:color .2s;}
+.footer-links a:hover{color:var(--accent);}
+.footer-bottom{border-top:1px solid var(--border);padding-top:1.5rem;text-align:center;color:var(--muted);font-size:.85rem;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:var(--bg2);}::-webkit-scrollbar-thumb{background:var(--accent);border-radius:3px;}
+@media(max-width:768px){.nav-links{display:none;}.footer-grid{grid-template-columns:1fr;}.hero-cta{flex-direction:column;}}
+</style>
 
-NAVBAR (always fixed)
-position:fixed;top:0;width:100%;z-index:1000;height:66px;
-backdrop-filter:blur(18px) saturate(200%);background:rgba(10,10,20,0.82);
-border-bottom:1px solid var(--border);
-JS: document.addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>80));
-Alpine mobile: x-data="{open:false}" on <nav>
+COLOR + FONT per subject:
+Sports/Fitness: --bg:#080808;--accent:#FAFF00;--accent2:#FF6B00;--accent-rgb:250,255,0; font: Bebas+Neue + Inter
+Music/Night:    --bg:#060410;--accent:#9B5DE5;--accent2:#00F5D4;--accent-rgb:155,93,229; font: Space+Grotesk + Lato
+Tech/SaaS:      --bg:#080A14;--accent:#4361EE;--accent2:#7209B7;--accent-rgb:67,97,238; font: Space+Grotesk + Lato
+Food/Rest:      --bg:#0C0600;--accent:#F4A261;--accent2:#E76F51;--accent-rgb:244,162,97; font: Playfair+Display + Lato
+Art/Creative:   --bg:#050505;--accent:#FF6B35;--accent2:#FF006E;--accent-rgb:255,107,53; font: DM+Serif+Display + DM+Sans
+Luxury:         --bg:#0A0A08;--accent:#C9A96E;--accent2:#E8C99E;--accent-rgb:201,169,110; font: Cormorant+Garamond + Montserrat
+Nature/Wellness:--bg:#FAF7F0;--text:#1A1A12;--muted:rgba(30,30,20,.65);--card:#FFF;--border:rgba(0,0,0,.08);--accent:#5C8A4A;--accent2:#8DB87A;--accent-rgb:92,138,74; font: Plus+Jakarta+Sans
+Personal/Blog:  --bg:#FAFAFA;--text:#111118;--muted:rgba(20,20,40,.6);--card:#FFF;--border:rgba(0,0,0,.08);--accent:#2D6AFF;--accent2:#5B8AFF;--accent-rgb:45,106,255; font: Playfair+Display + Inter
+Gym:            --bg:#0A0506;--accent:#FF2D55;--accent2:#FF6B35;--accent-rgb:255,45,85; font: Bebas+Neue + Inter
 
-HERO (always 100vh, always stunning)
-Headline: font-size:clamp(3.2rem,8vw,7.5rem);font-weight:900;letter-spacing:-0.04em;line-height:1.0
-Subheadline: max-width:580px;font-size:clamp(1.1rem,2.5vw,1.4rem);color:var(--muted);line-height:1.7
-CTA row: btn-primary + btn-ghost + trust line (star rating + user count)
-GSAP entrance applied via hero-title, hero-sub, hero-cta classes.
+SWIPER TESTIMONIALS:
+<div class="swiper"><div class="swiper-wrapper"><div class="swiper-slide"><div class="testimonial-card"><p class="testimonial-text">"Real quote."</p><div class="testimonial-author"><img src="CARD_IMG_3" class="testimonial-avatar" alt=""><div><div class="testimonial-name">Full Name</div><div class="testimonial-meta">City — specific result</div></div></div></div></div></div><div class="swiper-pagination"></div></div>
+<script>new Swiper('.swiper',{loop:true,autoplay:{delay:4500,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true},spaceBetween:24});</script>
 
-CARDS & SECTIONS
-Feature cards: glass + large Font Awesome icon (var(--accent)) + title + description
-Image cards: provided image, hover zoom (transform:scale(1.06);transition:.4s), gradient overlay, title
-Stats: <span data-count="12000" data-suf="+">0</span> — animated by GSAP counter
-Add class="reveal" to headings, class="stagger" to card grids for auto-animation.
-
-SWIPER TESTIMONIALS (always carousel, never static)
-<div class="swiper testimonials"><div class="swiper-wrapper">[slides with photo, quote, name, result]
-</div><div class="swiper-pagination"></div></div>
-<script>new Swiper('.testimonials',{loop:true,autoplay:{delay:4500,disableOnInteraction:false},
-  pagination:{el:'.swiper-pagination',clickable:true},spaceBetween:24});</script>
-
-ALPINE FAQ
-<div x-data="{a:null}"><div><button @click="a=a===1?null:1">Q?<i class="fas fa-chevron-down"></i></button>
-<div x-show="a===1" x-transition><p>Answer.</p></div></div></div>
-
-PRICING CARDS (only when prices given)
-3-column grid; middle card accent border + "Most Popular" badge; Gumroad button.
-<script src="https://gumroad.com/js/gumroad.js"></script>
-<a class="gumroad-button" href="https://[store].gumroad.com/l/[id]">Enroll $XX</a>
-
-FOOTER
-Dark bg; grid: brand+socials | nav links | newsletter; FA brand icons; copyright line.
-
-COLOR BY SUBJECT
-Sports/Fitness:   #080808 bg, electric yellow #FAFF00 or neon green #39FF14 accent
-Music/Nightlife:  #06060F bg, purple #9B5DE5 or cyan #00F5D4 accent
-Nature/Wellness:  #FAF7F0 bg (LIGHT), terracotta #C1541A accent, dark text (full light theme)
-Tech/SaaS:        #080A14 bg, blue #4361EE to violet #7209B7 gradient accent
-Food/Restaurant:  #0D0800 bg, amber #F4A261 accent, cream text
-Art/Creative:     #050505 bg, orange #FF6B35 or crimson #DC143C accent
-Luxury/Fashion:   #0A0A08 or #FAF8F4 bg, gold #C9A96E accent, Cormorant Garamond
-Personal/Blog:    #FAFAFA bg (LIGHT), single dark accent, clean minimal
-
-FONT PAIRING (Google Fonts — pick the right one for the subject)
-Sports:   Bebas Neue + Inter
-Tech:     Space Grotesk:wght@400;500;700 + Lato:wght@300;400;700
-Luxury:   Cormorant+Garamond:wght@400;600 + Montserrat:wght@400;500
-Creative: DM+Serif+Display + DM+Sans:wght@400;500;600
-Warm:     Plus+Jakarta+Sans:wght@400;500;600;700
-Classic:  Playfair+Display:wght@700;800 + Inter:wght@400;500;600
+ALPINE FAQ:
+<div x-data="{a:null}"><div><button @click="a=a===1?null:1" style="background:var(--card);color:var(--text);border:1px solid var(--border);width:100%;padding:1.2rem 1.5rem;text-align:left;border-radius:var(--radius);cursor:pointer;display:flex;justify-content:space-between;">Question? <i class="fas fa-chevron-down"></i></button><div x-show="a===1" x-transition style="padding:1rem 1.5rem;color:var(--muted);">Answer.</div></div></div>
 
 OUTPUT: Only the HTML. Start with <!DOCTYPE html>.
 """
@@ -277,30 +308,32 @@ def _extract_description(utterance: str) -> str:
     ).strip()
     return cleaned if len(cleaned) > 2 else ""
 
+def _inject_images(html: str, images: dict) -> str:
+    """Replace HERO_IMG / CARD_IMG_N tokens with real Pollinations image paths."""
+    mapping = {
+        "HERO_IMG":   images.get("hero.jpg",   ""),
+        "CARD_IMG_1": images.get("photo1.jpg", ""),
+        "CARD_IMG_2": images.get("photo2.jpg", ""),
+        "CARD_IMG_3": images.get("photo3.jpg", ""),
+    }
+    for token, path in mapping.items():
+        if path:
+            html = html.replace(token, path)
+    return html
+
+
 def _build_user_prompt(description: str, images: dict) -> str:
-    """
-    Build the user message. When real images are available, inject their paths
-    so the LLM uses them instead of loremflickr or placeholders.
-    Also injects pricing tiers when relevant.
-    """
+    """Build the LLM user message with image tokens and optional pricing tiers."""
     lines = [f"Build a complete, production-quality website for: {description}\n"]
 
-    # Inject real image paths when available
-    if images:
-        img_list = "\n".join(f"  - {name}: {path}" for name, path in images.items())
-        lines.append(
-            "IMPORTANT — Use ONLY these real AI-generated images (not loremflickr):\n"
-            + img_list + "\n"
-            "hero.jpg = hero background | photo1.jpg, photo2.jpg, photo3.jpg = section/card images\n"
-            "Reference them with relative paths exactly as shown above.\n"
-        )
-    else:
-        kw = description.split()[0].lower() if description.split() else "subject"
-        lines.append(
-            f"IMAGES: loremflickr.com — primary keyword '{kw}'. "
-            f"Example: https://loremflickr.com/1200/800/{kw},style?lock=N "
-            "(unique N 1-99 per image)\n"
-        )
+    # Always use placeholder tokens — they get replaced by _inject_images() after generation
+    lines.append(
+        "IMAGES — use ONLY these exact token strings (do NOT use loremflickr):\n"
+        "  Hero section background: HERO_IMG\n"
+        "  Card / section images:   CARD_IMG_1   CARD_IMG_2   CARD_IMG_3\n"
+        "Hero CSS: background:linear-gradient(rgba(0,0,0,.62),rgba(0,0,0,.32)),url(HERO_IMG) center/cover no-repeat fixed;\n"
+        "Card img: <img src=\"CARD_IMG_1\" alt=\"...\" loading=\"lazy\">\n"
+    )
 
     # Detect pricing tiers
     prices = re.findall(r"\$?\s*(\d+(?:\.\d{1,2})?)\s*(?:dollars?|usd|\$)?",
@@ -366,28 +399,27 @@ def _find_web_project(text: str) -> Path | None:
 
 def _run_generation(description: str, out_folder: Path) -> str:
     """
-    Core generation pipeline used by both generate() and generate_for_project():
-    1. Start image generation and HTML generation concurrently.
-    2. Inject real image paths into HTML prompt.
-    3. Save and open.
-    Returns the raw HTML string or an 'ERROR:' prefixed string.
+    Concurrent pipeline — ONE LLM call, images injected after:
+    - Thread A: generate HTML using HERO_IMG/CARD_IMG_N placeholder tokens
+    - Thread B: generate 4 real FLUX images concurrently
+    After both finish, replace tokens with real paths (instant string replace).
     """
     import concurrent.futures
 
     img_dir = out_folder / "images"
 
-    # Phase 1 — run image generation and (a quick design spec) concurrently
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        html_future = ex.submit(_generate_html, description, {})
         img_future  = ex.submit(_generate_site_images, description, img_dir)
-        html_future = ex.submit(_generate_html, description, {})  # first pass, no images yet
-
-        images = img_future.result()   # {filename: relative_path}
         html   = html_future.result()
+        images = img_future.result()
 
-    # If we got images AND html — re-generate HTML with image paths injected
-    if images and not html.startswith("ERROR:"):
-        print(f"[G.I.L. WEBGEN] Re-generating HTML with {len(images)} real images...")
-        html = _generate_html(description, images)
+    if html.startswith("ERROR:"):
+        return html
+
+    if images:
+        html = _inject_images(html, images)
+        print(f"[G.I.L. WEBGEN] Injected {len(images)} real images")
 
     return html
 
