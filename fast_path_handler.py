@@ -699,6 +699,61 @@ def _subject_autodetect(text: str, lower: str, eng) -> bool:
     return False   # always pass through
 
 
+# ── Image generation ──────────────────────────────────────────────────────────
+
+_IMAGE_VERBS   = {"generate", "create", "make", "draw", "paint", "illustrate", "design"}
+_IMAGE_NOUNS   = {"image", "photo", "picture", "illustration", "artwork",
+                  "drawing", "painting", "poster", "wallpaper", "logo"}
+_IMAGE_EXCLUDE = {"website", "webpage", "web", "site", "app"}
+
+def _image_gen(text: str, lower: str, eng) -> bool:
+    """Detect image generation requests and produce with Pollinations/FLUX."""
+    words = set(lower.split())
+    has_verb = bool(words & _IMAGE_VERBS)
+    has_noun = bool(words & _IMAGE_NOUNS)
+    if not (has_verb and has_noun):
+        return False
+    # Don't steal website-generation requests
+    if any(w in lower for w in _IMAGE_EXCLUDE):
+        return False
+    log.debug("fast-path: image generation")
+
+    # Strip the command prefix to get the actual description
+    import re as _re
+    desc = _re.sub(
+        r"^(please\s+)?(generate|create|make|draw|paint|illustrate|design)\s+"
+        r"(me\s+)?(an?\s+)?(image|photo|picture|illustration|artwork|drawing|painting|poster|wallpaper|logo)"
+        r"(\s+of)?\s*",
+        "", lower, flags=_re.IGNORECASE,
+    ).strip() or text
+
+    def _run(description=desc):
+        from ears import unmute
+        ack = "Generating your image — about 15 seconds."
+        eng.window.set_state("speaking", said=ack)
+        eng._speak(ack)
+
+        try:
+            from image_gen import generate, open_image, infer_dimensions
+            w, h = infer_dimensions(description)
+            path = generate(description, width=w, height=h)
+            open_image(path)
+            result = f"Done. Saved as {path.name}."
+        except Exception:
+            log.error("image generation failed", exc_info=True)
+            result = "Image generation failed — check your internet connection."
+
+        unmute()
+        eng.window.set_state("speaking", said=result)
+        eng._speak(result)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = result
+        eng.window.set_state("listening")
+
+    threading.Thread(target=_run, daemon=True, name="GIL-ImageGen").start()
+    return True
+
+
 # ── Master entry point ────────────────────────────────────────────────────────
 
 _HANDLERS = [
@@ -711,6 +766,7 @@ _HANDLERS = [
     _camera_open,
     _camera_close,
     _vision,
+    _image_gen,      # before webgen so "create an image" doesn't hit website path
     _webgen,
     _fast_url,
     _mode,
