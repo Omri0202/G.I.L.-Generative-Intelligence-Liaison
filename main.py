@@ -167,11 +167,7 @@ def main() -> None:
         app = ctx.get("app", "")
         proactive.set_active_app(app)
         session_manager.record_app_switch()
-        if goal_tracker.should_ask_about_context(app) and app:
-            goal_tracker.mark_asked(app)
-            file_ = ctx.get("file", "")
-            q = f"You opened {app}" + (f" — {file_}" if file_ else "") + ". What are we working on?"
-            window.after(0, lambda m=q: window.show_proactive_suggestion(m))
+        # App-switch popups removed — too noisy
 
     context_engine.on_context_changed(_on_ctx_change)
 
