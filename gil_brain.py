@@ -44,6 +44,11 @@ GROQ_KEYS = [k for k in [
 ] if k]
 GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions"
 
+# Persistent session — keeps TCP connections alive between queries,
+# significantly reducing latency on back-to-back requests.
+_session = requests.Session()
+_session.headers.update({"Content-Type": "application/json"})
+
 # Fallback models tried in order when all keys are 429'd on the primary model.
 # Each model has its own independent rate-limit quota on Groq.
 _FALLBACK_MODELS = ["gemma2-9b-it", "llama-3.3-70b-versatile"]
@@ -457,66 +462,76 @@ class GILBrain:
         }
         def _try_groq(key: str):
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-            return requests.post(GROQ_URL, json=payload, headers=hdrs, timeout=15)
+            return _session.post(GROQ_URL, json=payload, headers=hdrs, timeout=15)
 
         if not GROQ_KEYS:
             self.history.pop()
-            return {"speech": "No Groq API key is configured â€” check your .env file.", "action": None, "target": None, "report": None}
+            return {"speech": "No Groq API key is configured — check your .env file.",
+                    "action": None, "target": None, "report": None}
 
+        # _response_saved prevents double-pop when retrying on timeout
+        _response_saved = False
+        raw = ""
         try:
             with _groq_key_lock:
                 _cur_idx = _groq_key_index
             resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
 
             if resp.status_code == 429:
-                # Rotate to next key
                 with _groq_key_lock:
                     _groq_key_index += 1
                     _cur_idx = _groq_key_index
-                next_key = GROQ_KEYS[_cur_idx % len(GROQ_KEYS)]
                 log.warning("Groq key rate-limited, rotating")
-                resp = _try_groq(next_key)
+                resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
 
             if resp.status_code == 429:
-                # Both keys rate-limited on primary model â€” try fallback models
-                print(f"[G.I.L. BRAIN] All keys rate-limited on {GROQ_MODEL}. Trying fallback models...")
+                log.warning("All Groq keys rate-limited — trying fallback models")
                 fallback_resp = None
                 for fb_model in _FALLBACK_MODELS:
                     for key in GROQ_KEYS:
                         fb_payload = {**payload, "model": fb_model}
-                        hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                        hdrs = {"Authorization": f"Bearer {key}",
+                                "Content-Type": "application/json"}
                         try:
-                            r = requests.post(GROQ_URL, json=fb_payload, headers=hdrs, timeout=15)
+                            r = _session.post(GROQ_URL, json=fb_payload,
+                                              headers=hdrs, timeout=15)
                             if r.status_code != 429:
                                 fallback_resp = r
-                                log.info("Fallback succeeded on %s", fb_model)
+                                log.info("Groq fallback succeeded on %s", fb_model)
                                 break
                         except Exception:
                             continue
                     if fallback_resp is not None:
                         break
                 if fallback_resp is None:
-                    self.history.pop()
                     log.warning("All Groq models rate-limited")
-                    return {"speech": "I'm rate-limited across all models right now â€” give me 30 seconds and ask again.", "action": None, "target": None, "report": None}
+                    return {"speech": "Rate-limited — give me 30 seconds and ask again.",
+                            "action": None, "target": None, "report": None}
                 resp = fallback_resp
 
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
+
         except requests.exceptions.ConnectionError:
-            self.history.pop()
             log.error("No internet connection")
             return _err("No connection. Check your internet.")
         except requests.exceptions.Timeout:
-            self.history.pop()
             log.warning("Groq timed out — retrying in 3 s")
             time.sleep(3)
+            if self.history and self.history[-1].get("role") == "user":
+                self.history.pop()
+            _response_saved = True   # prevent double-pop in finally
             return self.query(user_input, project_context=project_context,
                               camera_state=camera_state, _retry=_retry + 1)
         except Exception as exc:
-            self.history.pop()
             log.error("Brain error: %s", exc, exc_info=True)
-            return {"speech": "Groq is unavailable right now. Try again in a moment.", "action": None, "target": None, "report": None}
+            return {"speech": "Groq is unavailable right now. Try again in a moment.",
+                    "action": None, "target": None, "report": None}
+        finally:
+            # Remove orphaned user message if no response was obtained
+            if not _response_saved and not raw:
+                if self.history and self.history[-1].get("role") == "user":
+                    self.history.pop()
 
         log.debug("raw response: %s", raw[:200])
         parsed = _parse_json(raw)

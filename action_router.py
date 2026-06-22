@@ -10,6 +10,7 @@ has taken ownership of set_state("listening") so the caller should return.
 
 import threading
 from logger import get as _get_log
+from constants import WEBGEN_WORDS
 
 log = _get_log("router")
 
@@ -28,11 +29,11 @@ def dispatch(
     Returns True  → an async handler owns the state; caller must return.
     Returns False → caller does window.set_state("listening") as normal.
     """
-    speak = engine._speak
-    win   = engine.window
-    ea    = engine._execute_action
-    lsp   = engine._last_spoke_at
-    lsd   = engine._last_said
+    speak        = engine._speak
+    window       = engine.window
+    run_action   = engine._execute_action
+    last_spoke_at = engine._last_spoke_at
+    last_said    = engine._last_said
 
     from action_handlers import (
         handle_save_credential, handle_list_credentials, handle_delete_credential,
@@ -42,7 +43,7 @@ def dispatch(
 
     # ── Credentials ───────────────────────────────────────────────────────────
     if action == "save_credential":
-        handle_save_credential(target, speak, win)
+        handle_save_credential(target, speak, window)
 
     elif action == "list_credentials":
         handle_list_credentials(speak)
@@ -52,25 +53,25 @@ def dispatch(
 
     # ── Settings / UI ─────────────────────────────────────────────────────────
     elif action == "show_settings":
-        win.after(0, win.open_settings)
+        window.after(0, window.open_settings)
 
     # ── Tasks ─────────────────────────────────────────────────────────────────
     elif action == "create_project":
-        handle_create_project(target, win)
+        handle_create_project(target, window)
 
     elif action == "add_task":
-        handle_add_task(target, win)
+        handle_add_task(target, window)
 
     elif action == "complete_task":
-        handle_complete_task(target, win)
+        handle_complete_task(target, window)
 
     elif action == "list_tasks":
-        win.refresh_tasks()
-        win.after(0, win.show_window)
+        window.refresh_tasks()
+        window.after(0, window.show_window)
 
     # ── System actions ────────────────────────────────────────────────────────
     elif action in ("system_vitals", "sign_in", "take_screenshot"):
-        ea(action, target)
+        run_action(action, target)
 
     # ── 3-D ───────────────────────────────────────────────────────────────────
     elif action == "create_3d":
@@ -92,118 +93,118 @@ def dispatch(
                     "minimize_all", "maximize_window", "open_file",
                     "read_file", "list_directory", "find_file",
                     "set_clipboard", "get_clipboard"):
-        result = ea(action, target)
+        result = run_action(action, target)
         if result and action in ("read_file", "list_directory", "find_file", "get_clipboard"):
             log.info("result: %s", result[:200])
 
     # ── TV / mode / PC ────────────────────────────────────────────────────────
     elif action == "tv":
-        threading.Thread(target=lambda: ea("tv", target),
+        threading.Thread(target=lambda: run_action("tv", target),
                          daemon=True, name="GIL-TV").start()
 
     elif action == "set_mode":
-        ea("set_mode", target)
+        run_action("set_mode", target)
 
     elif action in ("pc", "pc_sleep", "pc_lock", "pc_restart", "pc_shutdown"):
-        threading.Thread(target=lambda a=action: ea(a, target),
+        threading.Thread(target=lambda a=action: run_action(a, target),
                          daemon=True, name="GIL-PC").start()
 
     elif action == "pc_volume":
-        threading.Thread(target=lambda: ea("pc_volume", target),
+        threading.Thread(target=lambda: run_action("pc_volume", target),
                          daemon=True, name="GIL-PCVol").start()
 
     # ── Async fetchers (return True — thread handles set_state) ───────────────
     elif action == "weather":
         def _weather():
             from ears import unmute
-            result = ea("weather", target)
+            result = run_action("weather", target)
             unmute()
             if result:
-                win.set_state("speaking", said=result); speak(result)
-                lsp[0] = __import__("time").time()
-                lsd[0] = result
-            win.set_state("listening")
+                window.set_state("speaking", said=result); speak(result)
+                last_spoke_at[0] = __import__("time").time()
+                last_said[0] = result
+            window.set_state("listening")
         threading.Thread(target=_weather, daemon=True, name="GIL-Weather").start()
         return True
 
     elif action == "reminder":
-        result = ea("reminder", target)
+        result = run_action("reminder", target)
         if result and result != speech:
-            win.set_state("speaking", said=result); speak(result)
-            lsp[0] = __import__("time").time()
-            lsd[0] = result
+            window.set_state("speaking", said=result); speak(result)
+            last_spoke_at[0] = __import__("time").time()
+            last_said[0] = result
 
     elif action == "list_reminders":
         def _reminders():
             from ears import unmute
-            result = ea("list_reminders", "")
+            result = run_action("list_reminders", "")
             unmute()
             if result:
-                win.set_state("speaking", said=result); speak(result)
-                lsp[0] = __import__("time").time()
-                lsd[0] = result
-            win.set_state("listening")
+                window.set_state("speaking", said=result); speak(result)
+                last_spoke_at[0] = __import__("time").time()
+                last_said[0] = result
+            window.set_state("listening")
         threading.Thread(target=_reminders, daemon=True, name="GIL-Reminders").start()
         return True
 
     elif action == "note":
-        ea("note", target)
+        run_action("note", target)
 
     elif action == "list_notes":
-        result = ea("list_notes", "")
+        result = run_action("list_notes", "")
         if result:
-            win.set_state("speaking", said=result); speak(result)
-            lsp[0] = __import__("time").time()
-            lsd[0] = result
+            window.set_state("speaking", said=result); speak(result)
+            last_spoke_at[0] = __import__("time").time()
+            last_said[0] = result
 
     elif action == "clip_history":
-        result = ea("clip_history", "")
+        result = run_action("clip_history", "")
         if result:
-            win.set_state("speaking", said=result); speak(result)
-            lsp[0] = __import__("time").time()
-            lsd[0] = result
+            window.set_state("speaking", said=result); speak(result)
+            last_spoke_at[0] = __import__("time").time()
+            last_said[0] = result
 
     elif action == "spotify":
         def _spotify():
-            result = ea("spotify", target)
+            result = run_action("spotify", target)
             if result and result != speech and any(
                 w in result.lower() for w in
                 ("couldn't", "failed", "not", "error", "isn't", "no ", "check")
             ):
-                win.set_state("speaking", said=result); speak(result)
-                lsp[0] = __import__("time").time()
-                lsd[0] = result
-                win.set_state("listening")
+                window.set_state("speaking", said=result); speak(result)
+                last_spoke_at[0] = __import__("time").time()
+                last_said[0] = result
+                window.set_state("listening")
         threading.Thread(target=_spotify, daemon=True, name="GIL-Spotify").start()
 
     elif action == "briefing":
         def _briefing():
             from ears import unmute
-            result = ea("briefing", target)
+            result = run_action("briefing", target)
             unmute()
             if result:
-                win.set_state("speaking", said=result); speak(result)
-                lsp[0] = __import__("time").time()
-                lsd[0] = result
-            win.set_state("listening")
+                window.set_state("speaking", said=result); speak(result)
+                last_spoke_at[0] = __import__("time").time()
+                last_said[0] = result
+            window.set_state("listening")
         threading.Thread(target=_briefing, daemon=True, name="GIL-Briefing").start()
         return True
 
     elif action in ("calendar", "add_event", "news", "my_location"):
         def _fetch(act=action, tgt=target):
             from ears import unmute
-            result = ea(act, tgt)
+            result = run_action(act, tgt)
             unmute()
             if result:
-                win.set_state("speaking", said=result); speak(result)
-                lsp[0] = __import__("time").time()
-                lsd[0] = result
-            win.set_state("listening")
+                window.set_state("speaking", said=result); speak(result)
+                last_spoke_at[0] = __import__("time").time()
+                last_said[0] = result
+            window.set_state("listening")
         threading.Thread(target=_fetch, daemon=True, name=f"GIL-{action}").start()
         return True
 
     elif action in ("nearby", "directions", "food_delivery", "open_article"):
-        threading.Thread(target=lambda: ea(action, target),
+        threading.Thread(target=lambda: run_action(action, target),
                          daemon=True, name=f"GIL-{action}").start()
 
     # ── Camera (open) ─────────────────────────────────────────────────────────
@@ -228,18 +229,18 @@ def dispatch(
                     if not c.bring_to_front():
                         unmute()
                         fail = "Camera didn't open — make sure nothing else is using it."
-                        win.set_state("speaking", said=fail); speak(fail)
-                        lsp[0] = __import__("time").time() - 1.5
-                        lsd[0] = fail
-                        win.set_state("listening")
+                        window.set_state("speaking", said=fail); speak(fail)
+                        last_spoke_at[0] = __import__("time").time() - 1.5
+                        last_said[0] = fail
+                        window.set_state("listening")
                 except Exception:
                     unmute()
                     fail = "Camera failed to start. Make sure it's connected."
                     log.error("camera open failed", exc_info=True)
-                    win.set_state("speaking", said=fail); speak(fail)
-                    lsp[0] = __import__("time").time() - 1.5
-                    lsd[0] = fail
-                    win.set_state("listening")
+                    window.set_state("speaking", said=fail); speak(fail)
+                    last_spoke_at[0] = __import__("time").time() - 1.5
+                    last_said[0] = fail
+                    window.set_state("listening")
             threading.Thread(target=_open, daemon=True, name="GIL-CamOpen").start()
 
     elif action == "close_camera":
@@ -257,24 +258,24 @@ def dispatch(
             from ears import unmute
             import time as _t
             ack = "On it — give me about 30 seconds."
-            win.set_state("speaking", said=ack)
-            lsp[0] = _t.time() + 120
+            window.set_state("speaking", said=ack)
+            last_spoke_at[0] = _t.time() + 120
             speak(ack)
-            lsp[0] = _t.time()
-            lsd[0] = ack
-            win.show_webgen_progress()
+            last_spoke_at[0] = _t.time()
+            last_said[0] = ack
+            window.show_webgen_progress()
             try:
                 from webgen import generate as _wg, generate_for_project as _wgp, _find_web_project
                 proj   = _find_web_project(utterance)
                 result = _wgp(proj) if proj else _wg(desc)
             except Exception as exc:
                 result = f"Website generation failed — {exc.__class__.__name__}."
-                lsp[0] = _t.time()
-            win.close_webgen_progress(); unmute()
-            win.set_state("speaking", said=result); speak(result)
-            lsp[0] = _t.time() - 1.5
-            lsd[0] = result
-            win.set_state("listening")
+                last_spoke_at[0] = _t.time()
+            window.close_webgen_progress(); unmute()
+            window.set_state("speaking", said=result); speak(result)
+            last_spoke_at[0] = _t.time() - 1.5
+            last_said[0] = result
+            window.set_state("listening")
         threading.Thread(target=_webgen, daemon=True, name="GIL-WebGen").start()
         return True
 
@@ -285,19 +286,14 @@ def dispatch(
             result = look(question=q)
             unmute()
             if result and result != speech:
-                win.set_state("speaking", said=result); speak(result)
-                lsp[0] = __import__("time").time() - 1.5
-                lsd[0] = result
-            win.set_state("listening")
+                window.set_state("speaking", said=result); speak(result)
+                last_spoke_at[0] = __import__("time").time() - 1.5
+                last_said[0] = result
+            window.set_state("listening")
         threading.Thread(target=_look, daemon=True, name="GIL-Look").start()
         return True
 
     # ── Extra actions (multi-task brain response) ─────────────────────────────
-    WEBGEN_WORDS = {
-        "website", "web site", "webpage", "web page", "landing page", "landing",
-        "web app", "web application", "html", "frontend", "front-end", "site",
-        "homepage", "home page", "front end",
-    }
     for ea_item in extra_actions:
         ea_action = ea_item.get("action")
         ea_target = ea_item.get("target") or ""

@@ -65,11 +65,7 @@ class ConversationEngine:
 
     ATTENTION_SECS  = 45.0
     _INSTANT_ACTIONS = {"open_url", "open_app", "web_search", "prompt_project"}
-    _WEBGEN_WORDS   = {
-        "website", "web site", "webpage", "web page", "landing page", "landing",
-        "web app", "web application", "html", "frontend", "front-end", "site",
-        "homepage", "home page", "front end",
-    }
+    _WEBGEN_WORDS   = __import__("constants").WEBGEN_WORDS
 
     def __init__(self, username: str, window):
         self.username = username

@@ -93,10 +93,9 @@ def collect_datas() -> list[tuple[str, str]]:
     if config.exists():
         datas.append((str(config), "data"))
 
-    # Default user profile template
-    profile = DATA / "user_profile.json"
-    if profile.exists():
-        datas.append((str(profile), "data"))
+    # user_profile.json is intentionally NOT bundled — it contains personal
+    # information (name, habits, email patterns) and is generated fresh by the
+    # setup wizard on each user's machine. Bundling it would leak your data.
 
     # CustomTkinter — needs its theme/image files
     try:
