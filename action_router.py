@@ -15,6 +15,76 @@ from constants import WEBGEN_WORDS
 log = _get_log("router")
 
 
+def _run_dev_action(action: str, target: str) -> str:
+    """Dispatch a developer tool action and return a speech-ready result."""
+    try:
+        if action == "git_status":
+            from dev_git import status; return status()
+        if action == "git_commit":
+            from dev_git import commit; return commit(target)
+        if action == "git_push":
+            from dev_git import push; return push(target)
+        if action == "git_pull":
+            from dev_git import pull; return pull()
+        if action == "git_log":
+            from dev_git import log_recent; return log_recent()
+        if action == "git_diff":
+            from dev_git import diff_stat; return diff_stat(target)
+        if action == "git_branch_create":
+            from dev_git import branch_create; return branch_create(target)
+        if action == "git_branch_switch":
+            from dev_git import branch_switch; return branch_switch(target)
+        if action == "git_branch_list":
+            from dev_git import branch_list; return branch_list()
+        if action == "git_stash":
+            if "pop" in target.lower():
+                from dev_git import stash_pop; return stash_pop()
+            from dev_git import stash_save; return stash_save()
+        if action == "run_command":
+            from dev_runner import run, to_speech
+            return to_speech(run(target))
+        if action == "run_tests":
+            from dev_runner import run_tests; return run_tests()
+        if action == "code_search":
+            from dev_search import search; return search(target)
+        if action == "find_definition":
+            from dev_search import find_definition; return find_definition(target)
+        if action == "find_todos":
+            from dev_search import find_todos; return find_todos()
+        if action == "project_structure":
+            from dev_search import project_structure; return project_structure()
+        if action == "deps_outdated":
+            from dev_deps import check_outdated; return check_outdated()
+        if action == "deps_install":
+            from dev_deps import install; return install(target)
+        if action == "docker_ps":
+            from dev_docker import containers; return containers()
+        if action == "docker_start":
+            from dev_docker import start; return start(target)
+        if action == "docker_stop":
+            from dev_docker import stop; return stop(target)
+        if action == "docker_logs":
+            from dev_docker import logs; return logs(target)
+        if action == "docker_compose_up":
+            from dev_docker import compose_up; return compose_up()
+        if action == "docker_compose_down":
+            from dev_docker import compose_down; return compose_down()
+        if action == "github_prs":
+            from dev_github import my_prs; return my_prs()
+        if action == "github_issues":
+            from dev_github import repo_issues
+            parts = (target or "").split("/")
+            return repo_issues(*parts[:2]) if len(parts) >= 2 else repo_issues()
+        if action == "github_ci":
+            from dev_github import ci_status
+            parts = (target or "").split("/")
+            return ci_status(*parts[:2]) if len(parts) >= 2 else ci_status()
+        return f"Unknown dev action: {action}"
+    except Exception as exc:
+        log.error("dev action %s failed: %s", action, exc, exc_info=True)
+        return f"Developer tool error: {exc}"
+
+
 def dispatch(
     action: str,
     target: str,
@@ -291,6 +361,29 @@ def dispatch(
                 last_said[0] = result
             window.set_state("listening")
         threading.Thread(target=_look, daemon=True, name="GIL-Look").start()
+        return True
+
+    # ── Developer tool actions ────────────────────────────────────────────────
+    elif action in (
+        "git_status","git_commit","git_push","git_pull","git_log","git_diff",
+        "git_branch_create","git_branch_switch","git_branch_list",
+        "git_stash","run_command","run_tests","code_search","find_definition",
+        "find_todos","project_structure","deps_outdated","deps_install",
+        "docker_ps","docker_start","docker_stop","docker_logs",
+        "docker_compose_up","docker_compose_down",
+        "github_prs","github_issues","github_ci",
+    ):
+        def _dev(act=action, tgt=target):
+            from ears import unmute
+            result = _run_dev_action(act, tgt)
+            unmute()
+            if result:
+                window.set_state("speaking", said=result)
+                speak(result)
+                last_spoke_at[0] = __import__("time").time() - 1.5
+                last_said[0]     = result
+            window.set_state("listening")
+        threading.Thread(target=_dev, daemon=True, name=f"GIL-Dev-{action}").start()
         return True
 
     # ── Extra actions (multi-task brain response) ─────────────────────────────

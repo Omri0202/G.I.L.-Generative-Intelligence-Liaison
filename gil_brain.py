@@ -178,6 +178,18 @@ news â†’ topic or blank | open_article â†’ index number (0-based)
 calendar â†’ today|tomorrow|week | add_event â†’ "title | YYYY-MM-DD HH:MM | duration_minutes"
 look â†’ question or blank | open_camera â†’ null | close_camera â†’ null
 build_website â†’ detailed description of the website to build
+generate_image -> detailed image description
+
+DEV TOOLS (coding/development requests only):
+git_status -> null | git_commit -> commit message | git_push -> null
+git_pull -> null | git_log -> null | git_diff -> null or file path
+git_branch_create -> name | git_branch_switch -> name | git_branch_list -> null
+git_stash -> save or pop | run_command -> shell command | run_tests -> null
+code_search -> query | find_definition -> symbol | find_todos -> null
+project_structure -> null | deps_outdated -> null | deps_install -> package name
+docker_ps -> null | docker_start -> name | docker_stop -> name
+docker_logs -> name | docker_compose_up -> null | docker_compose_down -> null
+github_prs -> null | github_issues -> null or owner/repo | github_ci -> owner/repo
 
 â”â” EXAMPLES â”â”
 User: open vs code

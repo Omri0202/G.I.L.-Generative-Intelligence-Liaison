@@ -754,6 +754,106 @@ def _image_gen(text: str, lower: str, eng) -> bool:
     return True
 
 
+# ── Developer fast-paths ──────────────────────────────────────────────────────
+
+_GIT_STATUS_TRIGGERS  = {"git status","what changed","what's changed","any changes",
+                          "uncommitted changes","working tree","repo status"}
+_GIT_PUSH_TRIGGERS    = {"git push","push to origin","push it","push the code"}
+_GIT_PULL_TRIGGERS    = {"git pull","pull latest","pull from origin","update the repo"}
+_RUN_TEST_TRIGGERS    = {"run tests","run the tests","run test","test it","npm test",
+                          "pytest","run unit tests","run specs"}
+_DOCKER_PS_TRIGGERS   = {"docker ps","containers running","list containers",
+                          "what containers","docker status"}
+
+def _dev_git_status(text: str, lower: str, eng) -> bool:
+    if not any(t in lower for t in _GIT_STATUS_TRIGGERS):
+        return False
+    log.debug("fast-path: git status")
+    def _run():
+        from ears import unmute
+        from dev_git import status
+        result = status()
+        unmute()
+        eng.window.set_state("speaking", said=result)
+        eng._speak(result)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = result
+        eng.window.set_state("listening")
+    threading.Thread(target=_run, daemon=True, name="GIL-GitStatus").start()
+    return True
+
+def _dev_git_push(text: str, lower: str, eng) -> bool:
+    if not any(t in lower for t in _GIT_PUSH_TRIGGERS):
+        return False
+    log.debug("fast-path: git push")
+    def _run():
+        from ears import unmute
+        from dev_git import push
+        result = push()
+        unmute()
+        eng.window.set_state("speaking", said=result)
+        eng._speak(result)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = result
+        eng.window.set_state("listening")
+    threading.Thread(target=_run, daemon=True, name="GIL-GitPush").start()
+    return True
+
+def _dev_git_pull(text: str, lower: str, eng) -> bool:
+    if not any(t in lower for t in _GIT_PULL_TRIGGERS):
+        return False
+    log.debug("fast-path: git pull")
+    def _run():
+        from ears import unmute
+        from dev_git import pull
+        result = pull()
+        unmute()
+        eng.window.set_state("speaking", said=result)
+        eng._speak(result)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = result
+        eng.window.set_state("listening")
+    threading.Thread(target=_run, daemon=True, name="GIL-GitPull").start()
+    return True
+
+def _dev_run_tests(text: str, lower: str, eng) -> bool:
+    if not any(t in lower for t in _RUN_TEST_TRIGGERS):
+        return False
+    log.debug("fast-path: run tests")
+    def _run():
+        from ears import unmute
+        from dev_runner import run_tests
+        ack = "Running tests..."
+        eng.window.set_state("speaking", said=ack)
+        eng._speak(ack)
+        result = run_tests()
+        unmute()
+        eng.window.set_state("speaking", said=result)
+        eng._speak(result)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = result
+        eng.window.set_state("listening")
+    threading.Thread(target=_run, daemon=True, name="GIL-RunTests").start()
+    return True
+
+def _dev_docker_ps(text: str, lower: str, eng) -> bool:
+    if not any(t in lower for t in _DOCKER_PS_TRIGGERS):
+        return False
+    log.debug("fast-path: docker ps")
+    def _run():
+        from ears import unmute
+        from dev_docker import containers
+        result = containers()
+        unmute()
+        eng.window.set_state("speaking", said=result)
+        eng._speak(result)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = result
+        eng.window.set_state("listening")
+    threading.Thread(target=_run, daemon=True, name="GIL-DockerPS").start()
+    return True
+
+
 # ── Master entry point ────────────────────────────────────────────────────────
 
 _HANDLERS = [
@@ -766,8 +866,15 @@ _HANDLERS = [
     _camera_open,
     _camera_close,
     _vision,
-    _image_gen,      # before webgen so "create an image" doesn't hit website path
+    _image_gen,
     _webgen,
+    # Developer fast-paths (checked before LLM for zero-latency dev commands)
+    _dev_git_status,
+    _dev_git_push,
+    _dev_git_pull,
+    _dev_run_tests,
+    _dev_docker_ps,
+    # General fast-paths
     _fast_url,
     _mode,
     _youtube,

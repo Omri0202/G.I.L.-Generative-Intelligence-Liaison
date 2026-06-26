@@ -273,6 +273,15 @@ def main() -> None:
     except Exception:
         pass
 
+    # Developer screen watcher — starts 60s after launch so GIL is fully ready
+    try:
+        from dev_screen import start as _start_dev_screen
+        from voice import speak as _speak_ref
+        window.after(60_000, lambda: _start_dev_screen(window, _speak_ref))
+        log.info("developer screen watcher scheduled")
+    except Exception as exc:
+        log.warning("dev screen watcher unavailable: %s", exc)
+
     window.after(500, window.show_window)
     window.mainloop()
     session_manager.trigger_shutdown(username)
