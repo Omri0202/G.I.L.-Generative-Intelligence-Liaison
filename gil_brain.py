@@ -38,6 +38,19 @@ def _clean_task_topic(text: str) -> str:
         cleaned = cleaned[0].upper() + cleaned[1:]
     return cleaned or text[:60]
 
+def _detect_response_language(text: str) -> str:
+    """
+    Detect whether the user is writing in Hebrew or English by inspecting
+    the actual Unicode characters — not the user profile native language.
+    Hebrew Unicode block: U+0590–U+05FF
+    """
+    hebrew_chars = sum(1 for c in text if '֐' <= c <= '׿')
+    latin_chars  = sum(1 for c in text if c.isalpha() and ord(c) < 0x0250)
+    if hebrew_chars > 0 and hebrew_chars >= latin_chars * 0.3:
+        return "Hebrew"
+    return "English"
+
+
 GROQ_KEYS = [k for k in [
     os.getenv("GROQ_API_KEY", ""),
     os.getenv("GROQ_API_KEY_2", ""),
@@ -458,6 +471,11 @@ class GILBrain:
             location_context=location_context,
             camera_state=camera_state,
         ) + project_block + extra_str
+
+        # Hard per-query language override — detected from the actual text,
+        # not from the user profile. This overrides any "native: Hebrew" confusion.
+        detected_lang = _detect_response_language(user_input)
+        system += f"\n\nHARD LANGUAGE OVERRIDE: User just wrote in {detected_lang}. Your ENTIRE response MUST be in {detected_lang}. No exceptions."
 
         # â”€â”€ Multi-agent routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Detect intent type and append a specialized sub-prompt that sharpens
