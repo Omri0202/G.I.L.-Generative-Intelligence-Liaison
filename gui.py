@@ -1290,6 +1290,20 @@ class ChatWindow(ctk.CTkToplevel):
         self._sidebar.pack(side="left", fill="y")
         self._sidebar.pack_propagate(False)
 
+        # GIL logo row
+        lr = ctk.CTkFrame(self._sidebar, fg_color="transparent", height=54)
+        lr.pack(fill="x"); lr.pack_propagate(False)
+        av_s = ctk.CTkFrame(lr, fg_color="#1A1540", corner_radius=9,
+                            width=30, height=30, border_width=1, border_color=self._ACCENT)
+        av_s.pack(side="left", padx=(12, 8), pady=12); av_s.pack_propagate(False)
+        ctk.CTkLabel(av_s, text="\u25c8",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=self._ACCENT).pack(expand=True)
+        ctk.CTkLabel(lr, text="G.I.L.",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color="#EDE9FF").pack(side="left")
+        ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
+
         # New chat button
         ctk.CTkButton(
             self._sidebar, text="+ New Chat", height=38,
@@ -1329,21 +1343,32 @@ class ChatWindow(ctk.CTkToplevel):
         main.pack(side="left", fill="both", expand=True)
 
         # ── Context header ────────────────────────────────────────────────────
-        hdr = ctk.CTkFrame(main, fg_color=self._SIDE, corner_radius=0, height=52)
+        hdr = ctk.CTkFrame(main, fg_color=self._SIDE, corner_radius=0, height=60)
         hdr.pack(fill="x"); hdr.pack_propagate(False)
 
-        # Session name (editable)
+        # Avatar
+        av_h = ctk.CTkFrame(hdr, fg_color="#1A1540", corner_radius=10,
+                            width=36, height=36,
+                            border_width=1, border_color=self._ACCENT)
+        av_h.pack(side="left", padx=(14, 8), pady=12); av_h.pack_propagate(False)
+        ctk.CTkLabel(av_h, text="\u25c8",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=self._ACCENT).pack(expand=True)
+        # Session name column
+        nc = ctk.CTkFrame(hdr, fg_color="transparent")
+        nc.pack(side="left", fill="y", pady=8)
         name_entry = ctk.CTkEntry(
-            hdr, textvariable=self._session_name_var,
+            nc, textvariable=self._session_name_var,
             font=ctk.CTkFont("Segoe UI", 13, "bold"),
             fg_color="transparent", border_width=0,
-            text_color=self._TXT, width=280,
+            text_color=self._TXT, width=260,
         )
-        name_entry.pack(side="left", padx=(16, 0), pady=10)
-        name_entry.bind("<Return>",
-                        lambda e: self._save_session_name())
-        name_entry.bind("<FocusOut>",
-                        lambda e: self._save_session_name())
+        name_entry.pack(anchor="w")
+        name_entry.bind("<Return>",   lambda e: self._save_session_name())
+        name_entry.bind("<FocusOut>", lambda e: self._save_session_name())
+        ctk.CTkLabel(nc, text="G.I.L.  \u2022  Generative Intelligence Liaison",
+                     font=ctk.CTkFont("Segoe UI", 9),
+                     text_color=self._MUTED, anchor="w").pack(anchor="w")
 
         # Context badges
         self._badge_frame = ctk.CTkFrame(hdr, fg_color="transparent")
@@ -1354,7 +1379,7 @@ class ChatWindow(ctk.CTkToplevel):
 
         # ── Scroll area ───────────────────────────────────────────────────────
         self._scroll = ctk.CTkScrollableFrame(
-            main, fg_color="#0F0D22",
+            main, fg_color="#0A0820",
             scrollbar_button_color="#1E1840",
             scrollbar_button_hover_color="#2A2460",
         )
@@ -1438,6 +1463,9 @@ class ChatWindow(ctk.CTkToplevel):
     # ── Context badges ────────────────────────────────────────────────────────
 
     def _update_context_badges(self) -> None:
+        try:
+            if not self.winfo_exists(): return
+        except Exception: return
         for w in self._badge_frame.winfo_children():
             w.destroy()
 
@@ -1446,8 +1474,11 @@ class ChatWindow(ctk.CTkToplevel):
         # Git branch
         try:
             import subprocess
-            r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                               capture_output=True, text=True, timeout=3)
+            r = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=3,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
             if r.returncode == 0 and r.stdout.strip():
                 badges.append(("⎇ " + r.stdout.strip(), self._PURPLE, "#0D0B2E", "#1E1840"))
         except Exception:
@@ -1495,6 +1526,9 @@ class ChatWindow(ctk.CTkToplevel):
     # ── Sidebar session list ──────────────────────────────────────────────────
 
     def _refresh_sidebar(self) -> None:
+        try:
+            if not self.winfo_exists(): return
+        except Exception: return
         for w in self._session_list.winfo_children():
             w.destroy()
 
@@ -1665,8 +1699,8 @@ class ChatWindow(ctk.CTkToplevel):
     def _show_welcome(self) -> None:
         wrap = ctk.CTkFrame(self._scroll, fg_color="transparent")
         wrap.pack(fill="x", padx=32, pady=(40, 24))
-        card = ctk.CTkFrame(wrap, fg_color=self._SURF2, corner_radius=20,
-                            border_width=1, border_color=self._BORDER)
+        card = ctk.CTkFrame(wrap, fg_color="#1C1848", corner_radius=20,
+                            border_width=1, border_color="#2E2870")
         card.pack(fill="x")
         # Top accent
         ctk.CTkFrame(card, height=2, fg_color=self._ACCENT,
@@ -1681,8 +1715,8 @@ class ChatWindow(ctk.CTkToplevel):
         tc = ctk.CTkFrame(hrow, fg_color="transparent")
         tc.pack(side="left")
         ctk.CTkLabel(tc, text="G.I.L. is ready",
-                     font=ctk.CTkFont("Segoe UI", 17, "bold"),
-                     text_color=self._TXT, anchor="w").pack(anchor="w")
+                     font=ctk.CTkFont("Segoe UI", 18, "bold"),
+                     text_color="#F5F0FF", anchor="w").pack(anchor="w")
         ctk.CTkLabel(tc, text="Generative Intelligence Liaison  •  Always on",
                      font=ctk.CTkFont("Segoe UI", 10),
                      text_color=self._MUTED, anchor="w").pack(anchor="w")
