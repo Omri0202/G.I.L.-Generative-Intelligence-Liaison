@@ -1272,6 +1272,8 @@ class ChatWindow(ctk.CTkToplevel):
         self._typing_phase      = 0
         self._current_session   = ""
         self._session_name_var  = ctk.StringVar(value="New conversation")
+        self._last_user_text    = ""   # for regenerate
+        self._last_gil_frames   = []   # frames of last GIL response
         self._build()
         self._refresh_sidebar()
         self._load_current()
@@ -1790,6 +1792,148 @@ class ChatWindow(ctk.CTkToplevel):
 
     # ── Messages ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _has_markdown(text: str) -> bool:
+        """True when text contains markdown that should be rendered."""
+        return bool(re.search(
+            r'\*\*[^*]+\*\*'  # **bold**
+            r'|\*[^*]+\*'       # *italic*
+            r'|^#{1,6}\s'        # headers
+            r'|^[-*]\s'          # bullets
+            r'|^\d+\.\s'       # numbered list
+            r'|`[^`]+`',          # inline code
+            text, re.MULTILINE
+        ))
+
+    def _render_markdown(self, parent, text: str, text_color: str, wraplength: int) -> None:
+        """
+        Render markdown-formatted text as a sequence of CTk widgets.
+        Handles: headers (h1-h3), **bold**, *italic*, `code`, bullet lists, numbered lists.
+        Falls back to plain CTkLabel for unformatted lines.
+        """
+        lines = text.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # Blank line → small spacer
+            if not line.strip():
+                ctk.CTkFrame(parent, height=6, fg_color="transparent").pack()
+                i += 1
+                continue
+
+            # Headers
+            m = re.match(r"^(#{1,6})\s(.+)$", line)
+            if m:
+                sizes = {1: 20, 2: 17, 3: 15, 4: 14, 5: 13, 6: 13}
+                sz = sizes.get(len(m.group(1)), 13)
+                ctk.CTkLabel(
+                    parent, text=m.group(2),
+                    font=ctk.CTkFont("Segoe UI", sz, "bold"),
+                    text_color=text_color,
+                    wraplength=wraplength, justify="left", anchor="w",
+                ).pack(fill="x", pady=(8 if sz >= 17 else 4, 2))
+                i += 1
+                continue
+
+            # Bullet list
+            if re.match(r"^[-*\u2022]\s", line):
+                bullet_frame = ctk.CTkFrame(parent, fg_color="transparent")
+                bullet_frame.pack(fill="x", pady=1)
+                ctk.CTkLabel(bullet_frame, text="\u2022",
+                             font=ctk.CTkFont("Segoe UI", 13),
+                             text_color=self._ACCENT, width=18).pack(side="left", anchor="n", pady=2)
+                body = line[2:].strip()
+                self._render_inline(bullet_frame, body, text_color, wraplength - 22)
+                i += 1
+                continue
+
+            # Numbered list
+            m = re.match(r"^(\d+)\.\s(.+)$", line)
+            if m:
+                row = ctk.CTkFrame(parent, fg_color="transparent")
+                row.pack(fill="x", pady=1)
+                ctk.CTkLabel(row, text=m.group(1) + ".",
+                             font=ctk.CTkFont("Segoe UI", 13),
+                             text_color=self._MUTED, width=26).pack(side="left", anchor="n")
+                self._render_inline(row, m.group(2), text_color, wraplength - 30)
+                i += 1
+                continue
+
+            # Normal line with possible inline formatting
+            self._render_inline(parent, line, text_color, wraplength)
+            i += 1
+
+    def _render_inline(self, parent, text: str, text_color: str, wraplength: int) -> None:
+        """
+        Render a single line that may contain **bold**, *italic*, `code`.
+        Uses a single CTkLabel for plain text (common case, fast).
+        Uses a flex row for mixed formatting.
+        """
+        if not re.search(r"\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`", text):
+            ctk.CTkLabel(parent, text=text,
+                         font=ctk.CTkFont("Segoe UI", 13),
+                         text_color=text_color,
+                         wraplength=wraplength, justify="left", anchor="w").pack(fill="x")
+            return
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x")
+        parts = re.split(r"(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)", text)
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("**") and part.endswith("**"):
+                ctk.CTkLabel(row, text=part[2:-2],
+                             font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                             text_color=text_color, anchor="w").pack(side="left")
+            elif part.startswith("*") and part.endswith("*"):
+                ctk.CTkLabel(row, text=part[1:-1],
+                             font=ctk.CTkFont("Segoe UI", 13),
+                             text_color="#BEB0E8", anchor="w").pack(side="left")
+            elif part.startswith("`") and part.endswith("`"):
+                wrap = ctk.CTkFrame(row, fg_color="#080620", corner_radius=4)
+                wrap.pack(side="left", padx=(2, 2))
+                ctk.CTkLabel(wrap, text=part[1:-1],
+                             font=ctk.CTkFont("Consolas", 11),
+                             text_color="#7ECEA8").pack(padx=5, pady=1)
+            else:
+                ctk.CTkLabel(row, text=part,
+                             font=ctk.CTkFont("Segoe UI", 13),
+                             text_color=text_color, anchor="w").pack(side="left")
+
+    def _regenerate(self) -> None:
+        """Re-run the last user message, removing the previous GIL response."""
+        if not self._last_user_text:
+            return
+        # Remove last GIL response from the UI
+        for frame in self._last_gil_frames:
+            try:
+                frame.destroy()
+            except Exception:
+                pass
+        self._last_gil_frames.clear()
+        # Trim brain history so the re-run is fresh
+        try:
+            fn = getattr(self, "_trim_history_fn", None)
+            if fn:
+                fn()
+        except Exception:
+            pass
+        # Re-run
+        self.show_typing()
+        threading.Thread(target=self._on_send, args=(self._last_user_text,),
+                         daemon=True, name="GIL-Regen").start()
+
+    def _edit_message(self, text: str) -> None:
+        """Put a previous message back in the input box for editing."""
+        self._clear_input()
+        self._textbox.configure(text_color=self._TXT)
+        self._textbox.insert("0.0", text)
+        self._placeholder_active = False
+        self._input_wrap.configure(border_color=self._ACCENT)
+        self._textbox.focus()
+
     def add_message(self, text: str, sender: str) -> None:
         if not text.strip():
             return
@@ -1875,20 +2019,53 @@ class ChatWindow(ctk.CTkToplevel):
                           command=lambda t=text: self._copy_to_clipboard(self, t),
                           ).pack(side="right")
 
-            # Render content — handle code blocks inline
-            parts = re.split(r"(```(?:\w+)?\n?[\s\S]*?```)", text)
-            for part in parts:
-                if part.startswith("```") and part.endswith("```"):
-                    m    = re.match(r"```(\w*)\n?([\s\S]*?)```", part)
-                    lang = m.group(1) if m else ""
-                    code = m.group(2).strip() if m else part[3:-3].strip()
-                    self._render_code_block(inner, code, lang)
-                elif part.strip():
-                    ctk.CTkLabel(inner, text=part.strip(),
-                                 font=ctk.CTkFont("Segoe UI", 13),
-                                 text_color=self._TXT,
-                                 wraplength=wl, justify="left",
-                                 anchor="w").pack(fill="x", pady=(0, 4))
+            # Render content — code blocks + markdown
+            has_code = "```" in text
+            if has_code:
+                parts = re.split(r"(```(?:\w+)?\n?[\s\S]*?```)", text)
+                for part in parts:
+                    if part.startswith("```") and part.endswith("```"):
+                        m    = re.match(r"```(\w*)\n?([\s\S]*?)```", part)
+                        lang = m.group(1) if m else ""
+                        code = m.group(2).strip() if m else part[3:-3].strip()
+                        self._render_code_block(inner, code, lang)
+                    elif part.strip():
+                        if self._has_markdown(part):
+                            self._render_markdown(inner, part.strip(), self._TXT, wl)
+                        else:
+                            ctk.CTkLabel(inner, text=part.strip(),
+                                         font=ctk.CTkFont("Segoe UI", 13),
+                                         text_color=self._TXT,
+                                         wraplength=wl, justify="left",
+                                         anchor="w").pack(fill="x", pady=(0, 4))
+            elif self._has_markdown(text):
+                self._render_markdown(inner, text, self._TXT, wl)
+            else:
+                ctk.CTkLabel(inner, text=text,
+                             font=ctk.CTkFont("Segoe UI", 13),
+                             text_color=self._TXT,
+                             wraplength=wl, justify="left",
+                             anchor="w").pack(fill="x")
+
+            # Action row: Copy + Regenerate
+            act = ctk.CTkFrame(row, fg_color="transparent")
+            act.pack(fill="x", padx=28, pady=(0, 6))
+            ctk.CTkButton(act, text="\u2398 Copy", width=72, height=24,
+                          fg_color="transparent", hover_color="#1A1640",
+                          text_color=self._MUTED,
+                          font=ctk.CTkFont("Segoe UI", 10),
+                          corner_radius=6,
+                          command=lambda t=text: self._copy_to_clipboard(self, t),
+                          ).pack(side="left", padx=(0, 4))
+            ctk.CTkButton(act, text="\u21ba Regenerate", width=96, height=24,
+                          fg_color="transparent", hover_color="#1A1640",
+                          text_color=self._MUTED,
+                          font=ctk.CTkFont("Segoe UI", 10),
+                          corner_radius=6, command=self._regenerate,
+                          ).pack(side="left")
+
+            # Track this GIL response for regenerate
+            self._last_gil_frames = [row, act]
 
         else:
             spacer = ctk.CTkFrame(self._scroll, fg_color="transparent")
@@ -1901,6 +2078,13 @@ class ChatWindow(ctk.CTkToplevel):
             col.pack(side="right", anchor="e")
             meta = ctk.CTkFrame(col, fg_color="transparent")
             meta.pack(anchor="e", pady=(0, 6))
+            ctk.CTkButton(meta, text="\u270f", width=26, height=22,
+                          fg_color="transparent", hover_color="#1A1640",
+                          text_color=self._MUTED,
+                          font=ctk.CTkFont("Segoe UI", 11),
+                          corner_radius=5,
+                          command=lambda t=text: self._edit_message(t),
+                          ).pack(side="left", padx=(0, 6))
             ctk.CTkLabel(meta, text="You",
                          font=ctk.CTkFont("Segoe UI", 11, "bold"),
                          text_color=self._NAME_U).pack(side="left", padx=(0, 10))
@@ -1935,6 +2119,8 @@ class ChatWindow(ctk.CTkToplevel):
         text = self._get_input()
         if not text:
             return
+        self._last_user_text = text   # save for regenerate
+        self._last_gil_frames.clear() # previous response gone
         self._clear_input()
         self.add_message(text, "user")
         self.show_typing()

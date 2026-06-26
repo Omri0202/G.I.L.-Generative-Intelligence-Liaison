@@ -113,6 +113,19 @@ class ConversationEngine:
     def pending_recap_global(self) -> list:
         return self._pending_recap_g
 
+    def trim_last_exchange(self) -> None:
+        """
+        Remove the last user + assistant pair from brain history.
+        Called by ChatWindow when user clicks Regenerate so the brain
+        doesn't have a duplicate or ghost user message.
+        """
+        h = self.brain.history
+        if h and h[-1].get("role") == "assistant":
+            h.pop()
+        if h and h[-1].get("role") == "user":
+            h.pop()
+        log.debug("trimmed last exchange from brain history (%d messages remain)", len(h))
+
     # ── Start ─────────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -153,8 +166,9 @@ class ConversationEngine:
         _reminders.set_window_ref(self.window)
         _reminders.restore_pending()
 
-        # ── Expose chat callback + floating button ────────────────────────────
-        self.window._chat_send_fn = self._process_chat
+        # ── Expose chat callback, history trim, and floating button ─────────────
+        self.window._chat_send_fn    = self._process_chat
+        self.window._trim_history_fn = self.trim_last_exchange
         self.window.after(0, self.window._create_floating_chat_button)
         self.window.register_activate_callback(self._manual_activate)
 
