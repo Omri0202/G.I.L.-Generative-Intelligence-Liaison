@@ -1418,6 +1418,14 @@ class ChatWindow(ctk.CTkToplevel):
             scrollbar_button_hover_color="#2A2460",
         )
         self._scroll.pack(fill="both", expand=True)
+        try:
+            from tkinterdnd2 import DND_FILES
+            self._textbox.drop_target_register(DND_FILES)
+            self._textbox.dnd_bind("<<Drop>>", self._on_drop)
+            self._scroll.drop_target_register(DND_FILES)
+            self._scroll.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception:
+            pass
 
         # ── Input bar ─────────────────────────────────────────────────────────
         ctk.CTkFrame(main, height=1, fg_color="#0A0820").pack(fill="x")
@@ -2239,6 +2247,59 @@ class ChatWindow(ctk.CTkToplevel):
         for msg in pinned:
             self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
 
+    def _on_drop(self, event) -> None:
+        """Handle files/images dropped onto the chat area."""
+        import re
+        raw   = event.data.strip()
+        paths = re.findall(r"\{([^}]+)\}|([^\s{}]+)", raw)
+        files = [a or b for a, b in paths if a or b]
+        image_exts = {"png","jpg","jpeg","gif","bmp","webp","tiff","svg"}
+        for path in files[:4]:
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+            if ext in image_exts:
+                self._attach_image(path)
+            else:
+                self._activate_input()
+                cur = self._get_input()
+                self._textbox.insert("end", ("\n" if cur else "") + f"[File: {path}]")
+
+    def _attach_image(self, path: str) -> None:
+        """Show thumbnail for a dropped or uploaded image, queue it for brain analysis."""
+        self._pending_image = path
+        try:
+            from PIL import Image as _PI, ImageTk as _ITK
+            img = _PI.open(path).convert("RGBA")
+            img.thumbnail((90, 90), _PI.LANCZOS)
+            photo = _ITK.PhotoImage(img)
+            self._img_photo_ref = photo
+            attach = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            attach.pack(fill="x", pady=(4, 0))
+            thumb = ctk.CTkFrame(attach, fg_color="#0D0B2E", corner_radius=10,
+                                 border_width=1, border_color=self._BORDER)
+            thumb.pack(side="right", padx=28, pady=4)
+            ctk.CTkLabel(thumb, image=photo, text="",
+                         width=90, height=90).pack(padx=6, pady=6)
+            fname = path.replace("\\", "/").rsplit("/", 1)[-1]
+            ctk.CTkLabel(thumb, text=fname[:22],
+                         font=ctk.CTkFont("Segoe UI", 9),
+                         text_color=self._MUTED).pack(padx=6, pady=(0, 6))
+            ctk.CTkButton(attach, text="x Remove",
+                          fg_color="transparent", hover_color="#1A1030",
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 9),
+                          width=64, height=20, corner_radius=4,
+                          command=lambda f=attach: [
+                              f.destroy(), setattr(self, "_pending_image", None)],
+                          ).pack(side="right", padx=4)
+            try: self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception: pass
+        except Exception: pass
+        self._textbox.configure(state="normal", text_color=self._TXT)
+        self._textbox.delete("0.0", "end")
+        self._textbox.insert("0.0", "What do you see in this image?")
+        self._placeholder_active = False
+        self._input_wrap.configure(border_color=self._ACCENT)
+        self._textbox.focus()
+
     def _upload_file(self) -> None:
         """Open image picker, show thumbnail preview, then analyze."""
         import tkinter.filedialog as fd
@@ -2370,6 +2431,14 @@ class GILWindow(ctk.CTk):
         self.configure(fg_color=BG)
         self.title("G.I.L.")
         _set_icon(self)
+
+        # Initialise drag-and-drop support for the entire app
+        try:
+            from tkinterdnd2 import TkinterDnD
+            TkinterDnD._require(self)
+            self._dnd_ready = True
+        except Exception:
+            self._dnd_ready = False
 
         self.overrideredirect(True)
         self.attributes("-transparentcolor", BG)

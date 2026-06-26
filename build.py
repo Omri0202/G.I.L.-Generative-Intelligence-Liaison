@@ -150,6 +150,8 @@ HIDDEN = [
     "encodings.utf_16",
     # keyboard
     "keyboard",
+    # drag-and-drop
+    "tkinterdnd2",
     # GIL application modules (resolved via dynamic imports)
     "fast_paths", "wake_phrase", "action_handlers", "tray_manager",
     "conversation_engine", "setup_wizard", "chat_history",
