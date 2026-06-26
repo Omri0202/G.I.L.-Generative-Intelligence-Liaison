@@ -540,7 +540,12 @@ class GILBrain:
                 resp = fallback_resp
 
             resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            resp_json = resp.json()
+            raw = resp_json["choices"][0]["message"]["content"].strip()
+            # Track token usage for the context indicator
+            usage = resp_json.get("usage", {})
+            self.last_tokens_used   = usage.get("total_tokens", 0)
+            self.last_prompt_tokens = usage.get("prompt_tokens", 0)
 
         except requests.exceptions.ConnectionError:
             log.error("No internet connection")

@@ -61,9 +61,12 @@ def _ensure_schema() -> None:
                 session_id TEXT    NOT NULL,
                 sender     TEXT    NOT NULL,
                 content    TEXT    NOT NULL,
-                ts         REAL    NOT NULL
+                ts         REAL    NOT NULL,
+                rating     INTEGER NOT NULL DEFAULT 0,
+                is_pinned  INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
+            CREATE INDEX IF NOT EXISTS idx_msg_pinned ON messages(is_pinned);
         """)
         conn.commit()
         conn.close()
@@ -249,6 +252,119 @@ def new_chat_session() -> str:
 
 def get_current_session() -> str:
     return _current_session
+
+
+def rate_message(msg_id: int, rating: int) -> None:
+    """Rate a GIL message. rating: 1=thumbs up, -1=thumbs down, 0=neutral."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute("UPDATE messages SET rating=? WHERE id=?", (rating, msg_id))
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+
+
+def pin_message(msg_id: int, pinned: bool = True) -> None:
+    """Star/unstar a message."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute("UPDATE messages SET is_pinned=? WHERE id=?",
+                         (1 if pinned else 0, msg_id))
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+
+
+def load_pinned() -> list[dict]:
+    """Return all starred messages across all sessions."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute(
+                "SELECT id, session_id, sender, content, ts FROM messages "
+                "WHERE is_pinned=1 ORDER BY ts DESC LIMIT 50"
+            ).fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+
+def get_last_message_id() -> int | None:
+    """Return the rowid of the most recently saved message (for rating/pinning)."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                "SELECT id FROM messages ORDER BY ts DESC LIMIT 1"
+            ).fetchone()
+            conn.close()
+            return row["id"] if row else None
+        except Exception:
+            return None
+
+
+def search_sessions(query: str) -> list[dict]:
+    """Search sessions where name or message content matches query."""
+    _ensure_schema()
+    q = f"%{query}%"
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute("""
+                SELECT DISTINCT s.id, s.name, s.started_at,
+                       COUNT(m.id) as msg_count,
+                       MIN(CASE WHEN m.sender='user' THEN m.content END) as preview
+                FROM sessions s
+                JOIN messages m ON m.session_id = s.id
+                WHERE s.name LIKE ? OR m.content LIKE ?
+                GROUP BY s.id
+                ORDER BY s.started_at DESC
+                LIMIT 20
+            """, (q, q)).fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+
+def export_session(session_id: str) -> str:
+    """Return the session as a plain-text transcript."""
+    import datetime as _dt
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            s = conn.execute(
+                "SELECT name, started_at FROM sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            rows = conn.execute(
+                "SELECT sender, content, ts FROM messages WHERE session_id=? ORDER BY ts",
+                (session_id,)
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return ""
+
+    name = (dict(s).get("name") or "GIL Chat") if s else "GIL Chat"
+    started = (_dt.datetime.fromtimestamp(dict(s)["started_at"]).strftime("%Y-%m-%d %H:%M")
+               if s else "")
+
+    lines = [f"G.I.L. — {name}", f"Session: {started}", "=" * 60, ""]
+    for r in rows:
+        d      = dict(r)
+        who    = "You" if d["sender"] == "user" else "G.I.L."
+        ts_str = _dt.datetime.fromtimestamp(d["ts"]).strftime("%H:%M")
+        lines.append(f"[{ts_str}] {who}")
+        lines.append(d["content"])
+        lines.append("")
+    return "\n".join(lines)
 
 
 def clear_old(days: int = 30) -> None:

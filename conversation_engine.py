@@ -83,6 +83,8 @@ class ConversationEngine:
 
         from gil_brain import GILBrain
         self.brain = GILBrain(username=username)
+        self.brain.last_tokens_used   = 0
+        self.brain.last_prompt_tokens = 0
         self.conv  = ConversationState()
 
         # ── Mutable shared state (single-element lists — same mutation pattern

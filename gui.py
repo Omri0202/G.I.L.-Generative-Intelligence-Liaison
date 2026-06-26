@@ -1306,6 +1306,24 @@ class ChatWindow(ctk.CTkToplevel):
                      text_color="#EDE9FF").pack(side="left")
         ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
 
+        # Search bar
+        self._search_var = ctk.StringVar()
+        self._search_var.trace_add("write", lambda *a: self._refresh_sidebar())
+        search_wrap = ctk.CTkFrame(self._sidebar, fg_color="#0D0B1E",
+                                   corner_radius=8, border_width=1,
+                                   border_color=self._BORDER)
+        search_wrap.pack(fill="x", padx=10, pady=(8, 4))
+        ctk.CTkLabel(search_wrap, text="\U0001f50d",
+                     font=ctk.CTkFont("Segoe UI", 11),
+                     text_color=self._MUTED).pack(side="left", padx=(8, 2))
+        ctk.CTkEntry(search_wrap, textvariable=self._search_var,
+                     placeholder_text="Search chats...",
+                     font=ctk.CTkFont("Segoe UI", 11),
+                     fg_color="transparent", border_width=0,
+                     text_color=self._TXT,
+                     placeholder_text_color=self._MUTED,
+                     height=30).pack(side="left", fill="x", expand=True, padx=(0, 6), pady=4)
+
         # New chat button
         ctk.CTkButton(
             self._sidebar, text="+ New Chat", height=38,
@@ -1325,6 +1343,20 @@ class ChatWindow(ctk.CTkToplevel):
         self._session_list.pack(fill="both", expand=True, pady=(6, 0))
 
         # Bottom info strip
+        ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
+        # Export + Starred quick actions
+        actions_row = ctk.CTkFrame(self._sidebar, fg_color="transparent")
+        actions_row.pack(fill="x", padx=8, pady=4)
+        ctk.CTkButton(actions_row, text="\U0001f4e5 Export", width=90, height=28,
+                      fg_color="transparent", hover_color="#1A1640",
+                      text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
+                      corner_radius=6, command=self._export_chat,
+                      ).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(actions_row, text="\u2605 Starred", width=90, height=28,
+                      fg_color="transparent", hover_color="#1A1640",
+                      text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
+                      corner_radius=6, command=self._show_starred,
+                      ).pack(side="left")
         ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
         info_bar = ctk.CTkFrame(self._sidebar, fg_color="transparent", height=44)
         info_bar.pack(fill="x"); info_bar.pack_propagate(False)
@@ -1421,6 +1453,13 @@ class ChatWindow(ctk.CTkToplevel):
         self._textbox.bind("<FocusIn>",  self._clear_placeholder)
         self._textbox.bind("<FocusOut>", self._restore_placeholder)
 
+        # File upload button
+        ctk.CTkButton(
+            self._input_wrap, text="📎", width=36, height=36,
+            fg_color="transparent", hover_color="#1A1640",
+            text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 14),
+            corner_radius=8, command=self._upload_file,
+        ).pack(side="right", padx=(0, 2), pady=8)
         send_col = ctk.CTkFrame(self._input_wrap, fg_color="transparent")
         send_col.pack(side="right", padx=(0, 8), pady=8)
         ctk.CTkButton(
@@ -1486,12 +1525,12 @@ class ChatWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
-        # Model
+        # Model (clickable to cycle)
         try:
             from gil_brain import GROQ_MODEL
-            badges.append((GROQ_MODEL[:20], self._ACCENT, "#0D0B2E", "#1E1840"))
+            badges.append((f"\U0001f916 {GROQ_MODEL[:18]}", self._ACCENT, "#0D0B2E", "#1E1840"))
         except Exception:
-            badges.append(("llama-3.1", self._ACCENT, "#0D0B2E", "#1E1840"))
+            badges.append(("\U0001f916 llama-3.1", self._ACCENT, "#0D0B2E", "#1E1840"))
 
         # Dev mode
         try:
@@ -1501,14 +1540,29 @@ class ChatWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
-        for text, fg, bg, border in badges:
+        for badge_text, fg, bg, border in badges:
             b = ctk.CTkFrame(self._badge_frame, fg_color=bg,
                              corner_radius=7, border_width=1,
                              border_color=border)
             b.pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(b, text=text,
-                         font=ctk.CTkFont("Segoe UI", 10, "bold"),
-                         text_color=fg).pack(padx=8, pady=3)
+            lbl = ctk.CTkLabel(b, text=badge_text,
+                               font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                               text_color=fg, cursor="hand2")
+            lbl.pack(padx=8, pady=3)
+            if "\U0001f916" in badge_text:
+                lbl.bind("<Button-1>", lambda e: self._cycle_model())
+                b.configure(cursor="hand2")
+
+        # Token usage indicator
+        try:
+            tok = getattr(self, "_engine_ref", None)
+            tokens = tok.brain.last_tokens_used if tok else 0
+            if tokens > 0:
+                pct = min(100, int(tokens / 32_768 * 100))
+                col = "#22C55E" if pct < 60 else ("#F59E0B" if pct < 85 else "#EF4444")
+                badges.append((f"\U0001f9e0 {tokens:,} tok", col, "#0D0B2E", "#1E1840"))
+        except Exception:
+            pass
 
         # Schedule next refresh
         self.after(10_000, self._update_context_badges)
@@ -2047,20 +2101,38 @@ class ChatWindow(ctk.CTkToplevel):
                              wraplength=wl, justify="left",
                              anchor="w").pack(fill="x")
 
-            # Action row: Copy + Regenerate
+            # Action row: Copy + Thumbs + Star + Regenerate
             act = ctk.CTkFrame(row, fg_color="transparent")
             act.pack(fill="x", padx=28, pady=(0, 6))
             ctk.CTkButton(act, text="\u2398 Copy", width=72, height=24,
                           fg_color="transparent", hover_color="#1A1640",
-                          text_color=self._MUTED,
-                          font=ctk.CTkFont("Segoe UI", 10),
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                           corner_radius=6,
                           command=lambda t=text: self._copy_to_clipboard(self, t),
+                          ).pack(side="left", padx=(0, 2))
+            ctk.CTkButton(act, text="\U0001f44d", width=30, height=24,
+                          fg_color="transparent", hover_color="#1A2040",
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 12),
+                          corner_radius=6,
+                          command=lambda: self._rate_last(1),
+                          ).pack(side="left", padx=(0, 2))
+            ctk.CTkButton(act, text="\U0001f44e", width=30, height=24,
+                          fg_color="transparent", hover_color="#201020",
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 12),
+                          corner_radius=6,
+                          command=lambda: self._rate_last(-1),
                           ).pack(side="left", padx=(0, 4))
+            star_btn = ctk.CTkButton(act, text="\u2606", width=30, height=24,
+                          fg_color="transparent", hover_color="#1A1040",
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 13),
+                          corner_radius=6,
+                          command=lambda sb=None: self._pin_last(sb),
+                          )
+            star_btn.pack(side="left", padx=(0, 4))
+            star_btn.configure(command=lambda b=star_btn: self._pin_last(b))
             ctk.CTkButton(act, text="\u21ba Regenerate", width=96, height=24,
                           fg_color="transparent", hover_color="#1A1640",
-                          text_color=self._MUTED,
-                          font=ctk.CTkFont("Segoe UI", 10),
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                           corner_radius=6, command=self._regenerate,
                           ).pack(side="left")
 
@@ -2114,6 +2186,117 @@ class ChatWindow(ctk.CTkToplevel):
             pass
 
     # ── Send ──────────────────────────────────────────────────────────────────
+
+    # ── Feature methods ──────────────────────────────────────────────────────
+
+    def _export_chat(self) -> None:
+        """Export current session as a .txt file."""
+        import tkinter.filedialog as fd
+        name = self._session_name_var.get().strip() or "GIL_Chat"
+        filename = fd.asksaveasfilename(
+            parent=self,
+            defaultextension=".txt",
+            filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+            initialfile=f"{name}.txt",
+        )
+        if not filename:
+            return
+        try:
+            from chat_history import export_session
+            content = export_session(self._current_session)
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as exc:
+            pass
+
+    def _show_starred(self) -> None:
+        """Load and display starred messages in the main area."""
+        try:
+            from chat_history import load_pinned
+            pinned = load_pinned()
+        except Exception:
+            pinned = []
+
+        for w in self._scroll.winfo_children():
+            w.destroy()
+
+        if not pinned:
+            ctk.CTkLabel(self._scroll, text="No starred messages yet.\n\nClick \u2606 on any G.I.L. message to star it.",
+                         font=ctk.CTkFont("Segoe UI", 12),
+                         text_color=self._MUTED, justify="center").pack(expand=True, pady=60)
+            return
+
+        self._session_divider("Starred Messages")
+        for msg in pinned:
+            self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
+
+    def _upload_file(self) -> None:
+        """Open file picker and analyze an image via GIL's vision."""
+        import tkinter.filedialog as fd
+        path = fd.askopenfilename(
+            parent=self,
+            title="Choose image to analyze",
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        # Put an analysis request in the input
+        self._clear_input()
+        self._textbox.configure(text_color=self._TXT)
+        self._textbox.insert("0.0", f"Analyze this image: {path}")
+        self._placeholder_active = False
+        self._textbox.focus()
+
+    def _rate_last(self, rating: int) -> None:
+        """Rate the last GIL message (1=up, -1=down)."""
+        try:
+            from chat_history import get_last_message_id, rate_message
+            msg_id = get_last_message_id()
+            if msg_id:
+                rate_message(msg_id, rating)
+        except Exception:
+            pass
+
+    def _pin_last(self, star_btn=None) -> None:
+        """Star/unstar the last GIL message."""
+        try:
+            from chat_history import get_last_message_id, pin_message
+            msg_id = get_last_message_id()
+            if msg_id:
+                pin_message(msg_id, True)
+                if star_btn:
+                    star_btn.configure(text="\u2605", text_color="#F59E0B")
+        except Exception:
+            pass
+
+    def _cycle_model(self) -> None:
+        """Cycle through available Groq models."""
+        import json
+        from pathlib import Path
+        _MODELS = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "gemma2-9b-it",
+        ]
+        cfg_path = Path(__file__).parent / "data" / "gil_config.json"
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+        current = cfg.get("ai_model", _MODELS[0])
+        try:
+            idx = _MODELS.index(current)
+            next_model = _MODELS[(idx + 1) % len(_MODELS)]
+        except ValueError:
+            next_model = _MODELS[0]
+        cfg["ai_model"] = next_model
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        # Refresh badges to show new model
+        self._update_context_badges()
+
 
     def _send(self) -> None:
         text = self._get_input()
