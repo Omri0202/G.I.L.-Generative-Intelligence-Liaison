@@ -63,7 +63,17 @@ class ConversationState:
 class ConversationEngine:
     """Encapsulates the entire voice/text conversation loop."""
 
-    ATTENTION_SECS  = 45.0
+    # How long GIL stays active after the last addressed utterance.
+    # 8s for statements (user must say "GIL" again after ~8s).
+    # 15s after GIL asks a question (expects a follow-up answer).
+    # Industry standard: Alexa=8s, Google=5-8s, Siri=~0s (single-turn).
+    ATTENTION_SECS  = 8.0
+    QUESTION_SECS   = 15.0
+
+    # Minimum gap between Groq brain calls.
+    # Prevents flooding the API when ambient speech keeps triggering GIL.
+    GROQ_MIN_GAP    = 5.0
+
     _INSTANT_ACTIONS = {"open_url", "open_app", "web_search", "prompt_project"}
     _WEBGEN_WORDS   = __import__("constants").WEBGEN_WORDS
 
@@ -89,6 +99,10 @@ class ConversationEngine:
 
         # Processing lock — one query in-flight at a time
         self.processing_lock = threading.Lock()
+
+        # Attention-management state
+        self._last_was_question = False   # True → use QUESTION_SECS window
+        self._last_groq_call_at = 0.0    # rate-limit guard for Groq calls
 
         # speak() function — set in start()
         self._speak = None
@@ -302,6 +316,43 @@ class ConversationEngine:
     # ── Helpers used by _process / _do_process ────────────────────────────────
 
     @staticmethod
+    def _is_ambient_speech(lower: str) -> bool:
+        """
+        Heuristic: does this look like background conversation rather than a GIL command?
+        Returns True → filter it out (don't process, don't hit Groq).
+
+        Common ambient signals:
+        - Third-person pronouns (user is talking ABOUT someone, not TO GIL)
+        - Conversational fillers with no imperative structure
+        - Very short utterances with no action word
+        """
+        words = lower.split()
+        if not words:
+            return True
+
+        # Very short — likely a filler or background word
+        if len(words) <= 2:
+            return True
+
+        # Third-person pronouns in the first 3 words = talking about someone else
+        _THIRD = {"he", "she", "they", "her", "him", "them", "his", "hers", "their"}
+        if any(w in _THIRD for w in words[:3]):
+            return True
+
+        # Pure conversational filler — clearly talking to a person
+        _FILLERS = {
+            "i know", "i see", "oh really", "no way", "for real", "you know",
+            "like i said", "i mean", "oh yeah", "of course", "right right",
+            "that makes sense", "i agree", "totally", "absolutely", "exactly",
+            "good point", "fair enough", "makes sense", "true true", "yeah yeah",
+            "oh wow", "no problem", "not really", "kind of", "sort of",
+        }
+        if any(phrase in lower for phrase in _FILLERS):
+            return True
+
+        return False
+
+    @staticmethod
     def _word_overlap(a: str, b: str) -> float:
         _strip = lambda s: set(_re.sub(r"[^\w\s]", "", s.lower()).split())
         wa, wb = _strip(a), _strip(b)
@@ -400,10 +451,22 @@ class ConversationEngine:
                 except Exception:
                     pass
 
+        # Update Groq call timestamp for rate-limit guard
+        self._last_groq_call_at = time.time()
+
         # Speak the response
         if speech:
             self._last_said[0] = speech
             self._last_addressed_at[0] = time.time()
+
+            # Track whether GIL ended with a question — controls follow-up window.
+            # If it's a statement, collapse the attention window so GIL doesn't
+            # keep listening to ambient conversation after responding.
+            self._last_was_question = speech.rstrip().endswith("?")
+            if not self._last_was_question:
+                # Collapse window: user must re-address GIL after ~4s
+                self._last_addressed_at[0] = time.time() - (self.ATTENTION_SECS - 4.0)
+
             window.set_state("speaking", said=speech)
             window.add_chat_message(speech, "gil")
             delivered = speak(speech)
@@ -633,12 +696,34 @@ class ConversationEngine:
             addressed = is_addressed(lower)
             if addressed:
                 self._last_addressed_at[0] = time.time()
-            in_window = (time.time() - self._last_addressed_at[0]) < self.ATTENTION_SECS
+
+            now        = time.time()
+            time_since = now - self._last_addressed_at[0]
+
+            # Dynamic attention window:
+            # - 15 s if GIL just asked a question (expects a follow-up answer)
+            # - 8 s otherwise (tight window prevents ambient speech processing)
+            window    = self.QUESTION_SECS if self._last_was_question else self.ATTENTION_SECS
+            in_window = time_since < window
+
             if addressed or in_window:
+                # Filter 1 — ambient speech detection
+                # If the user didn't name GIL and it sounds like background conversation, drop it
+                if in_window and not addressed and self._is_ambient_speech(lower):
+                    log.debug("ambient speech filtered: %r", text[:50])
+                    return
+
+                # Filter 2 — Groq rate limit guard
+                # If another Groq call was made very recently and this utterance
+                # didn't name GIL directly, drop it to avoid flooding the API
+                if not addressed and (now - self._last_groq_call_at) < self.GROQ_MIN_GAP:
+                    log.debug("groq rate-limit guard: dropped %r", text[:40])
+                    return
+
                 threading.Thread(target=self._process, args=(text,),
                                  daemon=True, name="GIL-Process").start()
             else:
-                log.debug("not addressed — ignored: %r", text[:50])
+                log.debug("outside attention window — ignored: %r", text[:50])
 
     # ── Manual activate ───────────────────────────────────────────────────────
 
