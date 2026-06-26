@@ -754,6 +754,65 @@ def _image_gen(text: str, lower: str, eng) -> bool:
     return True
 
 
+# ── Developer mode activation ────────────────────────────────────────────────
+
+_DEV_MODE_ON  = {"activate developer mode", "developer mode on", "enable developer mode",
+                 "dev mode", "activate dev mode", "turn on developer mode",
+                 "start developer mode", "switch to developer mode"}
+_DEV_MODE_OFF = {"deactivate developer mode", "developer mode off", "disable developer mode",
+                 "turn off developer mode", "exit developer mode"}
+
+def _dev_mode_toggle(text: str, lower: str, eng) -> bool:
+    if any(t in lower for t in _DEV_MODE_OFF):
+        log.debug("fast-path: deactivate developer mode")
+        from dev_config import disable
+        disable()
+        speech = "Developer mode deactivated."
+        eng.window.set_state("speaking", said=speech)
+        eng._speak(speech)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = speech
+        eng.window.set_state("listening")
+        return True
+
+    if not any(t in lower for t in _DEV_MODE_ON):
+        return False
+    log.debug("fast-path: activate developer mode")
+
+    def _activate():
+        from ears import unmute
+        from dev_config import is_enabled
+        if is_enabled():
+            speech = "Developer mode is already active."
+            unmute()
+            eng.window.set_state("speaking", said=speech)
+            eng._speak(speech)
+            eng._last_spoke_at[0] = time.time() - 1.5
+            eng._last_said[0]     = speech
+            eng.window.set_state("listening")
+            return
+        # Show setup wizard
+        speech = "Opening developer setup."
+        eng.window.set_state("speaking", said=speech)
+        eng._speak(speech)
+        def _launch_wizard():
+            from dev_setup_wizard import run_dev_wizard
+            completed = run_dev_wizard(eng.window)
+            unmute()
+            if completed:
+                result = "Developer mode is now active. Git, GitHub, Docker, code search — all ready."
+            else:
+                result = "Developer setup cancelled."
+            eng.window.set_state("speaking", said=result)
+            eng._speak(result)
+            eng._last_spoke_at[0] = time.time() - 1.5
+            eng._last_said[0]     = result
+            eng.window.set_state("listening")
+        eng.window.after(500, _launch_wizard)
+    threading.Thread(target=_activate, daemon=True, name="GIL-DevMode").start()
+    return True
+
+
 # ── Developer fast-paths ──────────────────────────────────────────────────────
 
 _GIT_STATUS_TRIGGERS  = {"git status","what changed","what's changed","any changes",
@@ -857,6 +916,7 @@ def _dev_docker_ps(text: str, lower: str, eng) -> bool:
 # ── Master entry point ────────────────────────────────────────────────────────
 
 _HANDLERS = [
+    _dev_mode_toggle,    # check first — very specific phrases
     _recap_confirm,
     _whatsapp,
     _gmail,

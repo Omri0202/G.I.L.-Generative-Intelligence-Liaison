@@ -1137,8 +1137,16 @@ class _FloatingChatButton(ctk.CTkToplevel):
         cv.bind("<Leave>",    self._hover_out)
         cv.configure(cursor="hand2")
 
+        # Dev mode badge (green dot — shown when developer mode is active)
+        self._dev_dot = cv.create_oval(
+            self.W - 18, 8, self.W - 6, 20,
+            fill="#4ADE80", outline="#080D08", width=2,
+            state="hidden",
+        )
+
         # Position and show after the window is fully mapped
         self.after(100, self._place)
+        self.after(500, self._update_dev_badge)
 
     def _place(self) -> None:
         """Pin to the bottom-left corner using the Windows work-area API.
@@ -1159,6 +1167,16 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self._pulse()
 
     # ── Show / hide (called when chat opens / closes) ─────────────────────────
+
+    def _update_dev_badge(self) -> None:
+        """Show/hide the green dev-mode dot. Re-checks every 5 s."""
+        try:
+            from dev_config import is_enabled
+            state = "normal" if is_enabled() else "hidden"
+            self._cv.itemconfig(self._dev_dot, state=state)
+        except Exception:
+            pass
+        self.after(5000, self._update_dev_badge)
 
     def show(self) -> None:
         if self._hidden:
@@ -1538,6 +1556,38 @@ class ChatWindow(ctk.CTkToplevel):
 
         self.after(0, _do)
 
+    @staticmethod
+    def _has_code(text: str) -> bool:
+        """True if the message contains a code block."""
+        import re
+        return bool(re.search(r"```|`[^`]+`|\bdef \w+\(|\bfunction \w+\(|^\s{4}\S", text, re.M))
+
+    def _render_code_block(self, parent, text: str) -> None:
+        """Render text with code blocks styled in a monospace dark box."""
+        import re
+        parts = re.split(r"(```[\s\S]*?```)", text)
+        for part in parts:
+            if part.startswith("```") and part.endswith("```"):
+                code = re.sub(r"^```\w*\n?", "", part).rstrip("`").strip()
+                code_frame = ctk.CTkFrame(parent, fg_color="#0A0A18",
+                                          corner_radius=8,
+                                          border_width=1, border_color="#1A2A40")
+                code_frame.pack(fill="x", padx=0, pady=(4, 4))
+                ctk.CTkLabel(code_frame, text=code,
+                             font=ctk.CTkFont("Consolas", 10),
+                             text_color="#7EC8A8",
+                             wraplength=max(200, self.winfo_width() - 220),
+                             justify="left", anchor="w").pack(
+                                 padx=12, pady=8, fill="x")
+            else:
+                if part.strip():
+                    ctk.CTkLabel(parent, text=part.strip(),
+                                 font=ctk.CTkFont("Segoe UI", 11),
+                                 text_color="#A8DAFC",
+                                 wraplength=max(200, self.winfo_width() - 200),
+                                 justify="left", anchor="w").pack(
+                                     fill="x", pady=(2, 2))
+
     def _render_bubble(self, text: str, sender: str, ts: float,
                        save: bool = True) -> None:
         """
@@ -1605,12 +1655,17 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkFrame(brow, width=3, fg_color=ACCENT,
                          corner_radius=1).pack(
                              side="left", fill="y", padx=(10, 0), pady=12)
-            ctk.CTkLabel(brow, text=text,
-                         font=ctk.CTkFont("Segoe UI", 11),
-                         text_color="#A8DAFC",
-                         wraplength=wl, justify="left",
-                         anchor="w").pack(
-                             side="left", padx=(10, 16), pady=12)
+            body_frame = ctk.CTkFrame(brow, fg_color="transparent")
+            body_frame.pack(side="left", fill="x", expand=True,
+                            padx=(10, 16), pady=12)
+            if self._has_code(text):
+                self._render_code_block(body_frame, text)
+            else:
+                ctk.CTkLabel(body_frame, text=text,
+                             font=ctk.CTkFont("Segoe UI", 11),
+                             text_color="#A8DAFC",
+                             wraplength=wl, justify="left",
+                             anchor="w").pack(fill="x")
             ctk.CTkLabel(content, text=ts_str,
                          font=ctk.CTkFont("Segoe UI", 7),
                          text_color="#4A7090").pack(
