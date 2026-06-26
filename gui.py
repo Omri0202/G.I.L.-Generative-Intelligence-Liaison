@@ -1235,37 +1235,33 @@ class _FloatingChatButton(ctk.CTkToplevel):
 # ── Chat window ───────────────────────────────────────────────────────────────
 class ChatWindow(ctk.CTkToplevel):
     """
-    G.I.L. chat — deep space purple palette, Claude-inspired layout.
+    Claude-inspired G.I.L. chat — sidebar + context header + copy buttons.
 
-    Background: #0D0B1E (deep purple-black, NOT flat black)
-    GIL rows:   #131028 (clearly elevated purple surface)
-    User cards: #0C1D42 (royal midnight blue)
-    Accent:     #3FDDFA (signature GIL cyan)
-    Secondary:  #A78BFA (soft purple)
+    Layout:  [220px sidebar] | [main: header + messages + input]
+    Palette: Deep space purple #0D0B1E, elevated #131028, royal blue #0C1D42
     """
 
-    # ── Design tokens ─────────────────────────────────────────────────────────
-    _PAGE    = "#0D0B1E"    # deep space purple-black — the page bg
-    _SURF1   = "#100E24"    # header, input bar
-    _SURF2   = "#131028"    # GIL message row — visibly elevated
-    _SURF3   = "#0F0D22"    # scroll area (slightly different from page)
-    _USERBG  = "#0C1D42"    # user message card — royal midnight blue
-    _BORDER  = "#1E1840"    # purple-tinted border
-    _UBORDER = "#1A3870"    # user card border — blue glow
-    _TXT     = "#EDE9FF"    # primary text — warm purple-white
-    _USERTXT = "#A8D0FF"    # user message text — cool blue-white
-    _NAME_G  = "#3FDDFA"    # G.I.L. name — signature bright cyan
-    _NAME_U  = "#4A90E2"    # You — calm blue
-    _MUTED   = "#4A3A7A"    # muted/timestamp — subtle purple
-    _INPUT   = "#16123A"    # input field bg — deep purple
-    _ACCENT  = "#3FDDFA"    # cyan accent
-    _PURPLE  = "#A78BFA"    # soft purple accent
+    _PAGE    = "#0D0B1E"
+    _SIDE    = "#100E24"
+    _SURF2   = "#131028"
+    _USERBG  = "#0C1D42"
+    _BORDER  = "#1E1840"
+    _UBORDER = "#1A3870"
+    _TXT     = "#EDE9FF"
+    _USERTXT = "#A8D0FF"
+    _NAME_G  = "#3FDDFA"
+    _NAME_U  = "#4A90E2"
+    _MUTED   = "#4A3A7A"
+    _INPUT   = "#16123A"
+    _ACCENT  = "#3FDDFA"
+    _PURPLE  = "#A78BFA"
+    _DIMMED  = "#8A7AAA"
 
     def __init__(self, parent, on_send: callable):
         super().__init__(parent)
         self.title("G.I.L. — Chat")
-        self.geometry("640x820")
-        self.minsize(460, 560)
+        self.geometry("980x840")
+        self.minsize(700, 560)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=self._PAGE)
         _set_icon(self)
@@ -1274,123 +1270,362 @@ class ChatWindow(ctk.CTkToplevel):
         self._typing_lbl        = None
         self._typing_frame_ref  = None
         self._typing_phase      = 0
+        self._current_session   = ""
+        self._session_name_var  = ctk.StringVar(value="New conversation")
         self._build()
-        self._load_history()
+        self._refresh_sidebar()
+        self._load_current()
         self.lift(); self.focus()
 
-    # ── Build ─────────────────────────────────────────────────────────────────
+    # ── Build shell ───────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        # ── Header ────────────────────────────────────────────────────────────
-        hdr = ctk.CTkFrame(self, fg_color=self._SURF1, corner_radius=0, height=64)
+        root = ctk.CTkFrame(self, fg_color=self._PAGE, corner_radius=0)
+        root.pack(fill="both", expand=True)
+
+        # ── Left sidebar ──────────────────────────────────────────────────────
+        self._sidebar = ctk.CTkFrame(root, fg_color=self._SIDE, width=220,
+                                      corner_radius=0,
+                                      border_width=0)
+        self._sidebar.pack(side="left", fill="y")
+        self._sidebar.pack_propagate(False)
+
+        # New chat button
+        ctk.CTkButton(
+            self._sidebar, text="+ New Chat", height=38,
+            fg_color=self._ACCENT, hover_color="#00B8D4",
+            text_color="#020810", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            corner_radius=10, command=self._new_chat,
+        ).pack(fill="x", padx=12, pady=(14, 10))
+
+        ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
+
+        # Session list (scrollable)
+        self._session_list = ctk.CTkScrollableFrame(
+            self._sidebar, fg_color="transparent",
+            scrollbar_button_color=self._BORDER,
+            scrollbar_button_hover_color="#2A2460",
+        )
+        self._session_list.pack(fill="both", expand=True, pady=(6, 0))
+
+        # Bottom info strip
+        ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
+        info_bar = ctk.CTkFrame(self._sidebar, fg_color="transparent", height=44)
+        info_bar.pack(fill="x"); info_bar.pack_propagate(False)
+        try:
+            from version import VERSION as _V
+            ver = _V
+        except Exception:
+            ver = "1.x"
+        ctk.CTkLabel(info_bar, text=f"G.I.L. v{ver}  •  llama-3.1",
+                     font=ctk.CTkFont("Segoe UI", 9),
+                     text_color="#28204C").pack(anchor="w", padx=12, pady=14)
+
+        # ── Separator ─────────────────────────────────────────────────────────
+        ctk.CTkFrame(root, width=1, fg_color=self._BORDER).pack(side="left", fill="y")
+
+        # ── Main pane ─────────────────────────────────────────────────────────
+        main = ctk.CTkFrame(root, fg_color=self._PAGE, corner_radius=0)
+        main.pack(side="left", fill="both", expand=True)
+
+        # ── Context header ────────────────────────────────────────────────────
+        hdr = ctk.CTkFrame(main, fg_color=self._SIDE, corner_radius=0, height=52)
         hdr.pack(fill="x"); hdr.pack_propagate(False)
 
-        # Left: avatar + name + status
-        left = ctk.CTkFrame(hdr, fg_color="transparent")
-        left.pack(side="left", padx=20, pady=12)
+        # Session name (editable)
+        name_entry = ctk.CTkEntry(
+            hdr, textvariable=self._session_name_var,
+            font=ctk.CTkFont("Segoe UI", 13, "bold"),
+            fg_color="transparent", border_width=0,
+            text_color=self._TXT, width=280,
+        )
+        name_entry.pack(side="left", padx=(16, 0), pady=10)
+        name_entry.bind("<Return>",
+                        lambda e: self._save_session_name())
+        name_entry.bind("<FocusOut>",
+                        lambda e: self._save_session_name())
 
-        av = ctk.CTkFrame(left, fg_color="#1A1540",
-                          corner_radius=12, width=40, height=40,
-                          border_width=1, border_color=self._ACCENT)
-        av.pack(side="left", padx=(0, 12)); av.pack_propagate(False)
-        ctk.CTkLabel(av, text="◈",
-                     font=ctk.CTkFont("Segoe UI", 15, "bold"),
-                     text_color=self._ACCENT).pack(expand=True)
+        # Context badges
+        self._badge_frame = ctk.CTkFrame(hdr, fg_color="transparent")
+        self._badge_frame.pack(side="right", padx=14, pady=10)
+        self._update_context_badges()
 
-        info = ctk.CTkFrame(left, fg_color="transparent")
-        info.pack(side="left")
-        ctk.CTkLabel(info, text="G.I.L.",
-                     font=ctk.CTkFont("Segoe UI", 15, "bold"),
-                     text_color="#F0ECFF", anchor="w").pack(anchor="w")
-        st_row = ctk.CTkFrame(info, fg_color="transparent")
-        st_row.pack(anchor="w")
-        dot = ctk.CTkFrame(st_row, fg_color="#22C55E", corner_radius=3,
-                           width=7, height=7)
-        dot.pack(side="left", padx=(0, 5), pady=2); dot.pack_propagate(False)
-        ctk.CTkLabel(st_row, text="online  •  EN / HE",
-                     font=ctk.CTkFont("Segoe UI", 9),
-                     text_color=self._MUTED, anchor="w").pack(side="left")
-
-        # Right: purple accent badge
-        ctk.CTkLabel(hdr, text="⌨  Ctrl+Shift+C",
-                     font=ctk.CTkFont("Segoe UI", 8),
-                     text_color="#28204C").pack(side="right", padx=20)
-
-        # Separator with subtle purple glow
-        sep_frame = ctk.CTkFrame(self, fg_color="#0A0820", height=1, corner_radius=0)
-        sep_frame.pack(fill="x")
+        ctk.CTkFrame(main, height=1, fg_color="#0A0820").pack(fill="x")
 
         # ── Scroll area ───────────────────────────────────────────────────────
         self._scroll = ctk.CTkScrollableFrame(
-            self, fg_color=self._SURF3,
+            main, fg_color="#0F0D22",
             scrollbar_button_color="#1E1840",
             scrollbar_button_hover_color="#2A2460",
         )
         self._scroll.pack(fill="both", expand=True)
 
         # ── Input bar ─────────────────────────────────────────────────────────
-        ctk.CTkFrame(self, height=1, fg_color="#0A0820", corner_radius=0).pack(fill="x")
-        bar = ctk.CTkFrame(self, fg_color=self._SURF1, corner_radius=0, height=78)
-        bar.pack(fill="x"); bar.pack_propagate(False)
+        ctk.CTkFrame(main, height=1, fg_color="#0A0820").pack(fill="x")
+        bar = ctk.CTkFrame(main, fg_color=self._SIDE, corner_radius=0)
+        bar.pack(fill="x")
 
-        # Input wrapper
         self._input_wrap = ctk.CTkFrame(
             bar, fg_color=self._INPUT,
-            corner_radius=16, border_width=1, border_color=self._BORDER,
+            corner_radius=14, border_width=1, border_color=self._BORDER,
         )
-        self._input_wrap.pack(fill="x", padx=18, pady=16)
+        self._input_wrap.pack(fill="x", padx=18, pady=14)
 
-        self._entry_var = ctk.StringVar()
-        self._entry = ctk.CTkEntry(
+        # Multi-line textbox (like Claude)
+        self._textbox = ctk.CTkTextbox(
             self._input_wrap,
-            textvariable=self._entry_var,
-            placeholder_text="Message G.I.L.  •  English or Hebrew…",
             font=ctk.CTkFont("Segoe UI", 13),
             fg_color="transparent",
             border_width=0,
             text_color=self._TXT,
-            placeholder_text_color="#28204C",
-            height=42,
+            height=70,
+            wrap="word",
+            activate_scrollbars=False,
         )
-        self._entry.pack(side="left", fill="x", expand=True, padx=16, pady=4)
-        self._entry.bind("<Return>",   lambda e: self._send())
-        self._entry.bind("<FocusIn>",  lambda e: self._input_wrap.configure(border_color=self._ACCENT))
-        self._entry.bind("<FocusOut>", lambda e: self._input_wrap.configure(border_color=self._BORDER))
+        self._textbox.pack(side="left", fill="x", expand=True, padx=(14, 6), pady=10)
+        self._textbox.insert("0.0", "")
+        self._textbox.bind("<Return>",       self._on_enter)
+        self._textbox.bind("<Shift-Return>", self._on_shift_enter)
+        self._textbox.bind("<FocusIn>",      lambda e: self._input_wrap.configure(border_color=self._ACCENT))
+        self._textbox.bind("<FocusOut>",     lambda e: self._input_wrap.configure(border_color=self._BORDER))
+        self._textbox.configure(text_color=self._MUTED)
+        self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
+        self._placeholder_active = True
+        self._textbox.bind("<FocusIn>",  self._clear_placeholder)
+        self._textbox.bind("<FocusOut>", self._restore_placeholder)
 
-        send = ctk.CTkButton(
-            self._input_wrap, text="↑", width=40, height=40,
+        send_col = ctk.CTkFrame(self._input_wrap, fg_color="transparent")
+        send_col.pack(side="right", padx=(0, 8), pady=8)
+        ctk.CTkButton(
+            send_col, text="↑", width=40, height=40,
             fg_color=self._ACCENT, hover_color="#00B8D4",
             text_color="#020810", font=ctk.CTkFont("Segoe UI", 18, "bold"),
-            corner_radius=12, command=self._send,
-        )
-        send.pack(side="right", padx=(0, 6), pady=4)
+            corner_radius=10, command=self._send,
+        ).pack()
 
-    # ── History loader ────────────────────────────────────────────────────────
+    # ── Placeholder handling ──────────────────────────────────────────────────
 
-    def _load_history(self) -> None:
+    def _clear_placeholder(self, event=None) -> None:
+        if self._placeholder_active:
+            self._textbox.delete("0.0", "end")
+            self._textbox.configure(text_color=self._TXT)
+            self._placeholder_active = False
+
+    def _restore_placeholder(self, event=None) -> None:
+        if not self._textbox.get("0.0", "end").strip():
+            self._textbox.configure(text_color=self._MUTED)
+            self._textbox.delete("0.0", "end")
+            self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
+            self._placeholder_active = True
+
+    def _on_enter(self, event) -> str:
+        if not self._placeholder_active:
+            self._send()
+        return "break"   # prevent default newline
+
+    def _on_shift_enter(self, event) -> None:
+        pass   # allow default newline insert
+
+    def _get_input(self) -> str:
+        if self._placeholder_active:
+            return ""
+        return self._textbox.get("0.0", "end").strip()
+
+    def _clear_input(self) -> None:
+        self._textbox.delete("0.0", "end")
+        self._restore_placeholder()
+
+    # ── Context badges ────────────────────────────────────────────────────────
+
+    def _update_context_badges(self) -> None:
+        for w in self._badge_frame.winfo_children():
+            w.destroy()
+
+        badges = []
+
+        # Git branch
         try:
-            from chat_history import load_recent
-            messages = load_recent(limit=80)
+            import subprocess
+            r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                badges.append(("⎇ " + r.stdout.strip(), self._PURPLE, "#0D0B2E", "#1E1840"))
+        except Exception:
+            pass
+
+        # Model
+        try:
+            from gil_brain import GROQ_MODEL
+            badges.append((GROQ_MODEL[:20], self._ACCENT, "#0D0B2E", "#1E1840"))
+        except Exception:
+            badges.append(("llama-3.1", self._ACCENT, "#0D0B2E", "#1E1840"))
+
+        # Dev mode
+        try:
+            from dev_config import is_enabled
+            if is_enabled():
+                badges.append(("● DEV", "#22C55E", "#0A2820", "#1E4030"))
+        except Exception:
+            pass
+
+        for text, fg, bg, border in badges:
+            b = ctk.CTkFrame(self._badge_frame, fg_color=bg,
+                             corner_radius=7, border_width=1,
+                             border_color=border)
+            b.pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(b, text=text,
+                         font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                         text_color=fg).pack(padx=8, pady=3)
+
+        # Schedule next refresh
+        self.after(10_000, self._update_context_badges)
+
+    # ── Session name ──────────────────────────────────────────────────────────
+
+    def _save_session_name(self) -> None:
+        name = self._session_name_var.get().strip()
+        if name and self._current_session:
+            try:
+                from chat_history import rename_session
+                rename_session(self._current_session, name)
+                self._refresh_sidebar()
+            except Exception:
+                pass
+
+    # ── Sidebar session list ──────────────────────────────────────────────────
+
+    def _refresh_sidebar(self) -> None:
+        for w in self._session_list.winfo_children():
+            w.destroy()
+
+        try:
+            from chat_history import list_sessions
+            sessions = list_sessions(30)
+        except Exception:
+            sessions = []
+
+        if not sessions:
+            ctk.CTkLabel(self._session_list, text="No previous chats",
+                         font=ctk.CTkFont("Segoe UI", 10),
+                         text_color=self._MUTED).pack(pady=20)
+            return
+
+        # Group by date
+        import datetime as _dt
+        today     = _dt.date.today()
+        yesterday = today - _dt.timedelta(days=1)
+        groups    = {}
+
+        for s in sessions:
+            d = _dt.datetime.fromtimestamp(s["started_at"]).date()
+            if d == today:
+                grp = "Today"
+            elif d == yesterday:
+                grp = "Yesterday"
+            elif (today - d).days < 7:
+                grp = d.strftime("%A")
+            else:
+                grp = d.strftime("%B %d")
+            groups.setdefault(grp, []).append(s)
+
+        for grp_name, items in groups.items():
+            ctk.CTkLabel(self._session_list, text=grp_name,
+                         font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                         text_color=self._MUTED,
+                         anchor="w").pack(fill="x", padx=10, pady=(10, 4))
+
+            for s in items:
+                display = s["name"] or (s["preview"] or "Chat")[:32]
+                is_cur  = s["id"] == self._current_session
+                btn = ctk.CTkFrame(
+                    self._session_list,
+                    fg_color="#1A1640" if is_cur else "transparent",
+                    corner_radius=8,
+                    cursor="hand2",
+                )
+                btn.pack(fill="x", padx=4, pady=1)
+                ctk.CTkLabel(btn,
+                             text=display,
+                             font=ctk.CTkFont("Segoe UI", 11,
+                                              "bold" if is_cur else "normal"),
+                             text_color=self._TXT if is_cur else self._DIMMED,
+                             anchor="w",
+                             wraplength=180).pack(
+                                 fill="x", padx=10, pady=(6, 2))
+                ctk.CTkLabel(btn,
+                             text=f"{s['msg_count']} messages",
+                             font=ctk.CTkFont("Segoe UI", 9),
+                             text_color=self._MUTED, anchor="w").pack(
+                                 fill="x", padx=10, pady=(0, 6))
+
+                sid = s["id"]
+                btn.bind("<Button-1>", lambda e, i=sid, n=display: self._open_session(i, n))
+                for child in btn.winfo_children():
+                    child.bind("<Button-1>", lambda e, i=sid, n=display: self._open_session(i, n))
+
+    def _new_chat(self) -> None:
+        try:
+            from chat_history import new_chat_session
+            self._current_session = new_chat_session()
+        except Exception:
+            import uuid
+            self._current_session = str(uuid.uuid4())
+        self._session_name_var.set("New conversation")
+        for w in self._scroll.winfo_children():
+            w.destroy()
+        self._show_welcome()
+        self._refresh_sidebar()
+
+    def _open_session(self, session_id: str, name: str) -> None:
+        self._current_session = session_id
+        self._session_name_var.set(name)
+        for w in self._scroll.winfo_children():
+            w.destroy()
+        try:
+            from chat_history import load_session
+            messages = load_session(session_id)
         except Exception:
             messages = []
+        for msg in messages:
+            self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
+        if not messages:
+            self._show_welcome()
+        self.after(100, lambda: self._scroll._parent_canvas.yview_moveto(1.0))
+        self._refresh_sidebar()
+
+    # ── Load current session ──────────────────────────────────────────────────
+
+    def _load_current(self) -> None:
+        try:
+            from chat_history import get_current_session, load_recent, list_sessions
+            self._current_session = get_current_session()
+            sessions = list_sessions(1)
+            if sessions:
+                name = sessions[0].get("name") or "Conversation"
+                self._session_name_var.set(name)
+            messages = load_recent(80)
+        except Exception:
+            messages = []
+
         if not messages:
             self._show_welcome()
             return
+
         import datetime as _dt
-        prev_day     = None
-        prev_session = None
+        prev_day = prev_session = None
         for msg in messages:
-            ts      = msg["ts"]
-            day_str = _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            day_str = _dt.datetime.fromtimestamp(msg["ts"]).strftime("%Y-%m-%d")
             if day_str != prev_day:
                 prev_day = day_str
-                self._date_divider(self._friendly_date(ts))
+                self._date_divider(self._friendly_date(msg["ts"]))
             elif msg["is_session_start"] and prev_session is not None:
                 self._session_divider()
             prev_session = msg["session_id"]
             self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
         self._session_divider("Now")
         self.after(100, lambda: self._scroll._parent_canvas.yview_moveto(1.0))
+
+    # ── Dividers ──────────────────────────────────────────────────────────────
 
     @staticmethod
     def _friendly_date(ts: float) -> str:
@@ -1407,75 +1642,62 @@ class ChatWindow(ctk.CTkToplevel):
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         row.pack(fill="x", pady=(14, 6))
         ctk.CTkFrame(row, height=1, fg_color=self._BORDER).pack(
-            side="left", fill="x", expand=True, pady=8, padx=(28, 10))
+            side="left", fill="x", expand=True, pady=8, padx=(28, 8))
         ctk.CTkLabel(row, text=label,
                      font=ctk.CTkFont("Segoe UI", 9, "bold"),
-                     text_color=self._MUTED,
-                     fg_color=self._SURF3).pack(side="left")
+                     text_color=self._MUTED, fg_color="#0F0D22").pack(side="left")
         ctk.CTkFrame(row, height=1, fg_color=self._BORDER).pack(
-            side="left", fill="x", expand=True, pady=8, padx=(10, 28))
+            side="left", fill="x", expand=True, pady=8, padx=(8, 28))
 
     def _session_divider(self, label: str = "Earlier") -> None:
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         row.pack(fill="x", pady=(8, 4))
         ctk.CTkFrame(row, height=1, fg_color="#100E24").pack(
-            side="left", fill="x", expand=True, pady=6, padx=(28, 10))
+            side="left", fill="x", expand=True, pady=6, padx=(28, 8))
         ctk.CTkLabel(row, text=label,
                      font=ctk.CTkFont("Segoe UI", 8),
-                     text_color="#201840",
-                     fg_color=self._SURF3).pack(side="left")
+                     text_color="#201840", fg_color="#0F0D22").pack(side="left")
         ctk.CTkFrame(row, height=1, fg_color="#100E24").pack(
-            side="left", fill="x", expand=True, pady=6, padx=(10, 28))
+            side="left", fill="x", expand=True, pady=6, padx=(8, 28))
 
-    # ── Welcome card ─────────────────────────────────────────────────────────
+    # ── Welcome ───────────────────────────────────────────────────────────────
 
     def _show_welcome(self) -> None:
         wrap = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        wrap.pack(fill="x", padx=28, pady=(32, 20))
-
-        card = ctk.CTkFrame(wrap, fg_color=self._SURF2,
-                            corner_radius=20, border_width=1,
-                            border_color=self._BORDER)
+        wrap.pack(fill="x", padx=32, pady=(40, 24))
+        card = ctk.CTkFrame(wrap, fg_color=self._SURF2, corner_radius=20,
+                            border_width=1, border_color=self._BORDER)
         card.pack(fill="x")
-
-        # Purple-cyan gradient top bar
-        top_bar = ctk.CTkFrame(card, fg_color="#1A1540",
-                               corner_radius=0, height=3)
-        top_bar.pack(fill="x")
-
+        # Top accent
+        ctk.CTkFrame(card, height=2, fg_color=self._ACCENT,
+                     corner_radius=0).pack(fill="x")
         hrow = ctk.CTkFrame(card, fg_color="transparent")
-        hrow.pack(fill="x", padx=22, pady=(20, 14))
+        hrow.pack(fill="x", padx=22, pady=(22, 16))
         av = ctk.CTkFrame(hrow, fg_color="#1A1540", corner_radius=14,
-                          width=48, height=48, border_width=1,
-                          border_color=self._ACCENT)
-        av.pack(side="left", padx=(0, 16)); av.pack_propagate(False)
-        ctk.CTkLabel(av, text="◈",
-                     font=ctk.CTkFont("Segoe UI", 19, "bold"),
+                          width=50, height=50, border_width=1, border_color=self._ACCENT)
+        av.pack(side="left", padx=(0, 18)); av.pack_propagate(False)
+        ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 20, "bold"),
                      text_color=self._ACCENT).pack(expand=True)
         tc = ctk.CTkFrame(hrow, fg_color="transparent")
         tc.pack(side="left")
-        ctk.CTkLabel(tc, text="G.I.L. is online",
-                     font=ctk.CTkFont("Segoe UI", 16, "bold"),
+        ctk.CTkLabel(tc, text="G.I.L. is ready",
+                     font=ctk.CTkFont("Segoe UI", 17, "bold"),
                      text_color=self._TXT, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(tc, text="Generative Intelligence Liaison",
+        ctk.CTkLabel(tc, text="Generative Intelligence Liaison  •  Always on",
                      font=ctk.CTkFont("Segoe UI", 10),
                      text_color=self._MUTED, anchor="w").pack(anchor="w")
-
         ctk.CTkFrame(card, height=1, fg_color=self._BORDER).pack(fill="x", padx=16)
-
-        # Chips row
-        chips_frame = ctk.CTkFrame(card, fg_color="transparent")
-        chips_frame.pack(fill="x", padx=16, pady=(14, 18))
+        cf = ctk.CTkFrame(card, fg_color="transparent")
+        cf.pack(fill="x", padx=16, pady=(14, 18))
         for label, color in [("Voice", "#3FDDFA"), ("Hebrew", "#A78BFA"),
                               ("Git", "#22C55E"), ("Docker", "#F59E0B"),
-                              ("Search", "#3FDDFA"), ("Images", "#A78BFA")]:
-            chip = ctk.CTkFrame(chips_frame, fg_color="#0D0B1E",
-                                corner_radius=10, border_width=1,
-                                border_color="#201840")
-            chip.pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(chip, text=f" {label} ",
-                         font=ctk.CTkFont("Segoe UI", 9, "bold"),
-                         text_color=color).pack(pady=5, padx=2)
+                              ("Images", "#3FDDFA"), ("Search", "#A78BFA")]:
+            ch = ctk.CTkFrame(cf, fg_color="#0D0B1E", corner_radius=10,
+                              border_width=1, border_color="#201840")
+            ch.pack(side="left", padx=(0, 7))
+            ctk.CTkLabel(ch, text=f" {label} ",
+                         font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                         text_color=color).pack(pady=6, padx=2)
 
     # ── Typing indicator ──────────────────────────────────────────────────────
 
@@ -1484,7 +1706,7 @@ class ChatWindow(ctk.CTkToplevel):
             if self._typing_frame_ref:
                 return
             frame = ctk.CTkFrame(self._scroll, fg_color=self._SURF2, corner_radius=0)
-            frame.pack(fill="x", pady=0)
+            frame.pack(fill="x")
             row = ctk.CTkFrame(frame, fg_color="transparent")
             row.pack(fill="x", padx=28, pady=(12, 12))
             av = ctk.CTkFrame(row, fg_color="#1A1540", corner_radius=8,
@@ -1492,8 +1714,7 @@ class ChatWindow(ctk.CTkToplevel):
                               border_color=self._ACCENT)
             av.pack(side="left", anchor="n", padx=(0, 10), pady=(2, 0))
             av.pack_propagate(False)
-            ctk.CTkLabel(av, text="◈",
-                         font=ctk.CTkFont("Segoe UI", 9, "bold"),
+            ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 9, "bold"),
                          text_color=self._ACCENT).pack(expand=True)
             lbl = ctk.CTkLabel(row, text="  ●  ·  ·  ",
                                font=ctk.CTkFont("Segoe UI", 16, "bold"),
@@ -1533,7 +1754,7 @@ class ChatWindow(ctk.CTkToplevel):
         self._typing_phase += 1
         self._typing_id = self.after(300, self._animate_dots)
 
-    # ── Message rendering ─────────────────────────────────────────────────────
+    # ── Messages ──────────────────────────────────────────────────────────────
 
     def add_message(self, text: str, sender: str) -> None:
         if not text.strip():
@@ -1554,62 +1775,56 @@ class ChatWindow(ctk.CTkToplevel):
         import re
         return bool(re.search(r"```|`[^`]+`|\bdef \w+\(|\bfunction \w+\(", text))
 
-    def _render_code_block(self, parent, text: str) -> None:
-        import re
-        parts = re.split(r"(```[\s\S]*?```)", text)
-        for part in parts:
-            if part.startswith("```") and part.endswith("```"):
-                code = re.sub(r"^```\w*\n?", "", part).rstrip("`").strip()
-                code_frame = ctk.CTkFrame(parent, fg_color="#080620",
-                                          corner_radius=10,
-                                          border_width=1, border_color="#1E1840")
-                code_frame.pack(fill="x", pady=(6, 6))
-                top = ctk.CTkFrame(code_frame, fg_color="#0D0B22",
-                                   corner_radius=0, height=28)
-                top.pack(fill="x"); top.pack_propagate(False)
-                ctk.CTkLabel(top, text=" code",
-                             font=ctk.CTkFont("Consolas", 9),
-                             text_color="#3A2A70").pack(side="left", padx=10, pady=4)
-                ctk.CTkLabel(code_frame, text=code,
-                             font=ctk.CTkFont("Consolas", 11),
-                             text_color="#7ECEA8",
-                             wraplength=max(200, self.winfo_width() - 140),
-                             justify="left", anchor="w").pack(padx=16, pady=(6, 12), fill="x")
-            else:
-                if part.strip():
-                    ctk.CTkLabel(parent, text=part.strip(),
-                                 font=ctk.CTkFont("Segoe UI", 13),
-                                 text_color=self._TXT,
-                                 wraplength=max(200, self.winfo_width() - 120),
-                                 justify="left", anchor="w").pack(fill="x", pady=(0, 4))
+    @staticmethod
+    def _copy_to_clipboard(root, text: str) -> None:
+        try:
+            root.clipboard_clear()
+            root.clipboard_append(text)
+        except Exception:
+            pass
+
+    def _render_code_block(self, parent, code: str, lang: str = "") -> None:
+        frame = ctk.CTkFrame(parent, fg_color="#080620",
+                             corner_radius=10, border_width=1,
+                             border_color="#1E1840")
+        frame.pack(fill="x", pady=(6, 6))
+        top = ctk.CTkFrame(frame, fg_color="#0D0B22", corner_radius=0, height=30)
+        top.pack(fill="x"); top.pack_propagate(False)
+        ctk.CTkLabel(top, text=f" {lang or 'code'}",
+                     font=ctk.CTkFont("Consolas", 9),
+                     text_color="#4A3A7A").pack(side="left", padx=10, pady=4)
+        ctk.CTkButton(top, text="⎘ Copy", width=60, height=22,
+                      fg_color="#1A1540", hover_color="#241E5A",
+                      text_color=self._ACCENT,
+                      font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                      corner_radius=5,
+                      command=lambda c=code: self._copy_to_clipboard(self, c),
+                      ).pack(side="right", padx=8, pady=4)
+        ctk.CTkLabel(frame, text=code,
+                     font=ctk.CTkFont("Consolas", 11),
+                     text_color="#7ECEA8",
+                     wraplength=max(200, self.winfo_width() - 180),
+                     justify="left", anchor="w").pack(padx=16, pady=(6, 12), fill="x")
 
     def _render_bubble(self, text: str, sender: str, ts: float,
                        save: bool = True) -> None:
-        """
-        GIL messages: full-width #131028 purple surface row.
-        User messages: right-aligned #0C1D42 royal blue card.
-        """
-        import datetime as _dt
+        import datetime as _dt, re
         ts_str = _dt.datetime.fromtimestamp(ts).strftime("%H:%M")
-        wl     = max(260, self.winfo_width() - 120)
+        wl     = max(300, self.winfo_width() - 300)
 
         if sender == "gil":
-            # ── GIL: full-width elevated purple row ───────────────────────────
             row = ctk.CTkFrame(self._scroll, fg_color=self._SURF2, corner_radius=0)
             row.pack(fill="x")
-
             inner = ctk.CTkFrame(row, fg_color="transparent")
             inner.pack(fill="x", padx=28, pady=(14, 14))
 
-            # Name + avatar row
             name_row = ctk.CTkFrame(inner, fg_color="transparent")
             name_row.pack(fill="x", pady=(0, 10))
             av = ctk.CTkFrame(name_row, fg_color="#1A1540",
                               corner_radius=8, width=26, height=26,
                               border_width=1, border_color=self._ACCENT)
             av.pack(side="left", padx=(0, 10)); av.pack_propagate(False)
-            ctk.CTkLabel(av, text="◈",
-                         font=ctk.CTkFont("Segoe UI", 9, "bold"),
+            ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 9, "bold"),
                          text_color=self._ACCENT).pack(expand=True)
             ctk.CTkLabel(name_row, text="G.I.L.",
                          font=ctk.CTkFont("Segoe UI", 11, "bold"),
@@ -1617,33 +1832,39 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkLabel(name_row, text=ts_str,
                          font=ctk.CTkFont("Segoe UI", 9),
                          text_color=self._MUTED).pack(side="left", padx=(10, 0))
+            # Copy button
+            ctk.CTkButton(name_row, text="⎘", width=28, height=22,
+                          fg_color="transparent", hover_color="#1A1640",
+                          text_color=self._MUTED,
+                          font=ctk.CTkFont("Segoe UI", 10),
+                          corner_radius=5,
+                          command=lambda t=text: self._copy_to_clipboard(self, t),
+                          ).pack(side="right")
 
-            # Message content
-            if self._has_code(text):
-                self._render_code_block(inner, text)
-            else:
-                ctk.CTkLabel(inner, text=text,
-                             font=ctk.CTkFont("Segoe UI", 13),
-                             text_color=self._TXT,
-                             wraplength=wl, justify="left",
-                             anchor="w").pack(fill="x")
+            # Render content — handle code blocks inline
+            parts = re.split(r"(```(?:\w+)?\n?[\s\S]*?```)", text)
+            for part in parts:
+                if part.startswith("```") and part.endswith("```"):
+                    m    = re.match(r"```(\w*)\n?([\s\S]*?)```", part)
+                    lang = m.group(1) if m else ""
+                    code = m.group(2).strip() if m else part[3:-3].strip()
+                    self._render_code_block(inner, code, lang)
+                elif part.strip():
+                    ctk.CTkLabel(inner, text=part.strip(),
+                                 font=ctk.CTkFont("Segoe UI", 13),
+                                 text_color=self._TXT,
+                                 wraplength=wl, justify="left",
+                                 anchor="w").pack(fill="x", pady=(0, 4))
 
         else:
-            # ── User: right-aligned royal-blue card ───────────────────────────
             spacer = ctk.CTkFrame(self._scroll, fg_color="transparent")
             spacer.pack(fill="x", pady=(10, 10))
-
             inner = ctk.CTkFrame(spacer, fg_color="transparent")
             inner.pack(fill="x", padx=28)
-
-            # Push to right
             ctk.CTkFrame(inner, fg_color="transparent").pack(
                 side="left", fill="x", expand=True)
-
             col = ctk.CTkFrame(inner, fg_color="transparent")
             col.pack(side="right", anchor="e")
-
-            # Meta row
             meta = ctk.CTkFrame(col, fg_color="transparent")
             meta.pack(anchor="e", pady=(0, 6))
             ctk.CTkLabel(meta, text="You",
@@ -1652,8 +1873,6 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkLabel(meta, text=ts_str,
                          font=ctk.CTkFont("Segoe UI", 9),
                          text_color=self._MUTED).pack(side="left")
-
-            # Card
             card = ctk.CTkFrame(col, fg_color=self._USERBG,
                                 corner_radius=16,
                                 border_width=1, border_color=self._UBORDER)
@@ -1661,7 +1880,7 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkLabel(card, text=text,
                          font=ctk.CTkFont("Segoe UI", 13),
                          text_color=self._USERTXT,
-                         wraplength=min(wl, int(self.winfo_width() * 0.62)),
+                         wraplength=min(wl, int(self.winfo_width() * 0.55)),
                          justify="right", anchor="e").pack(padx=18, pady=14)
 
         if save:
@@ -1676,11 +1895,13 @@ class ChatWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
+    # ── Send ──────────────────────────────────────────────────────────────────
+
     def _send(self) -> None:
-        text = self._entry_var.get().strip()
+        text = self._get_input()
         if not text:
             return
-        self._entry_var.set("")
+        self._clear_input()
         self.add_message(text, "user")
         self.show_typing()
         threading.Thread(target=self._on_send, args=(text,),

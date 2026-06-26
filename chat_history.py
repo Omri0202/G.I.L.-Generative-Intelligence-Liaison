@@ -46,8 +46,16 @@ def _ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS sessions (
                 id         TEXT  PRIMARY KEY,
                 started_at REAL  NOT NULL,
-                ended_at   REAL
+                ended_at   REAL,
+                name       TEXT
             );
+            -- Add name column if upgrading from older schema
+            CREATE TABLE IF NOT EXISTS sessions_new (
+                id TEXT PRIMARY KEY, started_at REAL NOT NULL,
+                ended_at REAL, name TEXT
+            );
+            INSERT OR IGNORE INTO sessions_new SELECT id, started_at, ended_at, NULL FROM sessions;
+            DROP TABLE IF EXISTS sessions_tmp;
             CREATE TABLE IF NOT EXISTS messages (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT    NOT NULL,
@@ -160,6 +168,87 @@ def end_session() -> None:
             conn.close()
         except Exception:
             pass
+
+
+def list_sessions(limit: int = 30) -> list[dict]:
+    """
+    Return recent sessions for the sidebar, newest first.
+    Each dict: {id, name, started_at, msg_count, preview}
+    """
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute("""
+                SELECT s.id, s.name, s.started_at,
+                       COUNT(m.id) as msg_count,
+                       MIN(CASE WHEN m.sender='user' THEN m.content END) as preview
+                FROM sessions s
+                LEFT JOIN messages m ON m.session_id = s.id
+                GROUP BY s.id
+                HAVING msg_count > 0
+                ORDER BY s.started_at DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+
+def rename_session(session_id: str, name: str) -> None:
+    """Give a session a custom display name."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute("UPDATE sessions SET name=? WHERE id=?", (name, session_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+def load_session(session_id: str) -> list[dict]:
+    """Load all messages for a specific session, oldest-first."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            rows = conn.execute(
+                "SELECT sender, content, ts FROM messages WHERE session_id=? ORDER BY ts",
+                (session_id,)
+            ).fetchall()
+            conn.close()
+            return [{"sender": r["sender"], "content": r["content"],
+                     "ts": r["ts"], "session_id": session_id,
+                     "is_session_start": False}
+                    for r in rows]
+        except Exception:
+            return []
+
+
+def new_chat_session() -> str:
+    """Start a completely fresh session (for New Chat button)."""
+    global _current_session
+    _current_session = str(uuid.uuid4())
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "INSERT INTO sessions (id, started_at) VALUES (?, ?)",
+                (_current_session, time.time()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+    return _current_session
+
+
+def get_current_session() -> str:
+    return _current_session
 
 
 def clear_old(days: int = 30) -> None:
