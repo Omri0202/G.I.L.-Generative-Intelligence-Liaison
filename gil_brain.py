@@ -549,7 +549,11 @@ class GILBrain:
 
         except requests.exceptions.ConnectionError:
             log.error("No internet connection")
-            return _err("No connection. Check your internet.")
+            if _retry < 1:
+                import time as _t3; _t3.sleep(2)
+                return self.query(user_input, project_context=project_context,
+                                  camera_state=camera_state, _retry=_retry + 1)
+            return _err("No internet connection — check your network.")
         except requests.exceptions.Timeout:
             log.warning("Groq timed out — retrying in 3 s")
             time.sleep(3)
@@ -560,7 +564,12 @@ class GILBrain:
                               camera_state=camera_state, _retry=_retry + 1)
         except Exception as exc:
             log.error("Brain error: %s", exc, exc_info=True)
-            return {"speech": "Groq is unavailable right now. Try again in a moment.",
+            # Retry once more after 2s before giving up
+            if _retry < 1:
+                import time as _t2; _t2.sleep(2)
+                return self.query(user_input, project_context=project_context,
+                                  camera_state=camera_state, _retry=_retry + 1)
+            return {"speech": "I couldn't reach my AI service. Check your internet or API key and try again.",
                     "action": None, "target": None, "report": None}
         finally:
             # Remove orphaned user message if no response was obtained

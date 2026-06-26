@@ -1429,6 +1429,7 @@ class ChatWindow(ctk.CTkToplevel):
             corner_radius=14, border_width=1, border_color=self._BORDER,
         )
         self._input_wrap.pack(fill="x", padx=18, pady=14)
+        self._input_wrap.bind("<Button-1>", self._activate_input)
 
         # Multi-line textbox (like Claude)
         self._textbox = ctk.CTkTextbox(
@@ -1442,16 +1443,13 @@ class ChatWindow(ctk.CTkToplevel):
             activate_scrollbars=False,
         )
         self._textbox.pack(side="left", fill="x", expand=True, padx=(14, 6), pady=10)
-        self._textbox.insert("0.0", "")
         self._textbox.bind("<Return>",       self._on_enter)
         self._textbox.bind("<Shift-Return>", self._on_shift_enter)
-        self._textbox.bind("<FocusIn>",      lambda e: self._input_wrap.configure(border_color=self._ACCENT))
-        self._textbox.bind("<FocusOut>",     lambda e: self._input_wrap.configure(border_color=self._BORDER))
-        self._textbox.configure(text_color=self._MUTED)
-        self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
+        self._textbox.bind("<Button-1>",     self._activate_input)
+        self._textbox.bind("<FocusOut>",     self._restore_placeholder)
         self._placeholder_active = True
-        self._textbox.bind("<FocusIn>",  self._clear_placeholder)
-        self._textbox.bind("<FocusOut>", self._restore_placeholder)
+        self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
+        self._textbox.configure(text_color=self._MUTED, state="disabled")
 
         # File upload button
         ctk.CTkButton(
@@ -1471,23 +1469,32 @@ class ChatWindow(ctk.CTkToplevel):
 
     # ── Placeholder handling ──────────────────────────────────────────────────
 
-    def _clear_placeholder(self, event=None) -> None:
+    def _activate_input(self, event=None) -> None:
+        """Clear placeholder, enable textbox, give focus."""
         if self._placeholder_active:
+            self._textbox.configure(state="normal", text_color=self._TXT)
             self._textbox.delete("0.0", "end")
-            self._textbox.configure(text_color=self._TXT)
             self._placeholder_active = False
+            self._input_wrap.configure(border_color=self._ACCENT)
+        else:
+            self._textbox.configure(state="normal")
+        self._textbox.focus()
 
     def _restore_placeholder(self, event=None) -> None:
-        if not self._textbox.get("0.0", "end").strip():
-            self._textbox.configure(text_color=self._MUTED)
+        self._textbox.configure(state="normal")
+        content = self._textbox.get("0.0", "end-1c").strip()
+        if not content:
             self._textbox.delete("0.0", "end")
             self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
+            self._textbox.configure(text_color=self._MUTED, state="disabled")
             self._placeholder_active = True
+            self._input_wrap.configure(border_color=self._BORDER)
 
     def _on_enter(self, event) -> str:
         if not self._placeholder_active:
+            self._textbox.configure(state="normal")
             self._send()
-        return "break"   # prevent default newline
+        return "break"
 
     def _on_shift_enter(self, event) -> None:
         pass   # allow default newline insert
@@ -1495,9 +1502,11 @@ class ChatWindow(ctk.CTkToplevel):
     def _get_input(self) -> str:
         if self._placeholder_active:
             return ""
+        self._textbox.configure(state="normal")
         return self._textbox.get("0.0", "end").strip()
 
     def _clear_input(self) -> None:
+        self._textbox.configure(state="normal")
         self._textbox.delete("0.0", "end")
         self._restore_placeholder()
 
@@ -1981,8 +1990,8 @@ class ChatWindow(ctk.CTkToplevel):
 
     def _edit_message(self, text: str) -> None:
         """Put a previous message back in the input box for editing."""
-        self._clear_input()
-        self._textbox.configure(text_color=self._TXT)
+        self._textbox.configure(state="normal", text_color=self._TXT)
+        self._textbox.delete("0.0", "end")
         self._textbox.insert("0.0", text)
         self._placeholder_active = False
         self._input_wrap.configure(border_color=self._ACCENT)
@@ -2231,7 +2240,7 @@ class ChatWindow(ctk.CTkToplevel):
             self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
 
     def _upload_file(self) -> None:
-        """Open file picker and analyze an image via GIL's vision."""
+        """Open image picker, show thumbnail preview, then analyze."""
         import tkinter.filedialog as fd
         path = fd.askopenfilename(
             parent=self,
@@ -2243,11 +2252,34 @@ class ChatWindow(ctk.CTkToplevel):
         )
         if not path:
             return
-        # Put an analysis request in the input
-        self._clear_input()
-        self._textbox.configure(text_color=self._TXT)
-        self._textbox.insert("0.0", f"Analyze this image: {path}")
+        self._pending_image = path
+        # Show thumbnail in the chat area
+        try:
+            from PIL import Image as _PI, ImageTk as _ITK
+            img = _PI.open(path).convert("RGBA")
+            img.thumbnail((90, 90), _PI.LANCZOS)
+            photo = _ITK.PhotoImage(img)
+            self._img_photo_ref = photo
+            attach = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            attach.pack(fill="x", pady=(4, 0))
+            ctk.CTkLabel(attach, image=photo, text="",
+                         fg_color="#0D0B2E", corner_radius=10,
+                         width=90, height=90).pack(side="right", padx=28, pady=4)
+            ctk.CTkButton(attach, text="× Remove",
+                          fg_color="transparent", hover_color="#1A1030",
+                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 9),
+                          width=60, height=20, corner_radius=4,
+                          command=lambda f=attach: [f.destroy(), setattr(self, "_pending_image", None)],
+                          ).pack(side="right", padx=4)
+            try: self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception: pass
+        except Exception: pass
+        # Clean prompt in input box
+        self._textbox.configure(state="normal", text_color=self._TXT)
+        self._textbox.delete("0.0", "end")
+        self._textbox.insert("0.0", "What do you see in this image?")
         self._placeholder_active = False
+        self._input_wrap.configure(border_color=self._ACCENT)
         self._textbox.focus()
 
     def _rate_last(self, rating: int) -> None:
@@ -2302,12 +2334,16 @@ class ChatWindow(ctk.CTkToplevel):
         text = self._get_input()
         if not text:
             return
-        self._last_user_text = text   # save for regenerate
-        self._last_gil_frames.clear() # previous response gone
+        pending_img = getattr(self, "_pending_image", None)
+        self._pending_image = None
+        send_text = (f"Analyze this image file path: {pending_img}\nQuestion: {text}"
+                     if pending_img else text)
+        self._last_user_text = text
+        self._last_gil_frames.clear()
         self._clear_input()
         self.add_message(text, "user")
         self.show_typing()
-        threading.Thread(target=self._on_send, args=(text,),
+        threading.Thread(target=self._on_send, args=(send_text,),
                          daemon=True, name="GIL-ChatSend").start()
 
 
