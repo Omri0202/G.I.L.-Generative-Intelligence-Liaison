@@ -75,6 +75,16 @@ def _ensure_schema() -> None:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def set_current_session(session_id: str) -> None:
+    """
+    Switch the active session — call this when the user opens an existing
+    chat from the sidebar, so new messages append to THAT conversation
+    instead of whatever session was active before.
+    """
+    global _current_session
+    _current_session = session_id
+
+
 def init_session() -> str:
     """
     Start a new chat session. Call once when GIL launches.
@@ -103,17 +113,25 @@ def save_message(sender: str, content: str) -> None:
     if not _current_session or not content.strip():
         return
     _ensure_schema()
+    sid = _current_session
     with _lock:
         try:
             conn = _get_conn()
             conn.execute(
                 "INSERT INTO messages (session_id, sender, content, ts) VALUES (?,?,?,?)",
-                (_current_session, sender, content.strip(), time.time()),
+                (sid, sender, content.strip(), time.time()),
             )
             conn.commit()
             conn.close()
         except Exception as exc:
             print(f"[G.I.L. HISTORY] save_message failed: {exc}")
+            return
+
+    # After the first full exchange (user + gil), auto-name the session —
+    # same pattern as ChatGPT/Claude: title is generated once, never re-titled.
+    if sender == "gil":
+        threading.Thread(target=_maybe_auto_name, args=(sid,),
+                         daemon=True, name="GIL-AutoName").start()
 
 
 def load_recent(limit: int = 80) -> list[dict]:
@@ -197,6 +215,90 @@ def list_sessions(limit: int = 30) -> list[dict]:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+
+_session_name_callback = None   # gui.py registers this to live-update the sidebar
+
+
+def set_session_name_callback(fn) -> None:
+    """Register a callback(session_id, title) fired when a session is auto-named."""
+    global _session_name_callback
+    _session_name_callback = fn
+
+
+def _maybe_auto_name(session_id: str) -> None:
+    """
+    Trigger auto-naming once a session has its first full exchange,
+    but only if it doesn't already have a name (auto or user-set).
+    """
+    try:
+        conn = _get_conn()
+        row = conn.execute("SELECT name FROM sessions WHERE id=?", (session_id,)).fetchone()
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM messages WHERE session_id=?", (session_id,)
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return
+    if row and row["name"]:
+        return                       # already named — never re-title
+    if not cnt or cnt["c"] < 2:
+        return                       # need at least one full user+gil exchange
+    _auto_name_session(session_id)
+
+
+def _auto_name_session(session_id: str) -> None:
+    """Ask Groq for a short topic title summarizing the conversation so far."""
+    try:
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT sender, content FROM messages WHERE session_id=? ORDER BY ts LIMIT 4",
+            (session_id,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return
+    if not rows:
+        return
+
+    transcript = "\n".join(f"{r['sender']}: {r['content'][:200]}" for r in rows)
+
+    try:
+        import os
+        import requests
+        key = os.getenv("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY_2", "")
+        if not key:
+            return
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "system", "content":
+                        "Generate a short 3-5 word title summarizing this conversation's "
+                        "topic. No quotes, no trailing punctuation, no 'Title:' prefix — "
+                        "just the title text itself."},
+                    {"role": "user", "content": transcript},
+                ],
+                "max_tokens": 20,
+                "temperature": 0.3,
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        title = resp.json()["choices"][0]["message"]["content"].strip().strip('"\'').strip()
+        if not title:
+            return
+        title = title[:48]
+        rename_session(session_id, title)
+        if _session_name_callback:
+            try:
+                _session_name_callback(session_id, title)
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"[G.I.L. HISTORY] auto-name failed: {exc}")
 
 
 def rename_session(session_id: str, name: str) -> None:

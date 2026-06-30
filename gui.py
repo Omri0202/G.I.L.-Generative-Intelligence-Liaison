@@ -1279,7 +1279,25 @@ class ChatWindow(ctk.CTkToplevel):
         self._build()
         self._refresh_sidebar()
         self._load_current()
+        try:
+            from chat_history import set_session_name_callback
+            set_session_name_callback(self._on_session_auto_named)
+        except Exception:
+            pass
         self.lift(); self.focus()
+
+    def _on_session_auto_named(self, session_id: str, title: str) -> None:
+        """Called (from a background thread) when chat_history finishes auto-naming a session."""
+        def _do():
+            try:
+                if not self.winfo_exists():
+                    return
+            except Exception:
+                return
+            if session_id == self._current_session:
+                self._session_name_var.set(title)
+            self._refresh_sidebar()
+        self.after(0, _do)
 
     # ── Build shell ───────────────────────────────────────────────────────────
 
@@ -1699,7 +1717,8 @@ class ChatWindow(ctk.CTkToplevel):
         for w in self._scroll.winfo_children():
             w.destroy()
         try:
-            from chat_history import load_session
+            from chat_history import load_session, set_current_session
+            set_current_session(session_id)   # new messages append to this session now
             messages = load_session(session_id)
         except Exception:
             messages = []
