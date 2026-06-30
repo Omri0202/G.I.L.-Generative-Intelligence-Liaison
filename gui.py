@@ -16,6 +16,8 @@ import tkinter as tk
 import customtkinter as ctk
 from pathlib import Path
 import datetime as _dt
+import re
+from gil_icons import icon as _icon
 
 
 # ── Transparency color (pure black = see-through on Windows) ──────────────────
@@ -1313,9 +1315,8 @@ class ChatWindow(ctk.CTkToplevel):
                                    corner_radius=8, border_width=1,
                                    border_color=self._BORDER)
         search_wrap.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkLabel(search_wrap, text="\U0001f50d",
-                     font=ctk.CTkFont("Segoe UI", 11),
-                     text_color=self._MUTED).pack(side="left", padx=(8, 2))
+        ctk.CTkLabel(search_wrap, image=_icon("search", self._MUTED, 13), text="",
+                     ).pack(side="left", padx=(8, 2))
         ctk.CTkEntry(search_wrap, textvariable=self._search_var,
                      placeholder_text="Search chats...",
                      font=ctk.CTkFont("Segoe UI", 11),
@@ -1347,12 +1348,14 @@ class ChatWindow(ctk.CTkToplevel):
         # Export + Starred quick actions
         actions_row = ctk.CTkFrame(self._sidebar, fg_color="transparent")
         actions_row.pack(fill="x", padx=8, pady=4)
-        ctk.CTkButton(actions_row, text="\U0001f4e5 Export", width=90, height=28,
+        ctk.CTkButton(actions_row, text=" Export", image=_icon("export", self._MUTED, 13),
+                      compound="left", width=90, height=28,
                       fg_color="transparent", hover_color="#1A1640",
                       text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                       corner_radius=6, command=self._export_chat,
                       ).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(actions_row, text="\u2605 Starred", width=90, height=28,
+        ctk.CTkButton(actions_row, text=" Starred", image=_icon("star_outline", self._MUTED, 13),
+                      compound="left", width=90, height=28,
                       fg_color="transparent", hover_color="#1A1640",
                       text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                       corner_radius=6, command=self._show_starred,
@@ -1461,15 +1464,15 @@ class ChatWindow(ctk.CTkToplevel):
 
         # File upload button
         ctk.CTkButton(
-            self._input_wrap, text="📎", width=36, height=36,
+            self._input_wrap, text="", image=_icon("attach", self._MUTED, 16),
+            width=36, height=36,
             fg_color="transparent", hover_color="#1A1640",
-            text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 14),
             corner_radius=8, command=self._upload_file,
         ).pack(side="right", padx=(0, 2), pady=8)
         send_col = ctk.CTkFrame(self._input_wrap, fg_color="transparent")
         send_col.pack(side="right", padx=(0, 8), pady=8)
         ctk.CTkButton(
-            send_col, text="↑", width=40, height=40,
+            send_col, text="", image=_icon("send", "#020810", 18),
             fg_color=self._ACCENT, hover_color="#00B8D4",
             text_color="#020810", font=ctk.CTkFont("Segoe UI", 18, "bold"),
             corner_radius=10, command=self._send,
@@ -1538,37 +1541,24 @@ class ChatWindow(ctk.CTkToplevel):
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if r.returncode == 0 and r.stdout.strip():
-                badges.append(("⎇ " + r.stdout.strip(), self._PURPLE, "#0D0B2E", "#1E1840"))
+                badges.append((None, "⎇ " + r.stdout.strip(), self._PURPLE, "#0D0B2E", "#1E1840", False))
         except Exception:
             pass
 
         # Model (clickable to cycle)
         try:
             from gil_brain import GROQ_MODEL
-            badges.append((f"\U0001f916 {GROQ_MODEL[:18]}", self._ACCENT, "#0D0B2E", "#1E1840"))
+            badges.append(("robot", GROQ_MODEL[:18], self._ACCENT, "#0D0B2E", "#1E1840", True))
         except Exception:
-            badges.append(("\U0001f916 llama-3.1", self._ACCENT, "#0D0B2E", "#1E1840"))
+            badges.append(("robot", "llama-3.1", self._ACCENT, "#0D0B2E", "#1E1840", True))
 
         # Dev mode
         try:
             from dev_config import is_enabled
             if is_enabled():
-                badges.append(("● DEV", "#22C55E", "#0A2820", "#1E4030"))
+                badges.append((None, "● DEV", "#22C55E", "#0A2820", "#1E4030", False))
         except Exception:
             pass
-
-        for badge_text, fg, bg, border in badges:
-            b = ctk.CTkFrame(self._badge_frame, fg_color=bg,
-                             corner_radius=7, border_width=1,
-                             border_color=border)
-            b.pack(side="left", padx=(0, 6))
-            lbl = ctk.CTkLabel(b, text=badge_text,
-                               font=ctk.CTkFont("Segoe UI", 10, "bold"),
-                               text_color=fg, cursor="hand2")
-            lbl.pack(padx=8, pady=3)
-            if "\U0001f916" in badge_text:
-                lbl.bind("<Button-1>", lambda e: self._cycle_model())
-                b.configure(cursor="hand2")
 
         # Token usage indicator
         try:
@@ -1577,9 +1567,29 @@ class ChatWindow(ctk.CTkToplevel):
             if tokens > 0:
                 pct = min(100, int(tokens / 32_768 * 100))
                 col = "#22C55E" if pct < 60 else ("#F59E0B" if pct < 85 else "#EF4444")
-                badges.append((f"\U0001f9e0 {tokens:,} tok", col, "#0D0B2E", "#1E1840"))
+                badges.append(("activity", f"{tokens:,} tok", col, "#0D0B2E", "#1E1840", False))
         except Exception:
             pass
+
+        for icon_name, badge_text, fg, bg, border, clickable in badges:
+            b = ctk.CTkFrame(self._badge_frame, fg_color=bg,
+                             corner_radius=7, border_width=1,
+                             border_color=border)
+            b.pack(side="left", padx=(0, 6))
+            row = ctk.CTkFrame(b, fg_color="transparent")
+            row.pack(padx=8, pady=3)
+            if icon_name:
+                isz = 14 if icon_name == "robot" else 11
+                ctk.CTkLabel(row, image=_icon(icon_name, fg, isz), text="",
+                             ).pack(side="left", padx=(0, 4))
+            lbl = ctk.CTkLabel(row, text=badge_text,
+                               font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                               text_color=fg)
+            lbl.pack(side="left")
+            if clickable:
+                lbl.bind("<Button-1>", lambda e: self._cycle_model())
+                b.configure(cursor="hand2")
+                row.bind("<Button-1>", lambda e: self._cycle_model())
 
         # Schedule next refresh
         self.after(10_000, self._update_context_badges)
@@ -2057,7 +2067,7 @@ class ChatWindow(ctk.CTkToplevel):
 
     def _render_bubble(self, text: str, sender: str, ts: float,
                        save: bool = True) -> None:
-        import datetime as _dt, re
+        import datetime as _dt
         ts_str = _dt.datetime.fromtimestamp(ts).strftime("%H:%M")
         wl     = max(300, self.winfo_width() - 300)
 
@@ -2118,36 +2128,38 @@ class ChatWindow(ctk.CTkToplevel):
                              wraplength=wl, justify="left",
                              anchor="w").pack(fill="x")
 
-            # Action row: Copy + Thumbs + Star + Regenerate
+            # Action row: Copy + Thumbs + Star + Regenerate (line icons, no emoji)
             act = ctk.CTkFrame(row, fg_color="transparent")
             act.pack(fill="x", padx=28, pady=(0, 6))
-            ctk.CTkButton(act, text="\u2398 Copy", width=72, height=24,
+            ctk.CTkButton(act, text=" Copy", image=_icon("copy", self._MUTED, 12),
+                          compound="left", width=72, height=24,
                           fg_color="transparent", hover_color="#1A1640",
                           text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                           corner_radius=6,
                           command=lambda t=text: self._copy_to_clipboard(self, t),
                           ).pack(side="left", padx=(0, 2))
-            ctk.CTkButton(act, text="\U0001f44d", width=30, height=24,
+            ctk.CTkButton(act, text="", image=_icon("thumbs_up", self._MUTED, 14),
+                          width=30, height=24,
                           fg_color="transparent", hover_color="#1A2040",
-                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 12),
                           corner_radius=6,
                           command=lambda: self._rate_last(1),
                           ).pack(side="left", padx=(0, 2))
-            ctk.CTkButton(act, text="\U0001f44e", width=30, height=24,
+            ctk.CTkButton(act, text="", image=_icon("thumbs_down", self._MUTED, 14),
+                          width=30, height=24,
                           fg_color="transparent", hover_color="#201020",
-                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 12),
                           corner_radius=6,
                           command=lambda: self._rate_last(-1),
                           ).pack(side="left", padx=(0, 4))
-            star_btn = ctk.CTkButton(act, text="\u2606", width=30, height=24,
+            star_btn = ctk.CTkButton(act, text="", image=_icon("star_outline", self._MUTED, 14),
+                          width=30, height=24,
                           fg_color="transparent", hover_color="#1A1040",
-                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 13),
                           corner_radius=6,
                           command=lambda sb=None: self._pin_last(sb),
                           )
             star_btn.pack(side="left", padx=(0, 4))
             star_btn.configure(command=lambda b=star_btn: self._pin_last(b))
-            ctk.CTkButton(act, text="\u21ba Regenerate", width=96, height=24,
+            ctk.CTkButton(act, text=" Regenerate", image=_icon("regenerate", self._MUTED, 12),
+                          compound="left", width=96, height=24,
                           fg_color="transparent", hover_color="#1A1640",
                           text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                           corner_radius=6, command=self._regenerate,
@@ -2167,10 +2179,9 @@ class ChatWindow(ctk.CTkToplevel):
             col.pack(side="right", anchor="e")
             meta = ctk.CTkFrame(col, fg_color="transparent")
             meta.pack(anchor="e", pady=(0, 6))
-            ctk.CTkButton(meta, text="\u270f", width=26, height=22,
+            ctk.CTkButton(meta, text="", image=_icon("edit", self._MUTED, 12),
+                          width=26, height=22,
                           fg_color="transparent", hover_color="#1A1640",
-                          text_color=self._MUTED,
-                          font=ctk.CTkFont("Segoe UI", 11),
                           corner_radius=5,
                           command=lambda t=text: self._edit_message(t),
                           ).pack(side="left", padx=(0, 6))
@@ -2238,9 +2249,13 @@ class ChatWindow(ctk.CTkToplevel):
             w.destroy()
 
         if not pinned:
-            ctk.CTkLabel(self._scroll, text="No starred messages yet.\n\nClick \u2606 on any G.I.L. message to star it.",
+            empty = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            empty.pack(expand=True, pady=60)
+            ctk.CTkLabel(empty, image=_icon("star_outline", self._MUTED, 28), text="",
+                         ).pack(pady=(0, 10))
+            ctk.CTkLabel(empty, text="No starred messages yet.\nStar any G.I.L. message to save it here.",
                          font=ctk.CTkFont("Segoe UI", 12),
-                         text_color=self._MUTED, justify="center").pack(expand=True, pady=60)
+                         text_color=self._MUTED, justify="center").pack()
             return
 
         self._session_divider("Starred Messages")
@@ -2283,7 +2298,8 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkLabel(thumb, text=fname[:22],
                          font=ctk.CTkFont("Segoe UI", 9),
                          text_color=self._MUTED).pack(padx=6, pady=(0, 6))
-            ctk.CTkButton(attach, text="x Remove",
+            ctk.CTkButton(attach, text=" Remove", image=_icon("close", self._MUTED, 9),
+                          compound="left",
                           fg_color="transparent", hover_color="#1A1030",
                           text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 9),
                           width=64, height=20, corner_radius=4,
@@ -2361,7 +2377,7 @@ class ChatWindow(ctk.CTkToplevel):
             if msg_id:
                 pin_message(msg_id, True)
                 if star_btn:
-                    star_btn.configure(text="\u2605", text_color="#F59E0B")
+                    star_btn.configure(image=_icon("star_filled", "#F59E0B", 14))
         except Exception:
             pass
 
