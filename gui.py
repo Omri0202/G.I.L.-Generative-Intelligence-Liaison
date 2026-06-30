@@ -1243,24 +1243,54 @@ class ChatWindow(ctk.CTkToplevel):
     Palette: Deep space purple #0D0B1E, elevated #131028, royal blue #0C1D42
     """
 
-    _PAGE    = "#0D0B1E"
-    _SIDE    = "#100E24"
-    _SURF2   = "#131028"
-    _USERBG  = "#0C1D42"
-    _BORDER  = "#1E1840"
-    _UBORDER = "#1A3870"
-    _TXT     = "#EDE9FF"
-    _USERTXT = "#A8D0FF"
-    _NAME_G  = "#3FDDFA"
-    _NAME_U  = "#4A90E2"
-    _MUTED   = "#4A3A7A"
-    _INPUT   = "#16123A"
-    _ACCENT  = "#3FDDFA"
-    _PURPLE  = "#A78BFA"
-    _DIMMED  = "#8A7AAA"
+    _THEMES = {
+        "dark": dict(
+            PAGE="#0D0B1E", SIDE="#100E24", SURF2="#131028", USERBG="#0C1D42",
+            BORDER="#1E1840", UBORDER="#1A3870", TXT="#EDE9FF", USERTXT="#A8D0FF",
+            NAME_G="#3FDDFA", NAME_U="#4A90E2", MUTED="#4A3A7A", INPUT="#16123A",
+            ACCENT="#3FDDFA", PURPLE="#A78BFA", DIMMED="#8A7AAA",
+            AVATAR_BG="#1A1540", SEP="#0A0820", SCROLL="#0A0820",
+            BTN_TXT="#020810", VERSION_TXT="#28204C", WELCOME_BG="#1C1848",
+            WELCOME_BORDER="#2E2870",
+        ),
+        "light": dict(
+            PAGE="#F7F5FC", SIDE="#FFFFFF", SURF2="#F0ECFA", USERBG="#E4EEFF",
+            BORDER="#E2DCF2", UBORDER="#C8D8F4", TXT="#211A38", USERTXT="#1B3D6E",
+            NAME_G="#0B9CB8", NAME_U="#2A5DAE", MUTED="#8479A6", INPUT="#FBFAFF",
+            ACCENT="#0B9CB8", PURPLE="#7C5CDB", DIMMED="#6B6090",
+            AVATAR_BG="#E8E2FA", SEP="#E6E0F4", SCROLL="#FBFAFF",
+            BTN_TXT="#FFFFFF", VERSION_TXT="#B4ACD4", WELCOME_BG="#EFE9FC",
+            WELCOME_BORDER="#D8CCF4",
+        ),
+    }
+
+    @staticmethod
+    def _load_theme_pref() -> str:
+        try:
+            import json
+            cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")
+                             .read_text(encoding="utf-8"))
+            return cfg.get("chat_theme", "dark")
+        except Exception:
+            return "dark"
+
+    @staticmethod
+    def _save_theme_pref(theme: str) -> None:
+        try:
+            import json
+            p = Path(__file__).parent / "data" / "gil_config.json"
+            cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+            cfg["chat_theme"] = theme
+            p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def __init__(self, parent, on_send: callable):
         super().__init__(parent)
+        self._theme_name = self._load_theme_pref()
+        for key, val in self._THEMES[self._theme_name].items():
+            setattr(self, f"_{key}", val)
+
         self.title("G.I.L. — Chat")
         self.geometry("980x840")
         self.minsize(700, 560)
@@ -1317,7 +1347,7 @@ class ChatWindow(ctk.CTkToplevel):
         # GIL logo row
         lr = ctk.CTkFrame(self._sidebar, fg_color="transparent", height=54)
         lr.pack(fill="x"); lr.pack_propagate(False)
-        av_s = ctk.CTkFrame(lr, fg_color="#1A1540", corner_radius=9,
+        av_s = ctk.CTkFrame(lr, fg_color=self._AVATAR_BG, corner_radius=9,
                             width=30, height=30, border_width=1, border_color=self._ACCENT)
         av_s.pack(side="left", padx=(12, 8), pady=12); av_s.pack_propagate(False)
         ctk.CTkLabel(av_s, text="\u25c8",
@@ -1325,13 +1355,13 @@ class ChatWindow(ctk.CTkToplevel):
                      text_color=self._ACCENT).pack(expand=True)
         ctk.CTkLabel(lr, text="G.I.L.",
                      font=ctk.CTkFont("Segoe UI", 13, "bold"),
-                     text_color="#EDE9FF").pack(side="left")
+                     text_color=self._TXT).pack(side="left")
         ctk.CTkFrame(self._sidebar, height=1, fg_color=self._BORDER).pack(fill="x", padx=8)
 
         # Search bar
         self._search_var = ctk.StringVar()
         self._search_var.trace_add("write", lambda *a: self._refresh_sidebar())
-        search_wrap = ctk.CTkFrame(self._sidebar, fg_color="#0D0B1E",
+        search_wrap = ctk.CTkFrame(self._sidebar, fg_color=self._PAGE,
                                    corner_radius=8, border_width=1,
                                    border_color=self._BORDER)
         search_wrap.pack(fill="x", padx=10, pady=(8, 4))
@@ -1349,7 +1379,7 @@ class ChatWindow(ctk.CTkToplevel):
         ctk.CTkButton(
             self._sidebar, text="+ New Chat", height=38,
             fg_color=self._ACCENT, hover_color="#00B8D4",
-            text_color="#020810", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            text_color=self._BTN_TXT, font=ctk.CTkFont("Segoe UI", 12, "bold"),
             corner_radius=10, command=self._new_chat,
         ).pack(fill="x", padx=12, pady=(14, 10))
 
@@ -1390,7 +1420,7 @@ class ChatWindow(ctk.CTkToplevel):
             ver = "1.x"
         ctk.CTkLabel(info_bar, text=f"G.I.L. v{ver}  •  llama-3.1",
                      font=ctk.CTkFont("Segoe UI", 9),
-                     text_color="#28204C").pack(anchor="w", padx=12, pady=14)
+                     text_color=self._VERSION_TXT).pack(anchor="w", padx=12, pady=14)
 
         # ── Separator ─────────────────────────────────────────────────────────
         ctk.CTkFrame(root, width=1, fg_color=self._BORDER).pack(side="left", fill="y")
@@ -1404,7 +1434,7 @@ class ChatWindow(ctk.CTkToplevel):
         hdr.pack(fill="x"); hdr.pack_propagate(False)
 
         # Avatar
-        av_h = ctk.CTkFrame(hdr, fg_color="#1A1540", corner_radius=10,
+        av_h = ctk.CTkFrame(hdr, fg_color=self._AVATAR_BG, corner_radius=10,
                             width=36, height=36,
                             border_width=1, border_color=self._ACCENT)
         av_h.pack(side="left", padx=(14, 8), pady=12); av_h.pack_propagate(False)
@@ -1427,18 +1457,26 @@ class ChatWindow(ctk.CTkToplevel):
                      font=ctk.CTkFont("Segoe UI", 9),
                      text_color=self._MUTED, anchor="w").pack(anchor="w")
 
+        # Theme toggle (sun/moon)
+        theme_icon = "sun" if self._theme_name == "dark" else "moon"
+        ctk.CTkButton(hdr, text="", image=_icon(theme_icon, self._MUTED, 15),
+                      width=32, height=32,
+                      fg_color="transparent", hover_color=self._BORDER,
+                      corner_radius=8, command=self._toggle_theme,
+                      ).pack(side="right", padx=(0, 4), pady=10)
+
         # Context badges
         self._badge_frame = ctk.CTkFrame(hdr, fg_color="transparent")
         self._badge_frame.pack(side="right", padx=14, pady=10)
         self._update_context_badges()
 
-        ctk.CTkFrame(main, height=1, fg_color="#0A0820").pack(fill="x")
+        ctk.CTkFrame(main, height=1, fg_color=self._SEP).pack(fill="x")
 
         # ── Scroll area ───────────────────────────────────────────────────────
         self._scroll = ctk.CTkScrollableFrame(
-            main, fg_color="#0A0820",
-            scrollbar_button_color="#1E1840",
-            scrollbar_button_hover_color="#2A2460",
+            main, fg_color=self._SCROLL,
+            scrollbar_button_color=self._BORDER,
+            scrollbar_button_hover_color=self._UBORDER,
         )
         self._scroll.pack(fill="both", expand=True)
         try:
@@ -1451,7 +1489,7 @@ class ChatWindow(ctk.CTkToplevel):
             pass
 
         # ── Input bar ─────────────────────────────────────────────────────────
-        ctk.CTkFrame(main, height=1, fg_color="#0A0820").pack(fill="x")
+        ctk.CTkFrame(main, height=1, fg_color=self._SEP).pack(fill="x")
         bar = ctk.CTkFrame(main, fg_color=self._SIDE, corner_radius=0)
         bar.pack(fill="x")
 
@@ -1578,12 +1616,20 @@ class ChatWindow(ctk.CTkToplevel):
         return None
 
     def _on_slash_pick(self, item) -> None:
-        cmd, _desc, expansion = item
+        cmd, _desc, expansion, auto_send = item
         if self._slash_menu:
             self._slash_menu.hide()
         if cmd == "/clear":
             self._new_chat()
             return
+        if auto_send and expansion:
+            # Complete command — do the action immediately, no review step.
+            # The user already knows what they asked for; don't make them
+            # re-read and press Enter on text they just selected.
+            self._clear_input()
+            self._send_text(expansion)
+            return
+        # Template command — populate input so the user can finish typing
         self._textbox.configure(state="normal", text_color=self._TXT)
         self._textbox.delete("0.0", "end")
         if expansion:
@@ -1760,29 +1806,112 @@ class ChatWindow(ctk.CTkToplevel):
                 is_cur  = s["id"] == self._current_session
                 btn = ctk.CTkFrame(
                     self._session_list,
-                    fg_color="#1A1640" if is_cur else "transparent",
+                    fg_color=self._AVATAR_BG if is_cur else "transparent",
                     corner_radius=8,
                     cursor="hand2",
                 )
                 btn.pack(fill="x", padx=4, pady=1)
-                ctk.CTkLabel(btn,
+
+                row_top = ctk.CTkFrame(btn, fg_color="transparent")
+                row_top.pack(fill="x", padx=(10, 4), pady=(6, 0))
+                ctk.CTkLabel(row_top,
                              text=display,
                              font=ctk.CTkFont("Segoe UI", 11,
                                               "bold" if is_cur else "normal"),
                              text_color=self._TXT if is_cur else self._DIMMED,
                              anchor="w",
-                             wraplength=180).pack(
-                                 fill="x", padx=10, pady=(6, 2))
+                             wraplength=150).pack(side="left", fill="x", expand=True)
+                sid = s["id"]
+                del_btn = ctk.CTkButton(
+                    row_top, text="", image=_icon("trash", self._MUTED, 12),
+                    width=22, height=20, fg_color="transparent",
+                    hover_color="#5A1A2A", corner_radius=4,
+                    command=lambda i=sid: self._confirm_delete_session(i, btn),
+                )
+                del_btn.pack(side="right")
+
                 ctk.CTkLabel(btn,
                              text=f"{s['msg_count']} messages",
                              font=ctk.CTkFont("Segoe UI", 9),
                              text_color=self._MUTED, anchor="w").pack(
                                  fill="x", padx=10, pady=(0, 6))
 
-                sid = s["id"]
                 btn.bind("<Button-1>", lambda e, i=sid, n=display: self._open_session(i, n))
+                open_handler = lambda e, i=sid, n=display: self._open_session(i, n)
                 for child in btn.winfo_children():
-                    child.bind("<Button-1>", lambda e, i=sid, n=display: self._open_session(i, n))
+                    if child is del_btn:
+                        continue
+                    child.bind("<Button-1>", open_handler)
+                    for grandchild in child.winfo_children():
+                        if grandchild is del_btn:
+                            continue
+                        grandchild.bind("<Button-1>", open_handler)
+
+    def _confirm_delete_session(self, session_id: str, row_frame) -> None:
+        """
+        Inline confirm — replaces the row's content with Yes/No for a few
+        seconds instead of deleting immediately or popping a modal dialog.
+        """
+        try:
+            if not row_frame.winfo_exists():
+                return
+        except Exception:
+            return
+        for w in row_frame.winfo_children():
+            w.destroy()
+        confirm_row = ctk.CTkFrame(row_frame, fg_color="transparent")
+        confirm_row.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(confirm_row, text="Delete this chat?",
+                     font=ctk.CTkFont("Segoe UI", 10),
+                     text_color=self._TXT).pack(side="left")
+        ctk.CTkButton(confirm_row, text="Yes", width=40, height=22,
+                      fg_color="#7A1F2E", hover_color="#9A2838",
+                      text_color="#FFD8D8", font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                      corner_radius=5,
+                      command=lambda: self._do_delete_session(session_id),
+                      ).pack(side="right", padx=(4, 0))
+        ctk.CTkButton(confirm_row, text="No", width=40, height=22,
+                      fg_color="transparent", hover_color=self._BORDER,
+                      text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 9),
+                      corner_radius=5,
+                      command=self._refresh_sidebar,
+                      ).pack(side="right")
+
+    def _do_delete_session(self, session_id: str) -> None:
+        try:
+            from chat_history import delete_session
+            delete_session(session_id)
+        except Exception:
+            pass
+        if session_id == self._current_session:
+            self._new_chat()
+        else:
+            self._refresh_sidebar()
+
+    def _toggle_theme(self) -> None:
+        """
+        Switch dark/light and reopen the window with the new palette applied.
+        A full live re-theme would mean touching every widget's color at
+        runtime; closing and recreating the window is far lower risk and
+        the chat reopens instantly since history loading is already fast.
+        """
+        new_theme = "light" if self._theme_name == "dark" else "dark"
+        self._save_theme_pref(new_theme)
+        gil_window = self._gil_window
+        current_session = self._current_session
+        self.destroy()
+        if hasattr(gil_window, "_chat_win"):
+            del gil_window._chat_win
+        gil_window._open_chat_window()
+        try:
+            new_win = gil_window._chat_win
+            from chat_history import list_sessions
+            sessions = {s["id"]: s for s in list_sessions(30)}
+            if current_session in sessions:
+                s = sessions[current_session]
+                new_win._open_session(current_session, s.get("name") or "Conversation")
+        except Exception:
+            pass
 
     def _new_chat(self) -> None:
         try:
@@ -1867,19 +1996,19 @@ class ChatWindow(ctk.CTkToplevel):
             side="left", fill="x", expand=True, pady=8, padx=(28, 8))
         ctk.CTkLabel(row, text=label,
                      font=ctk.CTkFont("Segoe UI", 9, "bold"),
-                     text_color=self._MUTED, fg_color="#0F0D22").pack(side="left")
+                     text_color=self._MUTED, fg_color=self._SCROLL).pack(side="left")
         ctk.CTkFrame(row, height=1, fg_color=self._BORDER).pack(
             side="left", fill="x", expand=True, pady=8, padx=(8, 28))
 
     def _session_divider(self, label: str = "Earlier") -> None:
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         row.pack(fill="x", pady=(8, 4))
-        ctk.CTkFrame(row, height=1, fg_color="#100E24").pack(
+        ctk.CTkFrame(row, height=1, fg_color=self._SEP).pack(
             side="left", fill="x", expand=True, pady=6, padx=(28, 8))
         ctk.CTkLabel(row, text=label,
                      font=ctk.CTkFont("Segoe UI", 8),
-                     text_color="#201840", fg_color="#0F0D22").pack(side="left")
-        ctk.CTkFrame(row, height=1, fg_color="#100E24").pack(
+                     text_color=self._DIMMED, fg_color=self._SCROLL).pack(side="left")
+        ctk.CTkFrame(row, height=1, fg_color=self._SEP).pack(
             side="left", fill="x", expand=True, pady=6, padx=(8, 28))
 
     # ── Welcome ───────────────────────────────────────────────────────────────
@@ -1887,15 +2016,15 @@ class ChatWindow(ctk.CTkToplevel):
     def _show_welcome(self) -> None:
         wrap = ctk.CTkFrame(self._scroll, fg_color="transparent")
         wrap.pack(fill="x", padx=32, pady=(40, 24))
-        card = ctk.CTkFrame(wrap, fg_color="#1C1848", corner_radius=20,
-                            border_width=1, border_color="#2E2870")
+        card = ctk.CTkFrame(wrap, fg_color=self._WELCOME_BG, corner_radius=20,
+                            border_width=1, border_color=self._WELCOME_BORDER)
         card.pack(fill="x")
         # Top accent
         ctk.CTkFrame(card, height=2, fg_color=self._ACCENT,
                      corner_radius=0).pack(fill="x")
         hrow = ctk.CTkFrame(card, fg_color="transparent")
         hrow.pack(fill="x", padx=22, pady=(22, 16))
-        av = ctk.CTkFrame(hrow, fg_color="#1A1540", corner_radius=14,
+        av = ctk.CTkFrame(hrow, fg_color=self._AVATAR_BG, corner_radius=14,
                           width=50, height=50, border_width=1, border_color=self._ACCENT)
         av.pack(side="left", padx=(0, 18)); av.pack_propagate(False)
         ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 20, "bold"),
@@ -1904,7 +2033,7 @@ class ChatWindow(ctk.CTkToplevel):
         tc.pack(side="left")
         ctk.CTkLabel(tc, text="G.I.L. is ready",
                      font=ctk.CTkFont("Segoe UI", 18, "bold"),
-                     text_color="#F5F0FF", anchor="w").pack(anchor="w")
+                     text_color=self._TXT, anchor="w").pack(anchor="w")
         ctk.CTkLabel(tc, text="Generative Intelligence Liaison  •  Always on",
                      font=ctk.CTkFont("Segoe UI", 10),
                      text_color=self._MUTED, anchor="w").pack(anchor="w")
@@ -1914,8 +2043,8 @@ class ChatWindow(ctk.CTkToplevel):
         for label, color in [("Voice", "#3FDDFA"), ("Hebrew", "#A78BFA"),
                               ("Git", "#22C55E"), ("Docker", "#F59E0B"),
                               ("Images", "#3FDDFA"), ("Search", "#A78BFA")]:
-            ch = ctk.CTkFrame(cf, fg_color="#0D0B1E", corner_radius=10,
-                              border_width=1, border_color="#201840")
+            ch = ctk.CTkFrame(cf, fg_color=self._PAGE, corner_radius=10,
+                              border_width=1, border_color=self._BORDER)
             ch.pack(side="left", padx=(0, 7))
             ctk.CTkLabel(ch, text=f" {label} ",
                          font=ctk.CTkFont("Segoe UI", 10, "bold"),
@@ -1931,7 +2060,7 @@ class ChatWindow(ctk.CTkToplevel):
             frame.pack(fill="x")
             row = ctk.CTkFrame(frame, fg_color="transparent")
             row.pack(fill="x", padx=28, pady=(12, 12))
-            av = ctk.CTkFrame(row, fg_color="#1A1540", corner_radius=8,
+            av = ctk.CTkFrame(row, fg_color=self._AVATAR_BG, corner_radius=8,
                               width=26, height=26, border_width=1,
                               border_color=self._ACCENT)
             av.pack(side="left", anchor="n", padx=(0, 10), pady=(2, 0))
@@ -2388,7 +2517,7 @@ class ChatWindow(ctk.CTkToplevel):
 
             name_row = ctk.CTkFrame(inner, fg_color="transparent")
             name_row.pack(fill="x", pady=(0, 10))
-            av = ctk.CTkFrame(name_row, fg_color="#1A1540",
+            av = ctk.CTkFrame(name_row, fg_color=self._AVATAR_BG,
                               corner_radius=8, width=26, height=26,
                               border_width=1, border_color=self._ACCENT)
             av.pack(side="left", padx=(0, 10)); av.pack_propagate(False)
@@ -2699,17 +2828,20 @@ class _SlashMenu(ctk.CTkToplevel):
     (cmd, description, expansion) — expansion=None means a direct UI action.
     """
 
+    # (cmd, description, expansion, auto_send)
+    # auto_send=True  -> selecting it sends the expansion immediately, no review step
+    # auto_send=False -> expansion is a prefix/template; user finishes typing and sends manually
     COMMANDS = [
-        ("/summarize", "Summarize this conversation", "Summarize our conversation so far."),
-        ("/explain",   "Explain the last response in more detail", "Explain that in more detail."),
-        ("/code",      "Write code for…", "Write code for "),
-        ("/image",     "Generate an image of…", "Generate an image of "),
-        ("/website",   "Build a website for…", "Build a website for "),
-        ("/search",    "Search the web for…", "Search the web for "),
-        ("/git",       "Check git status", "What's my git status?"),
-        ("/docker",    "List running containers", "Show me running docker containers"),
-        ("/clear",     "Start a new chat", None),
-        ("/help",      "Show what G.I.L. can do", "What can you help me with? List your main capabilities briefly."),
+        ("/summarize", "Summarize this conversation", "Summarize our conversation so far.", True),
+        ("/explain",   "Explain the last response in more detail", "Explain that in more detail.", True),
+        ("/code",      "Write code for…", "Write code for ", False),
+        ("/image",     "Generate an image of…", "Generate an image of ", False),
+        ("/website",   "Build a website for…", "Build a website for ", False),
+        ("/search",    "Search the web for…", "Search the web for ", False),
+        ("/git",       "Check git status", "What's my git status?", True),
+        ("/docker",    "List running containers", "Show me running docker containers", True),
+        ("/clear",     "Start a new chat", None, True),
+        ("/help",      "Show what G.I.L. can do", "What can you help me with? List your main capabilities briefly.", True),
     ]
 
     def __init__(self, parent_window, on_select):
@@ -2729,7 +2861,7 @@ class _SlashMenu(ctk.CTkToplevel):
     def _build_rows(self) -> None:
         for w in self._frame.winfo_children():
             w.destroy()
-        for i, (cmd, desc, _expansion) in enumerate(self._items):
+        for i, (cmd, desc, _expansion, _auto_send) in enumerate(self._items):
             is_sel = i == self._selected
             row = ctk.CTkFrame(self._frame, fg_color="#1A1640" if is_sel else "transparent",
                                corner_radius=8)
@@ -3149,9 +3281,13 @@ class GILWindow(ctk.CTk):
         self.after(0, _close)
 
     def show_proactive_suggestion(self, message: str) -> None:
-        if not hasattr(self, "_toast") or not self._toast.winfo_exists():
-            self._toast = _ProactiveToast(self)
-        self._toast.show(message)
+        """
+        Disabled — floating proactive toasts (screen-watch alerts, idle
+        check-ins, reminder nudges) were too intrusive. Kept as a no-op
+        rather than removing call sites in dev_screen/proactive/reminders,
+        so this stays the single switch if proactive UI is ever revisited.
+        """
+        pass
 
     def show_update_toast(self, info: dict) -> None:
         """Show the update notification on screen AND post it into the chat."""

@@ -159,6 +159,33 @@ def _i_close(d, c, w, ss):
     _stroke(d, [(18, 6), (6, 18)], c, w, ss)
 
 
+def _i_trash(d, c, w, ss):
+    _stroke(d, [(5, 7), (19, 7)], c, w, ss)
+    _stroke(d, [(9, 7), (9, 4.5), (15, 4.5), (15, 7)], c, w, ss)
+    _stroke(d, [(7, 7), (8, 20), (16, 20), (17, 7)], c, w, ss)
+    _stroke(d, [(10.3, 10.5), (10.3, 16.5)], c, w * 0.8, ss)
+    _stroke(d, [(13.7, 10.5), (13.7, 16.5)], c, w * 0.8, ss)
+
+
+def _i_sun(d, c, w, ss):
+    _circle(d, 12, 12, 4, c, w, ss)
+    for ang in range(0, 360, 45):
+        rad = math.radians(ang)
+        x1, y1 = 12 + 6.5 * math.cos(rad), 12 + 6.5 * math.sin(rad)
+        x2, y2 = 12 + 9.5 * math.cos(rad), 12 + 9.5 * math.sin(rad)
+        _stroke(d, [(x1, y1), (x2, y2)], c, w * 0.85, ss)
+
+
+def _i_moon(d, c, w, ss):
+    _stroke(d, [
+        (15.5, 4.2), (13.4, 5.6), (12.3, 8.0), (12.6, 10.7),
+        (14.2, 13.0), (16.7, 14.2), (19.4, 14.0), (21.5, 12.6),
+        (20.6, 15.4), (18.6, 17.7), (15.8, 18.9), (12.7, 18.7),
+        (9.9, 17.2), (8.0, 14.6), (7.4, 11.4), (8.1, 8.2),
+        (10.0, 5.5), (12.7, 3.9), (15.5, 4.2),
+    ], c, w, ss, closed=True)
+
+
 _ICONS = {
     "search":       _i_search,
     "export":       _i_export,
@@ -174,6 +201,9 @@ _ICONS = {
     "robot":        _i_robot,
     "activity":     _i_activity,
     "close":        _i_close,
+    "trash":        _i_trash,
+    "sun":          _i_sun,
+    "moon":         _i_moon,
 }
 
 

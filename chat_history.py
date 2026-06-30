@@ -366,6 +366,20 @@ def load_session(session_id: str) -> list[dict]:
             return []
 
 
+def delete_session(session_id: str) -> None:
+    """Permanently delete a session and all of its messages."""
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+            conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            print(f"[G.I.L. HISTORY] delete_session failed: {exc}")
+
+
 def fork_session(session_id: str, before_ts: float) -> str:
     """
     Create a new session containing every message from `session_id` that
