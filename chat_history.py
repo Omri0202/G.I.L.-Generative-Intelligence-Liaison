@@ -46,28 +46,32 @@ def _ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS sessions (
                 id         TEXT  PRIMARY KEY,
                 started_at REAL  NOT NULL,
-                ended_at   REAL,
-                name       TEXT
+                ended_at   REAL
             );
-            -- Add name column if upgrading from older schema
-            CREATE TABLE IF NOT EXISTS sessions_new (
-                id TEXT PRIMARY KEY, started_at REAL NOT NULL,
-                ended_at REAL, name TEXT
-            );
-            INSERT OR IGNORE INTO sessions_new SELECT id, started_at, ended_at, NULL FROM sessions;
-            DROP TABLE IF EXISTS sessions_tmp;
             CREATE TABLE IF NOT EXISTS messages (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT    NOT NULL,
                 sender     TEXT    NOT NULL,
                 content    TEXT    NOT NULL,
-                ts         REAL    NOT NULL,
-                rating     INTEGER NOT NULL DEFAULT 0,
-                is_pinned  INTEGER NOT NULL DEFAULT 0
+                ts         REAL    NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
-            CREATE INDEX IF NOT EXISTS idx_msg_pinned ON messages(is_pinned);
         """)
+
+        # Migrations — CREATE TABLE IF NOT EXISTS is a no-op on tables that
+        # already existed before these columns were added, so they must be
+        # added explicitly via ALTER TABLE for upgrading users.
+        session_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "name" not in session_cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN name TEXT")
+
+        msg_cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+        if "rating" not in msg_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN rating INTEGER NOT NULL DEFAULT 0")
+        if "is_pinned" not in msg_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_pinned ON messages(is_pinned)")
         conn.commit()
         conn.close()
         _initialized = True
@@ -301,6 +305,35 @@ def _auto_name_session(session_id: str) -> None:
         print(f"[G.I.L. HISTORY] auto-name failed: {exc}")
 
 
+def backfill_unnamed_sessions(limit: int = 8) -> None:
+    """
+    One-time catch-up: auto-name existing sessions that have a full exchange
+    but never got titled (e.g. they were created before auto-naming existed,
+    or before the schema migration that added the `name` column).
+    Runs each session sequentially with a short gap to stay polite to Groq.
+    """
+    def _run():
+        try:
+            conn = _get_conn()
+            rows = conn.execute("""
+                SELECT s.id FROM sessions s
+                JOIN messages m ON m.session_id = s.id
+                WHERE s.name IS NULL
+                GROUP BY s.id
+                HAVING COUNT(m.id) >= 2
+                ORDER BY s.started_at DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            conn.close()
+        except Exception:
+            return
+        for row in rows:
+            _auto_name_session(row["id"])
+            time.sleep(1.5)   # stagger Groq calls
+
+    threading.Thread(target=_run, daemon=True, name="GIL-BackfillNames").start()
+
+
 def rename_session(session_id: str, name: str) -> None:
     """Give a session a custom display name."""
     _ensure_schema()
@@ -331,6 +364,41 @@ def load_session(session_id: str) -> list[dict]:
                     for r in rows]
         except Exception:
             return []
+
+
+def fork_session(session_id: str, before_ts: float) -> str:
+    """
+    Create a new session containing every message from `session_id` that
+    happened strictly before `before_ts`. Used for conversation branching:
+    editing an earlier message forks the chat from that point instead of
+    overwriting it — the original conversation stays intact and reachable
+    from the sidebar.
+    Returns the new session id.
+    """
+    new_id = str(uuid.uuid4())
+    _ensure_schema()
+    with _lock:
+        try:
+            conn = _get_conn()
+            conn.execute(
+                "INSERT INTO sessions (id, started_at) VALUES (?, ?)",
+                (new_id, time.time()),
+            )
+            rows = conn.execute(
+                "SELECT sender, content, ts FROM messages "
+                "WHERE session_id=? AND ts < ? ORDER BY ts",
+                (session_id, before_ts),
+            ).fetchall()
+            for r in rows:
+                conn.execute(
+                    "INSERT INTO messages (session_id, sender, content, ts) VALUES (?,?,?,?)",
+                    (new_id, r["sender"], r["content"], r["ts"]),
+                )
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            print(f"[G.I.L. HISTORY] fork_session failed: {exc}")
+    return new_id
 
 
 def new_chat_session() -> str:

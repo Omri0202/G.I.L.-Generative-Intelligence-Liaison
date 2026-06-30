@@ -128,6 +128,16 @@ class ConversationEngine:
             h.pop()
         log.debug("trimmed last exchange from brain history (%d messages remain)", len(h))
 
+    def trim_history_to_count(self, keep: int) -> None:
+        """
+        Keep only the first `keep` messages in brain history, discarding the rest.
+        Called when the user edits an earlier message and forks the conversation —
+        the brain's live context needs to match the forked branch, not the
+        original (un-edited) continuation.
+        """
+        self.brain.history = self.brain.history[:keep]
+        log.debug("trimmed brain history to %d messages (fork)", keep)
+
     # ── Start ─────────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -169,8 +179,9 @@ class ConversationEngine:
         _reminders.restore_pending()
 
         # ── Expose chat callback, history trim, and floating button ─────────────
-        self.window._chat_send_fn    = self._process_chat
-        self.window._trim_history_fn = self.trim_last_exchange
+        self.window._chat_send_fn         = self._process_chat
+        self.window._trim_history_fn      = self.trim_last_exchange
+        self.window._trim_history_to_fn   = self.trim_history_to_count
         self.window.after(0, self.window._create_floating_chat_button)
         self.window.register_activate_callback(self._manual_activate)
 

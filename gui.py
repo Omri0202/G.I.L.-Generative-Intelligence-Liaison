@@ -1267,6 +1267,7 @@ class ChatWindow(ctk.CTkToplevel):
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=self._PAGE)
         _set_icon(self)
+        self._gil_window         = parent   # for looking up engine callbacks
         self._on_send           = on_send
         self._typing_id         = None
         self._typing_lbl        = None
@@ -1280,8 +1281,9 @@ class ChatWindow(ctk.CTkToplevel):
         self._refresh_sidebar()
         self._load_current()
         try:
-            from chat_history import set_session_name_callback
+            from chat_history import set_session_name_callback, backfill_unnamed_sessions
             set_session_name_callback(self._on_session_auto_named)
+            backfill_unnamed_sessions()
         except Exception:
             pass
         self.lift(); self.focus()
@@ -1476,6 +1478,11 @@ class ChatWindow(ctk.CTkToplevel):
         self._textbox.bind("<Shift-Return>", self._on_shift_enter)
         self._textbox.bind("<Button-1>",     self._activate_input)
         self._textbox.bind("<FocusOut>",     self._restore_placeholder)
+        self._textbox.bind("<KeyRelease>",   self._on_textbox_keyrelease)
+        self._textbox.bind("<Up>",           self._on_textbox_up)
+        self._textbox.bind("<Down>",         self._on_textbox_down)
+        self._textbox.bind("<Escape>",       self._on_textbox_escape)
+        self._slash_menu = None
         self._placeholder_active = True
         self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
         self._textbox.configure(text_color=self._MUTED, state="disabled")
@@ -1520,6 +1527,9 @@ class ChatWindow(ctk.CTkToplevel):
             self._input_wrap.configure(border_color=self._BORDER)
 
     def _on_enter(self, event) -> str:
+        if self._slash_menu and self._slash_menu.is_open():
+            self._slash_menu.pick_selected()
+            return "break"
         if not self._placeholder_active:
             self._textbox.configure(state="normal")
             self._send()
@@ -1527,6 +1537,61 @@ class ChatWindow(ctk.CTkToplevel):
 
     def _on_shift_enter(self, event) -> None:
         pass   # allow default newline insert
+
+    # ── Slash command menu wiring ────────────────────────────────────────────
+
+    def _on_textbox_keyrelease(self, event) -> None:
+        if self._placeholder_active:
+            return
+        content = self._textbox.get("0.0", "end-1c")
+        if content.startswith("/") and "\n" not in content and " " not in content:
+            query = content[1:]
+            if self._slash_menu is None:
+                self._slash_menu = _SlashMenu(self, self._on_slash_pick)
+            has_matches = self._slash_menu.filter(query)
+            if has_matches:
+                x = self._input_wrap.winfo_rootx()
+                y = self._input_wrap.winfo_rooty()
+                w = self._input_wrap.winfo_width()
+                self._slash_menu.show_at(x, y, w)
+            else:
+                self._slash_menu.hide()
+        elif self._slash_menu:
+            self._slash_menu.hide()
+
+    def _on_textbox_up(self, event):
+        if self._slash_menu and self._slash_menu.is_open():
+            self._slash_menu.move(-1)
+            return "break"
+        return None
+
+    def _on_textbox_down(self, event):
+        if self._slash_menu and self._slash_menu.is_open():
+            self._slash_menu.move(1)
+            return "break"
+        return None
+
+    def _on_textbox_escape(self, event):
+        if self._slash_menu and self._slash_menu.is_open():
+            self._slash_menu.hide()
+            return "break"
+        return None
+
+    def _on_slash_pick(self, item) -> None:
+        cmd, _desc, expansion = item
+        if self._slash_menu:
+            self._slash_menu.hide()
+        if cmd == "/clear":
+            self._new_chat()
+            return
+        self._textbox.configure(state="normal", text_color=self._TXT)
+        self._textbox.delete("0.0", "end")
+        if expansion:
+            self._textbox.insert("0.0", expansion)
+        self._placeholder_active = False
+        self._input_wrap.configure(border_color=self._ACCENT)
+        self._textbox.focus()
+        self._textbox.mark_set("insert", "end")
 
     def _get_input(self) -> str:
         if self._placeholder_active:
@@ -1550,18 +1615,10 @@ class ChatWindow(ctk.CTkToplevel):
 
         badges = []
 
-        # Git branch
-        try:
-            import subprocess
-            r = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, timeout=3,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                badges.append((None, "⎇ " + r.stdout.strip(), self._PURPLE, "#0D0B2E", "#1E1840", False))
-        except Exception:
-            pass
+        # Git branch — runs in a background thread (subprocess spawn cost
+        # was blocking window open for 1+ second). Appended async below.
+        threading.Thread(target=self._fetch_git_branch_badge, daemon=True,
+                         name="GIL-GitBadge").start()
 
         # Model (clickable to cycle)
         try:
@@ -1611,6 +1668,35 @@ class ChatWindow(ctk.CTkToplevel):
 
         # Schedule next refresh
         self.after(10_000, self._update_context_badges)
+
+    def _fetch_git_branch_badge(self) -> None:
+        """Background thread: spawning git is slow (~1s); never block window open on it."""
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=3,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                branch = r.stdout.strip()
+                self.after(0, lambda: self._add_branch_badge(branch))
+        except Exception:
+            pass
+
+    def _add_branch_badge(self, branch: str) -> None:
+        try:
+            if not self.winfo_exists() or not self._badge_frame.winfo_exists():
+                return
+        except Exception:
+            return
+        b = ctk.CTkFrame(self._badge_frame, fg_color="#0D0B2E",
+                         corner_radius=7, border_width=1, border_color="#1E1840")
+        b.pack(side="left", padx=(0, 6), before=self._badge_frame.winfo_children()[0]
+               if self._badge_frame.winfo_children() else None)
+        ctk.CTkLabel(b, text="⎇ " + branch,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                     text_color=self._PURPLE).pack(padx=8, pady=3)
 
     # ── Session name ──────────────────────────────────────────────────────────
 
@@ -1739,7 +1825,7 @@ class ChatWindow(ctk.CTkToplevel):
             if sessions:
                 name = sessions[0].get("name") or "Conversation"
                 self._session_name_var.set(name)
-            messages = load_recent(80)
+            messages = load_recent(20)   # keep initial paint fast — see _finish() note above
         except Exception:
             messages = []
 
@@ -2015,7 +2101,7 @@ class ChatWindow(ctk.CTkToplevel):
         self._last_gil_frames.clear()
         # Trim brain history so the re-run is fresh
         try:
-            fn = getattr(self, "_trim_history_fn", None)
+            fn = getattr(self._gil_window, "_trim_history_fn", None)
             if fn:
                 fn()
         except Exception:
@@ -2025,8 +2111,46 @@ class ChatWindow(ctk.CTkToplevel):
         threading.Thread(target=self._on_send, args=(self._last_user_text,),
                          daemon=True, name="GIL-Regen").start()
 
-    def _edit_message(self, text: str) -> None:
-        """Put a previous message back in the input box for editing."""
+    def _edit_message(self, text: str, ts: float) -> None:
+        """
+        Edit an earlier message — forks the conversation from that point
+        instead of overwriting it. The original chat stays intact and
+        reachable from the sidebar; a new branch continues from here.
+        """
+        try:
+            from chat_history import fork_session, set_current_session
+            new_sid = fork_session(self._current_session, ts)
+            set_current_session(new_sid)
+            self._current_session = new_sid
+        except Exception:
+            pass
+
+        # Reset brain's live context to match the forked branch
+        try:
+            fn = getattr(self._gil_window, "_trim_history_to_fn", None)
+            if fn:
+                # Brain history stores user+assistant pairs flattened;
+                # forked session message count maps 1:1 to history entries.
+                from chat_history import load_session
+                kept = len(load_session(self._current_session))
+                fn(kept)
+        except Exception:
+            pass
+
+        # Re-render the chat view to show only the forked (pre-edit) messages
+        for w in self._scroll.winfo_children():
+            w.destroy()
+        try:
+            from chat_history import load_session
+            messages = load_session(self._current_session)
+        except Exception:
+            messages = []
+        for msg in messages:
+            self._render_bubble(msg["content"], msg["sender"], msg["ts"], save=False)
+        self.after(50, lambda: self._scroll._parent_canvas.yview_moveto(1.0))
+        self._refresh_sidebar()
+
+        # Put the edited text in the input box, ready to send
         self._textbox.configure(state="normal", text_color=self._TXT)
         self._textbox.delete("0.0", "end")
         self._textbox.insert("0.0", text)
@@ -2084,6 +2208,172 @@ class ChatWindow(ctk.CTkToplevel):
                      wraplength=max(200, self.winfo_width() - 180),
                      justify="left", anchor="w").pack(padx=16, pady=(6, 12), fill="x")
 
+    # ── Streaming animation ───────────────────────────────────────────────────
+
+    def _animate_stream(self, label, full_text: str, on_complete=None,
+                        speed_ms: int = 10, chars_per_tick: int = 3) -> None:
+        """
+        Progressively reveal text in a CTkLabel to simulate token streaming.
+        Groq's REST API isn't streamed, so this fakes the effect client-side
+        once the full response is already in hand.
+        """
+        state = {"i": 0}
+        def _tick():
+            state["i"] = min(len(full_text), state["i"] + chars_per_tick)
+            try:
+                label.configure(text=full_text[:state["i"]])
+            except Exception:
+                return   # widget destroyed mid-animation (window closed)
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+            if state["i"] < len(full_text):
+                self.after(speed_ms, _tick)
+            elif on_complete:
+                on_complete()
+        _tick()
+
+    # ── GIL message content + actions (shared by streamed and history render) ──
+
+    def _render_gil_content(self, parent, text: str, wl: int) -> None:
+        """Render code blocks + markdown for a GIL message body."""
+        has_code = "```" in text
+        if has_code:
+            parts = re.split(r"(```(?:\w+)?\n?[\s\S]*?```)", text)
+            for part in parts:
+                if part.startswith("```") and part.endswith("```"):
+                    m    = re.match(r"```(\w*)\n?([\s\S]*?)```", part)
+                    lang = m.group(1) if m else ""
+                    code = m.group(2).strip() if m else part[3:-3].strip()
+                    self._render_code_block(parent, code, lang)
+                elif part.strip():
+                    if self._has_markdown(part):
+                        self._render_markdown(parent, part.strip(), self._TXT, wl)
+                    else:
+                        ctk.CTkLabel(parent, text=part.strip(),
+                                     font=ctk.CTkFont("Segoe UI", 13),
+                                     text_color=self._TXT,
+                                     wraplength=wl, justify="left",
+                                     anchor="w").pack(fill="x", pady=(0, 4))
+        elif self._has_markdown(text):
+            self._render_markdown(parent, text, self._TXT, wl)
+        else:
+            ctk.CTkLabel(parent, text=text,
+                         font=ctk.CTkFont("Segoe UI", 13),
+                         text_color=self._TXT,
+                         wraplength=wl, justify="left",
+                         anchor="w").pack(fill="x")
+
+    def _render_gil_actions(self, row, text: str):
+        """Copy + Thumbs + Star + Regenerate action row beneath a GIL message."""
+        act = ctk.CTkFrame(row, fg_color="transparent")
+        act.pack(fill="x", padx=28, pady=(0, 6))
+        ctk.CTkButton(act, text=" Copy", image=_icon("copy", self._MUTED, 12),
+                      compound="left", width=72, height=24,
+                      fg_color="transparent", hover_color="#1A1640",
+                      text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
+                      corner_radius=6,
+                      command=lambda t=text: self._copy_to_clipboard(self, t),
+                      ).pack(side="left", padx=(0, 2))
+        ctk.CTkButton(act, text="", image=_icon("thumbs_up", self._MUTED, 14),
+                      width=30, height=24,
+                      fg_color="transparent", hover_color="#1A2040",
+                      corner_radius=6,
+                      command=lambda: self._rate_last(1),
+                      ).pack(side="left", padx=(0, 2))
+        ctk.CTkButton(act, text="", image=_icon("thumbs_down", self._MUTED, 14),
+                      width=30, height=24,
+                      fg_color="transparent", hover_color="#201020",
+                      corner_radius=6,
+                      command=lambda: self._rate_last(-1),
+                      ).pack(side="left", padx=(0, 4))
+        star_btn = ctk.CTkButton(act, text="", image=_icon("star_outline", self._MUTED, 14),
+                      width=30, height=24,
+                      fg_color="transparent", hover_color="#1A1040",
+                      corner_radius=6,
+                      command=lambda sb=None: self._pin_last(sb),
+                      )
+        star_btn.pack(side="left", padx=(0, 4))
+        star_btn.configure(command=lambda b=star_btn: self._pin_last(b))
+        ctk.CTkButton(act, text=" Regenerate", image=_icon("regenerate", self._MUTED, 12),
+                      compound="left", width=96, height=24,
+                      fg_color="transparent", hover_color="#1A1640",
+                      text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
+                      corner_radius=6, command=self._regenerate,
+                      ).pack(side="left")
+        return act
+
+    # ── Suggested follow-up questions ────────────────────────────────────────
+
+    def _maybe_show_followups(self, row, gil_text: str) -> None:
+        """Fetch 2-3 short follow-up questions in the background and show them as chips."""
+        user_text = self._last_user_text
+        if not user_text or not gil_text:
+            return
+        threading.Thread(target=self._fetch_followups, args=(row, user_text, gil_text),
+                         daemon=True, name="GIL-Followups").start()
+
+    def _fetch_followups(self, row, user_text: str, gil_text: str) -> None:
+        try:
+            import os, requests
+            key = os.getenv("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY_2", "")
+            if not key:
+                return
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [
+                        {"role": "system", "content":
+                            "Given this exchange, suggest exactly 3 short, natural follow-up "
+                            "questions the user might ask next. One per line, no numbering, "
+                            "no quotes, each under 8 words."},
+                        {"role": "user", "content": f"User: {user_text}\nAssistant: {gil_text[:400]}"},
+                    ],
+                    "max_tokens": 60,
+                    "temperature": 0.6,
+                },
+                timeout=8,
+            )
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            chips = [l.strip("-• \t") for l in raw.splitlines() if l.strip()][:3]
+            if chips:
+                self.after(0, lambda: self._render_followup_chips(row, chips))
+        except Exception:
+            pass
+
+    def _render_followup_chips(self, row, chips: list[str]) -> None:
+        try:
+            if not row.winfo_exists():
+                return
+        except Exception:
+            return
+        wrap = ctk.CTkFrame(row, fg_color="transparent")
+        wrap.pack(fill="x", padx=28, pady=(0, 12))
+        for chip_text in chips:
+            chip = ctk.CTkButton(
+                wrap, text=chip_text, height=28,
+                fg_color="#161236", hover_color="#221C50",
+                text_color=self._ACCENT, font=ctk.CTkFont("Segoe UI", 10),
+                corner_radius=14, border_width=1, border_color="#2A2060",
+                command=lambda t=chip_text: self._send_text(t),
+            )
+            chip.pack(side="left", padx=(0, 6), pady=2)
+
+    def _send_text(self, text: str) -> None:
+        """Send arbitrary text as if the user typed and submitted it (used by follow-up chips)."""
+        if not text.strip():
+            return
+        self._last_user_text = text
+        self._last_gil_frames.clear()
+        self.add_message(text, "user")
+        self.show_typing()
+        threading.Thread(target=self._on_send, args=(text,),
+                         daemon=True, name="GIL-ChatSend").start()
+
     def _render_bubble(self, text: str, sender: str, ts: float,
                        save: bool = True) -> None:
         import datetime as _dt
@@ -2110,7 +2400,6 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkLabel(name_row, text=ts_str,
                          font=ctk.CTkFont("Segoe UI", 9),
                          text_color=self._MUTED).pack(side="left", padx=(10, 0))
-            # Copy button
             ctk.CTkButton(name_row, text="⎘", width=28, height=22,
                           fg_color="transparent", hover_color="#1A1640",
                           text_color=self._MUTED,
@@ -2119,73 +2408,32 @@ class ChatWindow(ctk.CTkToplevel):
                           command=lambda t=text: self._copy_to_clipboard(self, t),
                           ).pack(side="right")
 
-            # Render content — code blocks + markdown
-            has_code = "```" in text
-            if has_code:
-                parts = re.split(r"(```(?:\w+)?\n?[\s\S]*?```)", text)
-                for part in parts:
-                    if part.startswith("```") and part.endswith("```"):
-                        m    = re.match(r"```(\w*)\n?([\s\S]*?)```", part)
-                        lang = m.group(1) if m else ""
-                        code = m.group(2).strip() if m else part[3:-3].strip()
-                        self._render_code_block(inner, code, lang)
-                    elif part.strip():
-                        if self._has_markdown(part):
-                            self._render_markdown(inner, part.strip(), self._TXT, wl)
-                        else:
-                            ctk.CTkLabel(inner, text=part.strip(),
-                                         font=ctk.CTkFont("Segoe UI", 13),
-                                         text_color=self._TXT,
-                                         wraplength=wl, justify="left",
-                                         anchor="w").pack(fill="x", pady=(0, 4))
-            elif self._has_markdown(text):
-                self._render_markdown(inner, text, self._TXT, wl)
+            content_holder = ctk.CTkFrame(inner, fg_color="transparent")
+            content_holder.pack(fill="x")
+
+            def _finish(row=row, inner=inner, content_holder=content_holder,
+                       text=text, wl=wl, ts=ts):
+                self._render_gil_content(content_holder, text, wl)
+                # Skip the heavy 5-icon action row for historical loads —
+                # rendering it for every message in a long chat history is
+                # what made opening the chat window take 6-30+ seconds.
+                # The name-row Copy button above still works for old messages.
+                if save:
+                    act = self._render_gil_actions(row, text)
+                    self._last_gil_frames = [row, act]
+                    self._maybe_show_followups(row, text)
+
+            # Animate (stream) only fresh live responses, not history loads
+            if save and not self._has_markdown(text) and "```" not in text:
+                stream_lbl = ctk.CTkLabel(content_holder, text="",
+                                          font=ctk.CTkFont("Segoe UI", 13),
+                                          text_color=self._TXT,
+                                          wraplength=wl, justify="left", anchor="w")
+                stream_lbl.pack(fill="x")
+                self._animate_stream(stream_lbl, text,
+                                     on_complete=lambda: (stream_lbl.destroy(), _finish()))
             else:
-                ctk.CTkLabel(inner, text=text,
-                             font=ctk.CTkFont("Segoe UI", 13),
-                             text_color=self._TXT,
-                             wraplength=wl, justify="left",
-                             anchor="w").pack(fill="x")
-
-            # Action row: Copy + Thumbs + Star + Regenerate (line icons, no emoji)
-            act = ctk.CTkFrame(row, fg_color="transparent")
-            act.pack(fill="x", padx=28, pady=(0, 6))
-            ctk.CTkButton(act, text=" Copy", image=_icon("copy", self._MUTED, 12),
-                          compound="left", width=72, height=24,
-                          fg_color="transparent", hover_color="#1A1640",
-                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
-                          corner_radius=6,
-                          command=lambda t=text: self._copy_to_clipboard(self, t),
-                          ).pack(side="left", padx=(0, 2))
-            ctk.CTkButton(act, text="", image=_icon("thumbs_up", self._MUTED, 14),
-                          width=30, height=24,
-                          fg_color="transparent", hover_color="#1A2040",
-                          corner_radius=6,
-                          command=lambda: self._rate_last(1),
-                          ).pack(side="left", padx=(0, 2))
-            ctk.CTkButton(act, text="", image=_icon("thumbs_down", self._MUTED, 14),
-                          width=30, height=24,
-                          fg_color="transparent", hover_color="#201020",
-                          corner_radius=6,
-                          command=lambda: self._rate_last(-1),
-                          ).pack(side="left", padx=(0, 4))
-            star_btn = ctk.CTkButton(act, text="", image=_icon("star_outline", self._MUTED, 14),
-                          width=30, height=24,
-                          fg_color="transparent", hover_color="#1A1040",
-                          corner_radius=6,
-                          command=lambda sb=None: self._pin_last(sb),
-                          )
-            star_btn.pack(side="left", padx=(0, 4))
-            star_btn.configure(command=lambda b=star_btn: self._pin_last(b))
-            ctk.CTkButton(act, text=" Regenerate", image=_icon("regenerate", self._MUTED, 12),
-                          compound="left", width=96, height=24,
-                          fg_color="transparent", hover_color="#1A1640",
-                          text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
-                          corner_radius=6, command=self._regenerate,
-                          ).pack(side="left")
-
-            # Track this GIL response for regenerate
-            self._last_gil_frames = [row, act]
+                _finish()
 
         else:
             spacer = ctk.CTkFrame(self._scroll, fg_color="transparent")
@@ -2202,7 +2450,7 @@ class ChatWindow(ctk.CTkToplevel):
                           width=26, height=22,
                           fg_color="transparent", hover_color="#1A1640",
                           corner_radius=5,
-                          command=lambda t=text: self._edit_message(t),
+                          command=lambda t=text, ets=ts: self._edit_message(t, ets),
                           ).pack(side="left", padx=(0, 6))
             ctk.CTkLabel(meta, text="You",
                          font=ctk.CTkFont("Segoe UI", 11, "bold"),
@@ -2443,6 +2691,93 @@ class ChatWindow(ctk.CTkToplevel):
                          daemon=True, name="GIL-ChatSend").start()
 
 
+# ── Slash command menu ──────────────────────────────────────────────────────────
+class _SlashMenu(ctk.CTkToplevel):
+    """
+    Claude-style "/" command popup. Appears above the chat input the moment
+    the user types "/" as the very first character, filters live as they type.
+    (cmd, description, expansion) — expansion=None means a direct UI action.
+    """
+
+    COMMANDS = [
+        ("/summarize", "Summarize this conversation", "Summarize our conversation so far."),
+        ("/explain",   "Explain the last response in more detail", "Explain that in more detail."),
+        ("/code",      "Write code for…", "Write code for "),
+        ("/image",     "Generate an image of…", "Generate an image of "),
+        ("/website",   "Build a website for…", "Build a website for "),
+        ("/search",    "Search the web for…", "Search the web for "),
+        ("/git",       "Check git status", "What's my git status?"),
+        ("/docker",    "List running containers", "Show me running docker containers"),
+        ("/clear",     "Start a new chat", None),
+        ("/help",      "Show what G.I.L. can do", "What can you help me with? List your main capabilities briefly."),
+    ]
+
+    def __init__(self, parent_window, on_select):
+        super().__init__(parent_window)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self._on_select = on_select
+        self._items     = list(self.COMMANDS)
+        self._selected  = 0
+
+        self._frame = ctk.CTkFrame(self, fg_color="#100E24", corner_radius=12,
+                                   border_width=1, border_color="#2A2060")
+        self._frame.pack(fill="both", expand=True)
+        self._build_rows()
+        self.withdraw()
+
+    def _build_rows(self) -> None:
+        for w in self._frame.winfo_children():
+            w.destroy()
+        for i, (cmd, desc, _expansion) in enumerate(self._items):
+            is_sel = i == self._selected
+            row = ctk.CTkFrame(self._frame, fg_color="#1A1640" if is_sel else "transparent",
+                               corner_radius=8)
+            row.pack(fill="x", padx=6, pady=2)
+            ctk.CTkLabel(row, text=cmd, font=ctk.CTkFont("Consolas", 12, "bold"),
+                        text_color="#3FDDFA", anchor="w", width=92).pack(
+                            side="left", padx=(10, 4), pady=7)
+            ctk.CTkLabel(row, text=desc, font=ctk.CTkFont("Segoe UI", 10),
+                        text_color="#8A7AAA", anchor="w").pack(
+                            side="left", padx=(0, 10), pady=7)
+            row.bind("<Button-1>", lambda e, idx=i: self._pick(idx))
+            for child in row.winfo_children():
+                child.bind("<Button-1>", lambda e, idx=i: self._pick(idx))
+
+    def filter(self, query: str) -> bool:
+        q = query.lower()
+        self._items = [c for c in self.COMMANDS if c[0][1:].lower().startswith(q)]
+        self._selected = 0
+        self._build_rows()
+        return len(self._items) > 0
+
+    def move(self, delta: int) -> None:
+        if not self._items:
+            return
+        self._selected = (self._selected + delta) % len(self._items)
+        self._build_rows()
+
+    def pick_selected(self) -> None:
+        self._pick(self._selected)
+
+    def _pick(self, idx: int) -> None:
+        if 0 <= idx < len(self._items):
+            self._on_select(self._items[idx])
+
+    def show_at(self, x: int, y: int, width: int) -> None:
+        h = min(280, 44 * len(self._items) + 8)
+        self.geometry(f"{width}x{h}+{x}+{y - h - 6}")
+        self.deiconify()
+        self.lift()
+
+    def hide(self) -> None:
+        self.withdraw()
+
+    def is_open(self) -> bool:
+        try:
+            return bool(self.winfo_viewable())
+        except Exception:
+            return False
 
 
 # ── Main window — top wave bar ────────────────────────────────────────────────
