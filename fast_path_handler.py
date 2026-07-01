@@ -489,10 +489,11 @@ def _webgen(text: str, lower: str, eng) -> bool:
         eng._last_spoke_at[0] = time.time()
         eng._last_said[0]     = ack
         eng.window.show_webgen_progress()
+        html_path = None
         try:
             from webgen import generate as _wg, generate_for_project as _wgp, _find_web_project
             proj   = _find_web_project(utterance)
-            result = _wgp(proj) if proj else _wg(utterance)
+            result, html_path = _wgp(proj) if proj else _wg(utterance)
         except Exception as exc:
             log.error("webgen failed", exc_info=True)
             result = f"Website generation failed — {exc.__class__.__name__}."
@@ -503,6 +504,8 @@ def _webgen(text: str, lower: str, eng) -> bool:
         eng._last_spoke_at[0] = time.time() - 1.5
         eng._last_said[0]     = result
         eng.window.set_state("listening")
+        if html_path:
+            eng.window.send_rich_to_chat("website", html_path)
 
     threading.Thread(target=_run, daemon=True, name="GIL-WebGen").start()
     return True
@@ -733,12 +736,13 @@ def _image_gen(text: str, lower: str, eng) -> bool:
         eng.window.set_state("speaking", said=ack)
         eng._speak(ack)
 
+        img_path = None
         try:
             from image_gen import generate, open_image, infer_dimensions
             w, h = infer_dimensions(description)
-            path = generate(description, width=w, height=h)
-            open_image(path)
-            result = f"Done. Saved as {path.name}."
+            img_path = generate(description, width=w, height=h)
+            open_image(img_path)
+            result = f"Done. Saved as {img_path.name}."
         except Exception:
             log.error("image generation failed", exc_info=True)
             result = "Image generation failed — check your internet connection."
@@ -749,6 +753,8 @@ def _image_gen(text: str, lower: str, eng) -> bool:
         eng._last_spoke_at[0] = time.time() - 1.5
         eng._last_said[0]     = result
         eng.window.set_state("listening")
+        if img_path:
+            eng.window.send_rich_to_chat("image", img_path)
 
     threading.Thread(target=_run, daemon=True, name="GIL-ImageGen").start()
     return True

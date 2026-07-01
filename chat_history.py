@@ -207,7 +207,9 @@ def list_sessions(limit: int = 30) -> list[dict]:
             rows = conn.execute("""
                 SELECT s.id, s.name, s.started_at,
                        COUNT(m.id) as msg_count,
-                       MIN(CASE WHEN m.sender='user' THEN m.content END) as preview
+                       (SELECT m2.content FROM messages m2
+                        WHERE m2.session_id = s.id
+                        ORDER BY m2.ts DESC LIMIT 1) as preview
                 FROM sessions s
                 LEFT JOIN messages m ON m.session_id = s.id
                 GROUP BY s.id
@@ -504,7 +506,9 @@ def search_sessions(query: str) -> list[dict]:
             rows = conn.execute("""
                 SELECT DISTINCT s.id, s.name, s.started_at,
                        COUNT(m.id) as msg_count,
-                       MIN(CASE WHEN m.sender='user' THEN m.content END) as preview
+                       (SELECT m2.content FROM messages m2
+                        WHERE m2.session_id = s.id
+                        ORDER BY m2.ts DESC LIMIT 1) as preview
                 FROM sessions s
                 JOIN messages m ON m.session_id = s.id
                 WHERE s.name LIKE ? OR m.content LIKE ?

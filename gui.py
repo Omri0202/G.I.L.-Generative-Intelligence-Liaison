@@ -1308,6 +1308,7 @@ class ChatWindow(ctk.CTkToplevel):
         self._last_user_text    = ""   # for regenerate
         self._last_gil_frames   = []   # frames of last GIL response
         self._build()
+        self.update_idletasks()   # resolve geometry so winfo_width is accurate on first render
         self._refresh_sidebar()
         self._load_current()
         try:
@@ -1826,14 +1827,17 @@ class ChatWindow(ctk.CTkToplevel):
                     row_top, text="", image=_icon("trash", self._MUTED, 12),
                     width=22, height=20, fg_color="transparent",
                     hover_color="#5A1A2A", corner_radius=4,
-                    command=lambda i=sid: self._confirm_delete_session(i, btn),
+                    command=lambda i=sid, b=btn: self._confirm_delete_session(i, b),
                 )
                 del_btn.pack(side="right")
 
+                preview_raw = s.get("preview") or ""
+                preview_txt = (preview_raw[:40] + "…") if len(preview_raw) > 40 else preview_raw
                 ctk.CTkLabel(btn,
-                             text=f"{s['msg_count']} messages",
+                             text=preview_txt or f"{s['msg_count']} messages",
                              font=ctk.CTkFont("Segoe UI", 9),
-                             text_color=self._MUTED, anchor="w").pack(
+                             text_color=self._MUTED, anchor="w",
+                             wraplength=180).pack(
                                  fill="x", padx=10, pady=(0, 6))
 
                 btn.bind("<Button-1>", lambda e, i=sid, n=display: self._open_session(i, n))
@@ -2302,6 +2306,123 @@ class ChatWindow(ctk.CTkToplevel):
         self.after(0, _do)
 
     @staticmethod
+    def _open_file(path) -> None:
+        import os
+        try:
+            os.startfile(str(path))
+        except Exception:
+            import subprocess
+            subprocess.Popen(["explorer", str(path)])
+
+    def add_image_message(self, path) -> None:
+        """Render GIL-style bubble with an embedded image thumbnail + open button."""
+        from pathlib import Path as _Path
+        import time as _t
+        path = _Path(path)
+        tag  = f"[IMAGE:{path}]"
+
+        def _do():
+            self.hide_typing()
+            # Persist so it reloads on next open
+            threading.Thread(target=self._persist, args=(tag, "gil"),
+                             daemon=True, name="GIL-HistSave").start()
+            self._render_rich_bubble(path, "image")
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+        self.after(0, _do)
+
+    def add_link_message(self, path) -> None:
+        """Render GIL-style bubble with a clickable website file card."""
+        from pathlib import Path as _Path
+        path = _Path(path)
+        tag  = f"[WEBSITE:{path}]"
+
+        def _do():
+            self.hide_typing()
+            threading.Thread(target=self._persist, args=(tag, "gil"),
+                             daemon=True, name="GIL-HistSave").start()
+            self._render_rich_bubble(path, "website")
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+        self.after(0, _do)
+
+    def _render_rich_bubble(self, path, kind: str) -> None:
+        """Render a GIL-avatar message row containing an image or website link card."""
+        from pathlib import Path as _Path
+        path = _Path(path)
+
+        row   = ctk.CTkFrame(self._scroll, fg_color=self._SURF2, corner_radius=0)
+        row.pack(fill="x")
+        inner = ctk.CTkFrame(row, fg_color="transparent")
+        inner.pack(fill="x", padx=28, pady=(10, 10))
+
+        # Avatar + name row
+        name_row = ctk.CTkFrame(inner, fg_color="transparent")
+        name_row.pack(fill="x", pady=(0, 8))
+        av = ctk.CTkFrame(name_row, fg_color=self._AVATAR_BG, corner_radius=8,
+                          width=26, height=26, border_width=1, border_color=self._ACCENT)
+        av.pack(side="left", padx=(0, 10)); av.pack_propagate(False)
+        ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                     text_color=self._ACCENT).pack(expand=True)
+        ctk.CTkLabel(name_row, text="G.I.L.",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=self._NAME_G).pack(side="left")
+
+        if kind == "image" and path.exists():
+            try:
+                from PIL import Image as _PILImage
+                img = _PILImage.open(path)
+                max_w = min(460, max(200, (self._scroll.winfo_width() or 600) - 120))
+                img.thumbnail((max_w, 340), _PILImage.LANCZOS)
+                photo = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+
+                img_card = ctk.CTkFrame(inner, fg_color=self._BORDER,
+                                        corner_radius=12, cursor="hand2")
+                img_card.pack(anchor="w", pady=(0, 6))
+                img_lbl  = ctk.CTkLabel(img_card, image=photo, text="")
+                img_lbl.pack(padx=4, pady=4)
+                for w in (img_card, img_lbl):
+                    w.bind("<Button-1>", lambda e, p=path: self._open_file(p))
+            except Exception:
+                pass
+
+            fn_row = ctk.CTkFrame(inner, fg_color="transparent")
+            fn_row.pack(anchor="w")
+            ctk.CTkLabel(fn_row, text=path.name,
+                         font=ctk.CTkFont("Segoe UI", 10),
+                         text_color=self._MUTED).pack(side="left")
+            ctk.CTkButton(fn_row, text="Open", width=56, height=22,
+                          fg_color=self._AVATAR_BG, hover_color=self._BORDER,
+                          text_color=self._ACCENT, font=ctk.CTkFont("Segoe UI", 10),
+                          corner_radius=6,
+                          command=lambda p=path: self._open_file(p),
+                          ).pack(side="left", padx=(8, 0))
+
+        elif kind == "website":
+            card = ctk.CTkFrame(inner, fg_color=self._AVATAR_BG,
+                                corner_radius=12, border_width=1,
+                                border_color=self._BORDER, cursor="hand2")
+            card.pack(anchor="w", fill="x", pady=(0, 4))
+            title = path.parent.name.replace("-", " ").replace("_", " ").title()
+            ctk.CTkLabel(card, text=title,
+                         font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                         text_color=self._TXT, anchor="w").pack(
+                             padx=14, pady=(10, 2), fill="x")
+            uri = path.as_uri()
+            short = uri if len(uri) <= 55 else uri[:52] + "..."
+            ctk.CTkLabel(card, text=short,
+                         font=ctk.CTkFont("Segoe UI", 9),
+                         text_color=self._ACCENT, anchor="w").pack(
+                             padx=14, pady=(0, 10), fill="x")
+            card.bind("<Button-1>", lambda e, p=path: self._open_file(p))
+            for child in card.winfo_children():
+                child.bind("<Button-1>", lambda e, p=path: self._open_file(p))
+
+    @staticmethod
     def _has_code(text: str) -> bool:
         import re
         return bool(re.search(r"```|`[^`]+`|\bdef \w+\(|\bfunction \w+\(", text))
@@ -2505,18 +2626,33 @@ class ChatWindow(ctk.CTkToplevel):
 
     def _render_bubble(self, text: str, sender: str, ts: float,
                        save: bool = True) -> None:
+        # Rich-content tags from image/website generation — render as cards
+        if sender == "gil" and text.startswith("[IMAGE:") and text.endswith("]"):
+            from pathlib import Path as _Path
+            self._render_rich_bubble(_Path(text[7:-1]), "image")
+            return
+        if sender == "gil" and text.startswith("[WEBSITE:") and text.endswith("]"):
+            from pathlib import Path as _Path
+            self._render_rich_bubble(_Path(text[9:-1]), "website")
+            return
+
         import datetime as _dt
         ts_str = _dt.datetime.fromtimestamp(ts).strftime("%H:%M")
-        wl     = max(300, self.winfo_width() - 300)
+        # Use scroll frame width directly — it's the actual message container,
+        # so we avoid the sidebar offset and scrollbar errors that hit window width.
+        sw = self._scroll.winfo_width()
+        if sw <= 1:
+            sw = max(600, self.winfo_width() - 240)  # fallback: window minus sidebar+margin
+        wl = max(400, sw - 80)   # 28px each side of inner frame + 24px buffer
 
         if sender == "gil":
             row = ctk.CTkFrame(self._scroll, fg_color=self._SURF2, corner_radius=0)
             row.pack(fill="x")
             inner = ctk.CTkFrame(row, fg_color="transparent")
-            inner.pack(fill="x", padx=28, pady=(14, 14))
+            inner.pack(fill="x", padx=28, pady=(10, 8))
 
             name_row = ctk.CTkFrame(inner, fg_color="transparent")
-            name_row.pack(fill="x", pady=(0, 10))
+            name_row.pack(fill="x", pady=(0, 6))
             av = ctk.CTkFrame(name_row, fg_color=self._AVATAR_BG,
                               corner_radius=8, width=26, height=26,
                               border_width=1, border_color=self._ACCENT)
@@ -2566,7 +2702,7 @@ class ChatWindow(ctk.CTkToplevel):
 
         else:
             spacer = ctk.CTkFrame(self._scroll, fg_color="transparent")
-            spacer.pack(fill="x", pady=(10, 10))
+            spacer.pack(fill="x", pady=(6, 4))
             inner = ctk.CTkFrame(spacer, fg_color="transparent")
             inner.pack(fill="x", padx=28)
             ctk.CTkFrame(inner, fg_color="transparent").pack(
@@ -2594,8 +2730,8 @@ class ChatWindow(ctk.CTkToplevel):
             ctk.CTkLabel(card, text=text,
                          font=ctk.CTkFont("Segoe UI", 13),
                          text_color=self._USERTXT,
-                         wraplength=min(wl, int(self.winfo_width() * 0.55)),
-                         justify="right", anchor="e").pack(padx=18, pady=14)
+                         wraplength=min(wl, int(sw * 0.52)),
+                         justify="right", anchor="e").pack(padx=16, pady=10)
 
         if save:
             threading.Thread(target=self._persist, args=(text, sender),
@@ -3279,6 +3415,18 @@ class GILWindow(ctk.CTk):
             if hasattr(self, "_webgen_panel") and self._webgen_panel.winfo_exists():
                 self._webgen_panel.finish()
         self.after(0, _close)
+
+    def send_rich_to_chat(self, kind: str, path) -> None:
+        """Forward an image or website path into the chat window as a rich message."""
+        try:
+            win = getattr(self, "_chat_win", None)
+            if win and win.winfo_exists():
+                if kind == "image":
+                    win.add_image_message(path)
+                elif kind == "website":
+                    win.add_link_message(path)
+        except Exception:
+            pass
 
     def show_proactive_suggestion(self, message: str) -> None:
         """

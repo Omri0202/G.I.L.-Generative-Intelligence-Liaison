@@ -454,8 +454,9 @@ def _generate_html(description: str, images: dict | None = None) -> str:
     return html
 
 
-def generate_for_project(folder_path: str | Path, description: str = None) -> str:
-    """Read TASK.md, generate index.html in that folder, open in browser."""
+def generate_for_project(folder_path: str | Path, description: str = None) -> tuple[str, Path | None]:
+    """Read TASK.md, generate index.html in that folder, open in browser.
+    Returns (message, html_path_or_None)."""
     folder = Path(folder_path)
 
     if description is None:
@@ -468,29 +469,31 @@ def generate_for_project(folder_path: str | Path, description: str = None) -> st
 
     if not description:
         return (f"I found the {folder.name} folder but there's no TASK.md in it. "
-                "Add one describing what you want and ask me again.")
+                "Add one describing what you want and ask me again.", None)
 
     html = _run_generation(description, folder)
     if html.startswith("ERROR:"):
-        return html[6:].strip()
+        return html[6:].strip(), None
 
     out = folder / "index.html"
     try:
         out.write_text(html, encoding="utf-8")
     except Exception as exc:
-        return f"Website generated but couldn't save to {folder.name} — {exc}."
+        return f"Website generated but couldn't save to {folder.name} — {exc}.", None
 
     _open_file(out)
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = m.group(1).strip() if m else folder.name.replace("-", " ").title()
-    return f"Done — '{title}' is open in your browser."
+    return f"Done — '{title}' is open in your browser.", out
 
 
-def generate(utterance: str) -> str:
-    """Generate a website from a voice command and open it in the browser."""
+def generate(utterance: str) -> tuple[str, Path | None]:
+    """Generate a website from a voice command and open it in the browser.
+    Returns (message, html_path_or_None)."""
     description = _extract_description(utterance)
     if not description:
-        return "What kind of website? For example: 'a coffee shop website' or 'a portfolio for a photographer'."
+        return ("What kind of website? For example: 'a coffee shop website' or "
+                "'a portfolio for a photographer'.", None)
 
     slug   = _sanitize(description)
     folder = _OUT_DIR / slug
@@ -498,16 +501,16 @@ def generate(utterance: str) -> str:
 
     html = _run_generation(description, folder)
     if html.startswith("ERROR:"):
-        return html[6:].strip()
+        return html[6:].strip(), None
 
     path = folder / "index.html"
     try:
         path.write_text(html, encoding="utf-8")
     except Exception as exc:
-        return f"Website generated but couldn't save — {exc}."
+        return f"Website generated but couldn't save — {exc}.", None
 
     _open_file(path)
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = m.group(1).strip() if m else description.title()
 
-    return f"Done — '{title}' is open in your browser."
+    return f"Done — '{title}' is open in your browser.", path

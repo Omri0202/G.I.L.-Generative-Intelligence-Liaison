@@ -334,10 +334,11 @@ def dispatch(
             last_spoke_at[0] = _t.time()
             last_said[0] = ack
             window.show_webgen_progress()
+            html_path = None
             try:
                 from webgen import generate as _wg, generate_for_project as _wgp, _find_web_project
                 proj   = _find_web_project(utterance)
-                result = _wgp(proj) if proj else _wg(desc)
+                result, html_path = _wgp(proj) if proj else _wg(desc)
             except Exception as exc:
                 result = f"Website generation failed — {exc.__class__.__name__}."
                 last_spoke_at[0] = _t.time()
@@ -346,6 +347,8 @@ def dispatch(
             last_spoke_at[0] = _t.time() - 1.5
             last_said[0] = result
             window.set_state("listening")
+            if html_path:
+                window.send_rich_to_chat("website", html_path)
         threading.Thread(target=_webgen, daemon=True, name="GIL-WebGen").start()
         return True
 
