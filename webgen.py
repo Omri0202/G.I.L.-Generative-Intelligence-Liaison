@@ -168,9 +168,9 @@ Nature/Wellness:--bg:#FAF7F0;--text:#1A1A12;--muted:rgba(30,30,20,.65);--card:#F
 Personal/Blog:  --bg:#FAFAFA;--text:#111118;--muted:rgba(20,20,40,.6);--card:#FFF;--border:rgba(0,0,0,.08);--accent:#2D6AFF;--accent2:#5B8AFF;--accent-rgb:45,106,255; font: Playfair+Display + Inter
 Gym:            --bg:#0A0506;--accent:#FF2D55;--accent2:#FF6B35;--accent-rgb:255,45,85; font: Bebas+Neue + Inter
 
-SWIPER TESTIMONIALS:
-<div class="swiper"><div class="swiper-wrapper"><div class="swiper-slide"><div class="testimonial-card"><p class="testimonial-text">"Real quote."</p><div class="testimonial-author"><img src="CARD_IMG_3" class="testimonial-avatar" alt=""><div><div class="testimonial-name">Full Name</div><div class="testimonial-meta">City — specific result</div></div></div></div></div></div><div class="swiper-pagination"></div></div>
-<script>new Swiper('.swiper',{loop:true,autoplay:{delay:4500,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true},spaceBetween:24});</script>
+SWIPER TESTIMONIALS (MUST have exactly 3 swiper-slide divs — loop mode requires it):
+<div class="swiper"><div class="swiper-wrapper"><div class="swiper-slide"><div class="testimonial-card"><p class="testimonial-text">"Real quote 1."</p><div class="testimonial-author"><img src="https://i.pravatar.cc/52?img=1" class="testimonial-avatar" alt=""><div><div class="testimonial-name">Full Name</div><div class="testimonial-meta">City — specific result</div></div></div></div></div><div class="swiper-slide"><div class="testimonial-card"><p class="testimonial-text">"Real quote 2."</p><div class="testimonial-author"><img src="https://i.pravatar.cc/52?img=2" class="testimonial-avatar" alt=""><div><div class="testimonial-name">Full Name 2</div><div class="testimonial-meta">City — specific result</div></div></div></div></div><div class="swiper-slide"><div class="testimonial-card"><p class="testimonial-text">"Real quote 3."</p><div class="testimonial-author"><img src="https://i.pravatar.cc/52?img=3" class="testimonial-avatar" alt=""><div><div class="testimonial-name">Full Name 3</div><div class="testimonial-meta">City — specific result</div></div></div></div></div></div><div class="swiper-pagination"></div></div>
+<script>new Swiper('.swiper',{loop:false,autoplay:{delay:4500,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true},spaceBetween:24});</script>
 
 ALPINE FAQ:
 <div x-data="{a:null}"><div><button @click="a=a===1?null:1" style="background:var(--card);color:var(--text);border:1px solid var(--border);width:100%;padding:1.2rem 1.5rem;text-align:left;border-radius:var(--radius);cursor:pointer;display:flex;justify-content:space-between;">Question? <i class="fas fa-chevron-down"></i></button><div x-show="a===1" x-transition style="padding:1rem 1.5rem;color:var(--muted);">Answer.</div></div></div>
@@ -308,17 +308,66 @@ def _extract_description(utterance: str) -> str:
     ).strip()
     return cleaned if len(cleaned) > 2 else ""
 
+_FALLBACK_IMGS = {
+    # Picsum is a free, reliable CDN — always returns a real photo, no API key needed
+    "HERO_IMG":   "https://picsum.photos/seed/hero/1920/1080",
+    "CARD_IMG_1": "https://picsum.photos/seed/card1/900/700",
+    "CARD_IMG_2": "https://picsum.photos/seed/card2/800/800",
+    "CARD_IMG_3": "https://picsum.photos/seed/card3/800/600",
+}
+
 def _inject_images(html: str, images: dict) -> str:
-    """Replace HERO_IMG / CARD_IMG_N tokens with real Pollinations image paths."""
+    """Replace HERO_IMG / CARD_IMG_N tokens with real paths (or CDN fallback)."""
     mapping = {
-        "HERO_IMG":   images.get("hero.jpg",   ""),
-        "CARD_IMG_1": images.get("photo1.jpg", ""),
-        "CARD_IMG_2": images.get("photo2.jpg", ""),
-        "CARD_IMG_3": images.get("photo3.jpg", ""),
+        "HERO_IMG":   images.get("hero.jpg")   or _FALLBACK_IMGS["HERO_IMG"],
+        "CARD_IMG_1": images.get("photo1.jpg") or _FALLBACK_IMGS["CARD_IMG_1"],
+        "CARD_IMG_2": images.get("photo2.jpg") or _FALLBACK_IMGS["CARD_IMG_2"],
+        "CARD_IMG_3": images.get("photo3.jpg") or _FALLBACK_IMGS["CARD_IMG_3"],
     }
     for token, path in mapping.items():
-        if path:
-            html = html.replace(token, path)
+        html = html.replace(token, path)
+    return html
+
+
+def _fix_html(html: str) -> str:
+    """
+    Post-process the generated HTML to fix common LLM output issues:
+    - Wrap each non-library inline <script> block in try-catch so one bad
+      script doesn't break the whole page
+    - Change Swiper loop:true → loop:false to avoid the 'not enough slides'
+      warning when the LLM only generates 1 testimonial
+    - Replace any leftover image tokens that weren't in the expected position
+    """
+    # 1. Fallback: replace any remaining raw tokens (e.g. inside CSS url())
+    for token, url in _FALLBACK_IMGS.items():
+        html = html.replace(token, url)
+
+    # 2. Swiper: disable loop mode to avoid the 'not enough slides' warning
+    html = re.sub(r'\bloop\s*:\s*true\b', 'loop:false', html)
+
+    # 3. Wrap user-written inline scripts in try-catch
+    #    Skip CDN script tags (src=...) and the framework init blocks we
+    #    already know are correct. Only wrap inline blocks with actual code.
+    cdn_hosts = ("cdn.jsdelivr", "cdnjs.", "unpkg.", "gumroad.", "fonts.g")
+
+    def _wrap_script(m: re.Match) -> str:
+        attrs = m.group(1)   # everything between <script and >
+        body  = m.group(2)   # the script content
+        # Don't touch external scripts or empty bodies
+        if "src=" in attrs or not body.strip():
+            return m.group(0)
+        # Don't double-wrap
+        if "try{" in body.replace(" ", ""):
+            return m.group(0)
+        wrapped = f"try{{\n{body}\n}}catch(_e){{console.warn('GIL script error:',_e);}}"
+        return f"<script{attrs}>{wrapped}</script>"
+
+    html = re.sub(
+        r'<script([^>]*)>([\s\S]*?)</script>',
+        _wrap_script,
+        html,
+        flags=re.IGNORECASE,
+    )
     return html
 
 
@@ -417,10 +466,11 @@ def _run_generation(description: str, out_folder: Path) -> str:
     if html.startswith("ERROR:"):
         return html
 
+    html = _inject_images(html, images)
     if images:
-        html = _inject_images(html, images)
         print(f"[G.I.L. WEBGEN] Injected {len(images)} real images")
 
+    html = _fix_html(html)
     return html
 
 
