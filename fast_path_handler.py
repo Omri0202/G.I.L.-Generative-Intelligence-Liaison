@@ -921,7 +921,54 @@ def _dev_docker_ps(text: str, lower: str, eng) -> bool:
 
 # ── Master entry point ────────────────────────────────────────────────────────
 
+def _fix_confirm(text: str, lower: str, eng) -> bool:
+    """User said yes/no to a pending error-fix plan (see error_fixer.py)."""
+    pending = getattr(eng, "_pending_fix", None)
+    if not pending:
+        return False
+
+    _YES = {"yes", "yeah", "sure", "go ahead", "do it", "fix it", "run it",
+            "ok", "okay", "yep", "please", "go"}
+    _NO  = {"no", "nope", "nah", "dont", "don't", "cancel", "skip",
+            "nevermind", "never mind", "stop", "not now"}
+    words = set(lower.replace(".", "").replace(",", "").split())
+
+    if words & _YES:
+        eng._pending_fix = None
+        log.debug("fast-path: fix confirmed (%d commands)", len(pending))
+
+        def _run():
+            from ears import unmute
+            import error_fixer
+            results = error_fixer.execute(pending)
+            detail = "\n".join(
+                f"{'✓' if ok else '✕'} `{cmd}`" + (f"\n```\n{out}\n```" if out else "")
+                for cmd, ok, out in results)
+            eng.window.add_chat_message("**Fix results:**\n" + detail, "gil")
+            summary = error_fixer.summarize(results)
+            unmute()
+            eng.window.set_state("speaking", said=summary)
+            eng._speak(summary)
+            eng._last_spoke_at[0] = time.time() - 1.5
+            eng._last_said[0]     = summary
+            eng.window.set_state("listening")
+
+        threading.Thread(target=_run, daemon=True, name="GIL-RunFix").start()
+        return True
+
+    if words & _NO:
+        eng._pending_fix = None
+        log.debug("fast-path: fix dismissed")
+        msg = "Okay, skipped. The plan stays in the chat if you change your mind."
+        eng.window.add_chat_message(msg, "gil")
+        eng.window.set_state("listening")
+        return True
+
+    return False
+
+
 _HANDLERS = [
+    _fix_confirm,        # pending error-fix yes/no — must win when armed
     _dev_mode_toggle,    # check first — very specific phrases
     _recap_confirm,
     _whatsapp,

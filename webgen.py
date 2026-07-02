@@ -175,6 +175,14 @@ SWIPER TESTIMONIALS (MUST have exactly 3 swiper-slide divs — loop mode require
 ALPINE FAQ:
 <div x-data="{a:null}"><div><button @click="a=a===1?null:1" style="background:var(--card);color:var(--text);border:1px solid var(--border);width:100%;padding:1.2rem 1.5rem;text-align:left;border-radius:var(--radius);cursor:pointer;display:flex;justify-content:space-between;">Question? <i class="fas fa-chevron-down"></i></button><div x-show="a===1" x-transition style="padding:1rem 1.5rem;color:var(--muted);">Answer.</div></div></div>
 
+PAGE STRUCTURE - LONG, SUBSTANTIAL PAGE (10+ sections, in this order):
+1 Navbar (class="navbar"): brand + links Home(index.html) About(about.html) Services(services.html) Contact(contact.html)
+2 Full-viewport hero  3 Stats strip (data-count numbers)  4 About preview (reveal-left + reveal-right split)
+5 Offering cards grid (stagger, 4-6 cards with real names & prices)  6 Benefits/feature split section
+7 Gallery/showcase grid  8 Swiper testimonials  9 Alpine FAQ (4+ questions)  10 CTA banner  11 Rich footer (footer-grid, 3-4 columns)
+Every section gets real, specific copy - long enough to feel like a finished professional site, never lorem ipsum.
+The navbar MUST contain these exact hrefs: about.html, services.html, contact.html (they are real pages).
+
 OUTPUT: Only the HTML. Start with <!DOCTYPE html>.
 """
 
@@ -247,7 +255,7 @@ def _generate_claude(user_prompt: str, api_key: str) -> str:
         print(f"[G.I.L. WEBGEN] Using Claude ({_CLAUDE_MODEL})...")
         client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
-            model=_CLAUDE_MODEL, max_tokens=8096, system=_SYSTEM,
+            model=_CLAUDE_MODEL, max_tokens=16000, system=_SYSTEM,
             messages=[{"role": "user", "content": user_prompt}],
         )
         return msg.content[0].text.strip()
@@ -272,7 +280,8 @@ def _generate_groq(user_prompt: str, api_keys: list[str]) -> str:
         for model in _MODELS:
             print(f"[G.I.L. WEBGEN] Trying {model}...")
             payload = {"model": model, "messages": messages,
-                       "max_tokens": 8000, "temperature": 0.7}
+                       "max_tokens": 14000 if model.startswith("llama-3.3") else 8000,
+                       "temperature": 0.7}
             for key in api_keys:
                 hdrs = {"Authorization": f"Bearer {key}",
                         "Content-Type": "application/json"}
@@ -559,6 +568,16 @@ def _run_generation(description: str, out_folder: Path) -> str:
         print(f"[G.I.L. WEBGEN] Injected {len(images)} real images")
 
     html = _fix_html(html)
+    if "about.html" not in html:
+        # Model skipped the multi-page nav — add a floating pill so the
+        # About/Services/Contact pages stay reachable.
+        pill = _subpage_nav("index.html").replace(
+            "position:sticky;top:0;z-index:100;",
+            "position:fixed;left:50%;transform:translateX(-50%);bottom:14px;"
+            "z-index:2147482000;border-radius:30px;padding:12px 10px;"
+            "border:1px solid rgba(255,255,255,.14);", 1)
+        html = re.sub(r"</body\s*>", pill + "</body>", html,
+                      count=1, flags=re.IGNORECASE)
     try:
         from web_editor import inject_editor
         html = inject_editor(html)
@@ -625,6 +644,10 @@ def generate_for_project(folder_path: str | Path, description: str = None) -> tu
         return f"Website generated but couldn't save to {folder.name} — {exc}.", None
 
     _open_file(out)
+    try:
+        _spawn_subpages(description, folder, html)
+    except Exception:
+        pass
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = m.group(1).strip() if m else folder.name.replace("-", " ").title()
     return _done_message(title, html), out
@@ -653,6 +676,10 @@ def generate(utterance: str) -> tuple[str, Path | None]:
         return f"Website generated but couldn't save — {exc}.", None
 
     _open_file(path)
+    try:
+        _spawn_subpages(description, folder, html)
+    except Exception:
+        pass
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = m.group(1).strip() if m else description.title()
 
@@ -666,3 +693,126 @@ def _done_message(title: str, html: str) -> str:
                 "panel on the page to add your own text, colors and images.")
     return (f"Done — '{title}' is open in your browser. "
             "Click Customize on the page to make it yours.")
+
+
+_SUBPAGES = [
+    ("about.html",    "About",    "the story, mission, values, team and a timeline"),
+    ("services.html", "Services", "the full offering: services/menu/products with names, prices, categories and details"),
+    ("contact.html",  "Contact",  "a contact form, address, opening hours, phone/email, FAQ and a map placeholder"),
+]
+
+
+def _extract_root(html: str) -> str:
+    m = re.search(r":root\s*\{[^}]*\}", html)
+    return m.group(0) if m else ""
+
+
+def _page_image_map(folder: Path) -> dict:
+    """Token→path map for subpages: reuse the real generated images when they
+    exist on disk, fall back to the Picsum CDN otherwise."""
+    files = {"HERO_IMG": "hero.jpg", "CARD_IMG_1": "photo1.jpg",
+             "CARD_IMG_2": "photo2.jpg", "CARD_IMG_3": "photo3.jpg"}
+    out = {}
+    for token, fname in files.items():
+        out[token] = (f"./images/{fname}" if (folder / "images" / fname).exists()
+                      else _FALLBACK_IMGS[token])
+    return out
+
+
+def _subpage_nav(current: str) -> str:
+    links = [("index.html", "Home")] + [(f, t) for f, t, _ in _SUBPAGES]
+    items = "".join(
+        f'<a href="{f}" style="color:{"var(--accent)" if f == current else "var(--text)"};'
+        f'text-decoration:none;margin:0 14px;font-weight:600;font-size:.95rem;">{t}</a>'
+        for f, t in links)
+    return ('<nav style="position:sticky;top:0;z-index:100;display:flex;align-items:center;'
+            'justify-content:center;padding:18px;background:var(--bg2,rgba(0,0,0,.7));'
+            'backdrop-filter:blur(12px);border-bottom:1px solid var(--border,rgba(255,255,255,.08));">'
+            + items + "</nav>")
+
+
+def _offline_subpage(fname: str, title: str, brief: str,
+                     description: str, root_css: str) -> str:
+    """Instant placeholder subpage in the site's own palette — written before
+    the LLM upgrade so nav links work from second zero."""
+    root = root_css or (":root{--bg:#0C0A08;--bg2:#141110;--text:#F5F1EA;"
+                        "--muted:rgba(245,241,234,.6);--card:#191512;"
+                        "--border:rgba(255,255,255,.09);--accent:#F4A261;"
+                        "--font-d:serif;--font-b:sans-serif;}")
+    name = description.strip().title()[:48]
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title} — {name}</title>
+<style>{root}
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{background:var(--bg);color:var(--text);font-family:var(--font-b);line-height:1.7;}}
+h1,h2{{font-family:var(--font-d);}}
+main{{max-width:900px;margin:0 auto;padding:70px 24px;}}
+h1{{font-size:clamp(2.2rem,5vw,3.6rem);color:var(--accent);margin-bottom:18px;}}
+p{{color:var(--muted);margin-bottom:16px;}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:26px;margin-top:22px;}}
+</style></head><body>
+{_subpage_nav(fname)}
+<main><h1>{title}</h1>
+<p>This page covers {brief}.</p>
+<div class="card"><p>G.I.L. is writing the full {title} page right now — refresh in about half a
+minute. You can already edit everything here with the Customize panel.</p></div>
+</main></body></html>"""
+
+
+def _spawn_subpages(description: str, folder: Path, index_html: str) -> None:
+    """Write instant placeholder subpages, then upgrade each with the LLM in
+    a background thread. Never raises — the placeholders always exist."""
+    import threading as _th
+    from web_editor import inject_editor as _ed
+
+    root_css = _extract_root(index_html)
+    imgmap   = _page_image_map(folder)
+
+    for fname, title, brief in _SUBPAGES:
+        try:
+            (folder / fname).write_text(
+                _ed(_offline_subpage(fname, title, brief, description, root_css)),
+                encoding="utf-8")
+        except Exception:
+            pass
+
+    def _upgrade():
+        try:
+            import activity
+        except Exception:
+            activity = None
+        for fname, title, brief in _SUBPAGES:
+            aid = None
+            try:
+                if activity:
+                    aid = activity.start("code", f"Writing {title} page")
+                prompt = (
+                    f"Build ONLY the {title} page ({fname}) of a multi-page website for: {description}.\n"
+                    f"Focus of this page: {brief}. 4-6 substantial sections of real, specific copy.\n"
+                    f"Use EXACTLY this palette block: {root_css}\n"
+                    f"Compact page header (not a full-viewport hero). "
+                    f"Navbar links: index.html (Home), about.html, services.html, contact.html — "
+                    f"mark {fname} as the active page.\n"
+                    f"Images: only the CARD_IMG_1 / CARD_IMG_2 / CARD_IMG_3 placeholders."
+                )
+                key = _anthropic_key()
+                html = (_generate_claude(prompt, key) if key
+                        else _generate_groq(prompt, _groq_keys()))
+                if html.startswith("ERROR:"):
+                    raise RuntimeError(html[6:60])
+                for token, path in imgmap.items():
+                    html = html.replace(token, path)
+                html = _fix_html(html)
+                if 'href="index.html"' not in html:
+                    html = html.replace("<body>", "<body>" + _subpage_nav(fname), 1)
+                (folder / fname).write_text(_ed(html), encoding="utf-8")
+                if activity and aid is not None:
+                    activity.done(aid)
+                print(f"[G.I.L. WEBGEN] upgraded {fname}")
+            except Exception as exc:
+                print(f"[G.I.L. WEBGEN] subpage {fname} kept as placeholder: {exc}")
+                if activity and aid is not None:
+                    activity.fail(aid, str(exc)[:80])
+
+    _th.Thread(target=_upgrade, daemon=True, name="GIL-WebSubpages").start()

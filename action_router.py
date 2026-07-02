@@ -371,6 +371,49 @@ def dispatch(
         threading.Thread(target=_webgen, daemon=True, name="GIL-WebGen").start()
         return True
 
+    # ── Error analysis & repair ───────────────────────────────────────────────
+    elif action == "fix_error":
+        def _fix(err=target or text):
+            from ears import unmute
+            import error_fixer, activity as _act
+            aid = _act.start("brain", "Analyzing the error")
+            try:
+                from context_engine import get_screen_context
+                scr = get_screen_context()
+            except Exception:
+                scr = ""
+            analysis = error_fixer.analyze(err, scr)
+            if not analysis:
+                _act.fail(aid, "analysis failed")
+                unmute()
+                msg = "I couldn't analyze that error right now — paste the exact message in the chat and I'll try again."
+                window.set_state("speaking", said=msg); speak(msg)
+                window.add_chat_message(msg, "gil")
+                last_spoke_at[0] = __import__("time").time() - 1.5
+                last_said[0] = msg
+                window.set_state("listening")
+                return
+            _act.done(aid, analysis.get("diagnosis", "")[:120])
+            report = error_fixer.format_report(analysis)
+            window.add_chat_message(report, "gil")
+            auto = (analysis.get("fix_type") == "auto"
+                    and analysis.get("commands"))
+            if auto:
+                engine._pending_fix = analysis["commands"]
+                spoken = (analysis.get("diagnosis", "Found it.")
+                          + " I can fix this myself — want me to?")
+            else:
+                engine._pending_fix = None
+                spoken = (analysis.get("diagnosis", "Found it.")
+                          + " I've put the steps in the chat.")
+            unmute()
+            window.set_state("speaking", said=spoken); speak(spoken)
+            last_spoke_at[0] = __import__("time").time() - 1.5
+            last_said[0] = spoken
+            window.set_state("listening")
+        threading.Thread(target=_fix, daemon=True, name="GIL-FixError").start()
+        return True
+
     elif action == "look":
         def _look(q=target):
             from ears import unmute

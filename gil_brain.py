@@ -229,6 +229,7 @@ calendar â†’ today|tomorrow|week | add_event â†’ "title | YYYY-MM-DD H
 look â†’ question or blank | open_camera â†’ null | close_camera â†’ null
 build_website â†’ detailed description of the website to build
 generate_image -> detailed image description
+fix_error -> the exact error text or a description of the problem (G.I.L. diagnoses it, posts a fix plan in chat, and can run the fix himself once the user approves)
 
 DEV TOOLS (coding/development requests only):
 git_status -> null | git_commit -> commit message | git_push -> null
@@ -325,6 +326,12 @@ User: put computer to sleep
 
 User: set up my workday - open vs code and chrome, play my focus playlist, and set volume to 30
 {{"speech": "Setting up your workday.", "mission": {{"title": "Workday setup", "steps": [{{"action": "open_app", "target": "visual studio code", "label": "Opening VS Code"}}, {{"action": "open_app", "target": "chrome", "label": "Opening Chrome"}}, {{"action": "spotify", "target": "play focus playlist", "label": "Starting focus playlist"}}, {{"action": "pc_volume", "target": "set 30", "label": "Setting volume to 30"}}]}}, "actions": [], "report": null}}
+
+User: I'm getting ModuleNotFoundError: No module named requests
+{{"speech": "On it — analyzing the error.", "actions": [{{"action": "fix_error", "target": "ModuleNotFoundError: No module named requests"}}], "report": null}}
+
+User: there's an error on my screen, can you fix it
+{{"speech": "Let me look at it.", "actions": [{{"action": "fix_error", "target": "error visible on screen"}}], "report": null}}
 
 CRITICAL: Return ONE valid JSON object. Use "actions" array (or "mission" for 3+ steps). Nothing outside the JSON.\
 """
