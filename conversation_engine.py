@@ -434,10 +434,22 @@ class ConversationEngine:
             else "closed — no camera window is open"
         )
         try:
+            import activity as _activity
+            _aid_think = _activity.start("brain", "Thinking")
+        except Exception:
+            _aid_think = None
+        try:
             response = self.brain.query(text, project_context=project_ctx,
                                          camera_state=_cam_state)
+            if _aid_think is not None:
+                _activity.done(_aid_think)
         except Exception as exc:
             log.error("Brain error", exc_info=True)
+            if _aid_think is not None:
+                try:
+                    _activity.fail(_aid_think, str(exc)[:120])
+                except Exception:
+                    pass
             unmute()
             window.set_state("listening" if self.conv.active else "standby")
             return
@@ -449,6 +461,21 @@ class ConversationEngine:
         action        = response.get("action")
         target        = response.get("target") or ""
         extra_actions = response.get("extra_actions") or []
+
+        # ── Mission: brain returned a multi-step plan ──────────────────────────
+        mission = response.get("mission")
+        if isinstance(mission, dict) and mission.get("steps"):
+            self._last_groq_call_at = time.time()
+            if speech:
+                self._last_said[0] = speech
+                self._last_addressed_at[0] = time.time()
+                window.set_state("speaking", said=speech)
+                window.add_chat_message(speech, "gil")
+                self._speak(speech)
+                self._last_spoke_at[0] = time.time()
+            from missions import run_mission
+            run_mission(mission, self)   # owns unmute + set_state("listening")
+            return
 
         if is_greeting_response(speech):
             print(f"[G.I.L.] Suppressed greeting loop: {speech!r}")

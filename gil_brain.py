@@ -81,6 +81,34 @@ def _load_model() -> str:
 
 GROQ_MODEL = _load_model()
 
+# The heavyweight model used for complex/multi-step/coding queries.
+# Simple commands stay on the configured fast model for sub-second latency.
+_SMART_MODEL = "llama-3.3-70b-versatile"
+
+_MISSION_HINTS = (
+    "set up", "setup", "workflow", "routine", "organize", "prepare",
+    " plan ", "mission", "one by one", "step by step", "and then",
+    "after that", "first ", "workday", "morning", "wind down",
+)
+
+
+def _pick_model(user_input: str, sub_prompt: str) -> str:
+    """
+    Smart model routing: long, multi-step, or specialist (code/research/creative)
+    queries go to the 70B model; short commands stay on the fast default.
+    """
+    lower = f" {user_input.lower()} "
+    complex_query = (
+        len(user_input.split()) > 14
+        or bool(sub_prompt)
+        or lower.count(" and ") >= 2
+        or any(h in lower for h in _MISSION_HINTS)
+    )
+    if complex_query and GROQ_MODEL != _SMART_MODEL:
+        return _SMART_MODEL
+    return GROQ_MODEL
+
+
 _groq_key_index = 0
 
 
@@ -134,6 +162,15 @@ Use the "actions" array â€” include EVERY action needed:
 {{"speech": "...", "actions": [{{"action": "...", "target": "..."}}, {{"action": "...", "target": "..."}}], "report": null}}
 Single task: {{"speech": "...", "actions": [{{"action": "...", "target": "..."}}], "report": null}}
 No action needed: {{"speech": "...", "actions": [], "report": null}}
+
+━━ MISSIONS — complex multi-step operations ━━
+When a request needs 3 OR MORE steps, or the steps must run in a specific order,
+return a "mission" instead of a plain actions array:
+{{"speech": "short confident acknowledgement", "mission": {{"title": "2-4 word mission name", "steps": [{{"action": "...", "target": "...", "label": "Opening Chrome"}}]}}, "actions": [], "report": null}}
+• Steps use the exact same action/target vocabulary listed below.
+• "label" = short present-tense description the user sees live ("Opening VS Code").
+• G.I.L. executes steps one by one, shows live progress, and reports when done.
+• 1-2 actions → use the normal "actions" array, NOT a mission.
 
 â”â” INTELLIGENCE RULES â”â”
 â€¢ CONTEXT: Read screen context, active projects, memory, calendar â€” reference them naturally.
@@ -286,7 +323,10 @@ User: tile vs code and chrome
 User: put computer to sleep
 {{"speech": "Sleeping.", "actions": [{{"action": "pc", "target": "sleep"}}], "report": null}}
 
-CRITICAL: Return ONE valid JSON object. Use "actions" array always. Nothing outside the JSON.\
+User: set up my workday - open vs code and chrome, play my focus playlist, and set volume to 30
+{{"speech": "Setting up your workday.", "mission": {{"title": "Workday setup", "steps": [{{"action": "open_app", "target": "visual studio code", "label": "Opening VS Code"}}, {{"action": "open_app", "target": "chrome", "label": "Opening Chrome"}}, {{"action": "spotify", "target": "play focus playlist", "label": "Starting focus playlist"}}, {{"action": "pc_volume", "target": "set 30", "label": "Setting volume to 30"}}]}}, "actions": [], "report": null}}
+
+CRITICAL: Return ONE valid JSON object. Use "actions" array (or "mission" for 3+ steps). Nothing outside the JSON.\
 """
 
 
@@ -484,11 +524,14 @@ class GILBrain:
         if _sub:
             system += "\n\n" + _sub
 
+        chosen_model = _pick_model(user_input, _sub)
+        if chosen_model != GROQ_MODEL:
+            log.info("smart routing -> %s", chosen_model)
         payload = {
-            "model":       GROQ_MODEL,
+            "model":       chosen_model,
             "messages":    [{"role": "system", "content": system}] + self.history,
             "temperature": 0.30,
-            "max_tokens":  500,
+            "max_tokens":  900,
         }
         def _try_groq(key: str):
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -627,6 +670,45 @@ class GILBrain:
         if not result.get("speech", "").strip():
             return None
         return result
+
+    def summarize_results(self, title: str, results: list) -> str:
+        """
+        One short spoken summary of a completed mission.
+        results = [(label, status, detail), ...]  status: "done"/"fail"
+        Cheap single call on the fast model, no history. Falls back to a
+        counted summary if the API is unreachable.
+        """
+        ok   = sum(1 for _, s, _ in results if s == "done")
+        n    = len(results)
+        fallback = (f"Mission complete — all {n} steps done." if ok == n
+                    else f"Mission finished — {ok} of {n} steps succeeded.")
+        if not GROQ_KEYS:
+            return fallback
+        lines = "\n".join(
+            f"- {label}: {status.upper()}" + (f" — {detail[:100]}" if detail else "")
+            for label, status, detail in results
+        )
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [
+                {"role": "system", "content":
+                 "You are G.I.L., a JARVIS-style assistant. Summarize the mission "
+                 "outcome for the user in 1-2 short spoken sentences. Confident, "
+                 "specific, no markdown, no lists. Mention failures plainly."},
+                {"role": "user", "content": f"Mission: {title}\nSteps:\n{lines}"},
+            ],
+            "temperature": 0.4,
+            "max_tokens": 120,
+        }
+        try:
+            hdrs = {"Authorization": f"Bearer {GROQ_KEYS[0]}",
+                    "Content-Type": "application/json"}
+            r = _session.post(GROQ_URL, json=payload, headers=hdrs, timeout=10)
+            r.raise_for_status()
+            out = r.json()["choices"][0]["message"]["content"].strip()
+            return out or fallback
+        except Exception:
+            return fallback
 
 
 def _parse_json(raw: str) -> dict:

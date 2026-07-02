@@ -457,11 +457,28 @@ def _run_generation(description: str, out_folder: Path) -> str:
 
     img_dir = out_folder / "images"
 
+    try:
+        import activity
+        aid_html = activity.start("code",  "Designing the page")
+        aid_imgs = activity.start("image", "Generating site images")
+    except Exception:
+        aid_html = aid_imgs = None
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
         html_future = ex.submit(_generate_html, description, {})
         img_future  = ex.submit(_generate_site_images, description, img_dir)
         html   = html_future.result()
         images = img_future.result()
+
+    try:
+        import activity
+        if aid_html is not None:
+            (activity.fail if html.startswith("ERROR:") else activity.done)(aid_html)
+        if aid_imgs is not None:
+            activity.done(aid_imgs, f"{len(images)} images ready" if images
+                          else "using fallback images")
+    except Exception:
+        pass
 
     if html.startswith("ERROR:"):
         return html

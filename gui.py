@@ -1307,6 +1307,15 @@ class ChatWindow(ctk.CTkToplevel):
         self._session_name_var  = ctk.StringVar(value="New conversation")
         self._last_user_text    = ""   # for regenerate
         self._last_gil_frames   = []   # frames of last GIL response
+        # Live activity feed (Claude-style tool cards)
+        self._act_card      = None    # current group card frame
+        self._act_body      = None    # rows container inside the card
+        self._act_header    = None    # header label (updates to "Done")
+        self._act_rows      = {}      # activity id -> row widget dict
+        self._act_running   = set()   # ids still running (drives spinner)
+        self._act_group     = ""      # group label of current card
+        self._act_spin_id   = None    # after() handle for spinner animation
+        self._act_spin_ph   = 0
         self._build()
         self.update_idletasks()   # resolve geometry so winfo_width is accurate on first render
         self._refresh_sidebar()
@@ -2108,6 +2117,186 @@ class ChatWindow(ctk.CTkToplevel):
             return
         self._typing_phase += 1
         self._typing_id = self.after(300, self._animate_dots)
+
+    # ── Live activity feed (Claude-style tool cards) ──────────────────────────
+    #
+    # Every action GIL performs is published on the activity bus and rendered
+    # here as a row inside a grouped "working" card: spinner while running,
+    # ✓/✕ with duration when finished. Missions get their own titled card.
+
+    _ACT_SPIN  = ["◐", "◓", "◑", "◒"]
+    _ACT_OK    = "#22C55E"
+    _ACT_FAIL  = "#EF4444"
+
+    def on_activity(self, entry: dict) -> None:
+        """Main-thread entry point — called via GILWindow.after(0, ...)."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        aid = entry["id"]
+        if aid in self._act_rows:
+            self._update_activity_row(aid, entry)
+            return
+        self._ensure_activity_card(entry.get("group") or "")
+        self._add_activity_row(aid, entry)
+        try:
+            self._scroll._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def _card_alive(self) -> bool:
+        card = self._act_card
+        if card is None:
+            return False
+        try:
+            return bool(card.winfo_exists())
+        except Exception:
+            return False
+
+    def _ensure_activity_card(self, group: str) -> None:
+        # Reuse the open card while the group matches; _maybe_finish_card
+        # clears _act_card after 4s of quiet, which forces a fresh card.
+        if self._card_alive() and self._act_group == group:
+            return
+        # Start a fresh card
+        self._act_rows    = {}
+        self._act_running = set()
+        self._act_group   = group
+
+        holder = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        holder.pack(fill="x")
+        card = ctk.CTkFrame(holder, fg_color=self._INPUT, corner_radius=12,
+                            border_width=1, border_color=self._BORDER)
+        card.pack(anchor="w", padx=28, pady=(6, 6), fill="x")
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=14, pady=(8, 2))
+        ctk.CTkLabel(head, text="", image=_icon("activity", self._ACCENT, 13),
+                     width=16).pack(side="left", padx=(0, 7))
+        title = group if group else "G.I.L. is working"
+        hdr = ctk.CTkLabel(head, text=title,
+                           font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                           text_color=self._DIMMED, anchor="w")
+        hdr.pack(side="left")
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=14, pady=(0, 8))
+
+        self._act_card   = holder
+        self._act_body   = body
+        self._act_header = hdr
+
+    def _add_activity_row(self, aid: int, entry: dict) -> None:
+        row = ctk.CTkFrame(self._act_body, fg_color="transparent")
+        row.pack(fill="x", pady=1)
+        running = entry["status"] == "running"
+        st = ctk.CTkLabel(row, text=self._ACT_SPIN[0] if running else
+                          ("✓" if entry["status"] == "done" else "✕"),
+                          width=18,
+                          font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                          text_color=self._ACCENT if running else
+                          (self._ACT_OK if entry["status"] == "done"
+                           else self._ACT_FAIL))
+        st.pack(side="left")
+        lbl = ctk.CTkLabel(row, text=entry["title"],
+                           font=ctk.CTkFont("Segoe UI", 11),
+                           text_color=self._TXT, anchor="w")
+        lbl.pack(side="left", padx=(6, 0))
+        dur = ctk.CTkLabel(row, text="",
+                           font=ctk.CTkFont("Segoe UI", 9),
+                           text_color=self._MUTED, anchor="e")
+        dur.pack(side="right")
+        det = ctk.CTkLabel(row, text=(entry.get("detail") or "")[:80],
+                           font=ctk.CTkFont("Segoe UI", 9),
+                           text_color=self._MUTED, anchor="w")
+        det.pack(side="left", padx=(10, 6))
+        self._act_rows[aid] = {"status": st, "label": lbl, "detail": det,
+                               "dur": dur}
+        if running:
+            self._act_running.add(aid)
+            self._start_act_spinner()
+        else:
+            self._maybe_finish_card()
+
+    def _update_activity_row(self, aid: int, entry: dict) -> None:
+        w = self._act_rows.get(aid)
+        if not w:
+            return
+        try:
+            if not w["status"].winfo_exists():
+                return
+        except Exception:
+            return
+        status = entry["status"]
+        if status == "running":
+            w["detail"].configure(text=(entry.get("detail") or "")[:80])
+            return
+        w["status"].configure(
+            text="✓" if status == "done" else "✕",
+            text_color=self._ACT_OK if status == "done" else self._ACT_FAIL)
+        detail = (entry.get("detail") or "")[:80]
+        if detail:
+            w["detail"].configure(text=detail)
+        d = entry.get("duration") or 0.0
+        if d >= 0.05:
+            w["dur"].configure(text=f"{d:.1f}s" if d < 60 else f"{d/60:.1f}m")
+        self._act_running.discard(aid)
+        self._maybe_finish_card()
+
+    def _maybe_finish_card(self) -> None:
+        if self._act_running:
+            return
+        if self._act_spin_id:
+            try:
+                self.after_cancel(self._act_spin_id)
+            except Exception:
+                pass
+            self._act_spin_id = None
+        hdr, rows = self._act_header, self._act_rows
+        if hdr is not None and rows:
+            try:
+                fails = 0   # recompute from row glyphs
+                for w in rows.values():
+                    if w["status"].cget("text") == "✕":
+                        fails += 1
+                n = len(rows)
+                base = self._act_group or "Worked"
+                txt = (f"{base} — {n - fails}/{n} steps done" if self._act_group
+                       else (f"Done — {n} step{'s' if n > 1 else ''}" if not fails
+                             else f"Finished — {n - fails}/{n} ok"))
+                hdr.configure(text=txt)
+            except Exception:
+                pass
+        # After a quiet period the card is considered closed; the next
+        # activity burst opens a fresh card instead of appending here.
+        def _close():
+            if not self._act_running:
+                self._act_group = ""
+                self._act_card  = None
+        self.after(4000, _close)
+
+    def _start_act_spinner(self) -> None:
+        if self._act_spin_id:
+            return
+        self._animate_act_spinner()
+
+    def _animate_act_spinner(self) -> None:
+        if not self._act_running:
+            self._act_spin_id = None
+            return
+        self._act_spin_ph = (self._act_spin_ph + 1) % len(self._ACT_SPIN)
+        glyph = self._ACT_SPIN[self._act_spin_ph]
+        for aid in list(self._act_running):
+            w = self._act_rows.get(aid)
+            if not w:
+                continue
+            try:
+                w["status"].configure(text=glyph)
+            except Exception:
+                self._act_running.discard(aid)
+        self._act_spin_id = self.after(160, self._animate_act_spinner)
 
     # ── Messages ──────────────────────────────────────────────────────────────
 
@@ -3097,6 +3286,27 @@ class GILWindow(ctk.CTk):
         self._schedule_tick()
         self.after(150, self._create_speak_bubble)
 
+        # Live activity feed — forward events to the chat window (if open)
+        try:
+            import activity as _activity
+            _activity.subscribe(self._on_activity_event)
+        except Exception:
+            pass
+
+    def _on_activity_event(self, entry: dict) -> None:
+        """Called from worker threads by the activity bus — marshal to UI."""
+        def _do():
+            try:
+                win = getattr(self, "_chat_win", None)
+                if win and win.winfo_exists():
+                    win.on_activity(entry)
+            except Exception:
+                pass
+        try:
+            self.after(0, _do)
+        except Exception:
+            pass
+
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
@@ -3236,10 +3446,24 @@ class GILWindow(ctk.CTk):
         self._show_float_btn()
 
     def add_chat_message(self, text: str, sender: str) -> None:
-        """Thread-safe — safely no-ops when the chat window is not open."""
+        """
+        Thread-safe. When the chat window is open the message renders there
+        (which also persists it). When it's closed, save straight to the
+        history DB — previously these messages were silently lost, so voice
+        conversations never showed up when the chat was opened later.
+        """
+        def _save_offline():
+            try:
+                from chat_history import save_message
+                save_message(sender, text)
+            except Exception:
+                pass
         def _do():
             if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
                 self._chat_win.add_message(text, sender)
+            else:
+                threading.Thread(target=_save_offline, daemon=True,
+                                 name="GIL-HistSave").start()
         self.after(0, _do)
 
     def chat_show_typing(self) -> None:

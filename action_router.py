@@ -18,6 +18,25 @@ log = _get_log("router")
 def _run_dev_action(action: str, target: str) -> str:
     """Dispatch a developer tool action and return a speech-ready result."""
     try:
+        import activity
+        kind, label = activity.label_for(action, target)
+        aid = activity.start(kind, label)
+    except Exception:
+        aid = None
+    result = _run_dev_action_inner(action, target)
+    if aid is not None:
+        try:
+            import activity
+            low = (result or "").lower()
+            bad = any(w in low for w in ("error", "failed", "couldn't", "not found"))
+            (activity.fail if bad else activity.done)(aid, (result or "")[:120])
+        except Exception:
+            pass
+    return result
+
+
+def _run_dev_action_inner(action: str, target: str) -> str:
+    try:
         if action == "git_status":
             from dev_git import status; return status()
         if action == "git_commit":

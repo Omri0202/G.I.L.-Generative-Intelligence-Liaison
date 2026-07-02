@@ -368,7 +368,35 @@ def execute_action(action: str, target: str) -> str | None:
     }
     handler = handlers.get(action)
     if handler:
-        return handler()
+        # Publish to the live activity feed so the chat shows what GIL is doing.
+        # Skipped inside missions — the mission runner publishes its own steps.
+        try:
+            import activity
+            if activity.in_group():
+                aid = None
+            else:
+                kind, label = activity.label_for(action, target)
+                aid = activity.start(kind, label)
+        except Exception:
+            aid = None
+        try:
+            result = handler()
+        except Exception as exc:
+            if aid is not None:
+                try:
+                    import activity
+                    activity.fail(aid, str(exc)[:120])
+                except Exception:
+                    pass
+            raise
+        if aid is not None:
+            try:
+                import activity
+                detail = (result or "").strip()[:120] if isinstance(result, str) else ""
+                activity.done(aid, detail)
+            except Exception:
+                pass
+        return result
     print(f"[G.I.L. ACTIONS] Unknown action: {action}")
     return None
 

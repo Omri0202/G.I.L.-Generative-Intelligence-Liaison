@@ -62,8 +62,22 @@ def generate(
     url = f"https://image.pollinations.ai/prompt/{encoded}{params}"
     log.info("requesting image — model=%s  prompt=%s", model, prompt[:80])
 
-    resp = requests.get(url, timeout=90, stream=True)
-    resp.raise_for_status()
+    try:
+        import activity
+        aid = activity.start("image", f"Generating image: {prompt[:44]}")
+    except Exception:
+        aid = None
+    try:
+        resp = requests.get(url, timeout=90, stream=True)
+        resp.raise_for_status()
+    except Exception as exc:
+        if aid is not None:
+            try:
+                import activity
+                activity.fail(aid, str(exc)[:120])
+            except Exception:
+                pass
+        raise
 
     # Build a safe filename
     ts        = time.strftime("%Y%m%d_%H%M%S")
@@ -83,8 +97,20 @@ def generate(
 
     if size_kb < 5:
         filename.unlink(missing_ok=True)
+        if aid is not None:
+            try:
+                import activity
+                activity.fail(aid, "empty image returned")
+            except Exception:
+                pass
         raise IOError("Pollinations returned an empty/invalid image. Try again.")
 
+    if aid is not None:
+        try:
+            import activity
+            activity.done(aid, f"{size_kb} KB")
+        except Exception:
+            pass
     return filename
 
 
