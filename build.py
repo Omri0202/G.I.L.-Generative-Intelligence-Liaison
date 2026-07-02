@@ -163,7 +163,7 @@ HIDDEN = [
     "news", "gcalendar", "gmail_recap", "whatsapp_recap",
     "briefing", "spotify_control", "pc_control", "notes",
     "webgen", "eyes", "face_id", "gestures", "visualizer", "gil_icons",
-    "meeting_detector", "watcher", "activity", "missions",
+    "meeting_detector", "watcher", "activity", "missions", "web_editor",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",
 ]

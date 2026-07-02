@@ -1109,6 +1109,8 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self._alpha    = 0.0
         self._pulse_t  = 0.0
         self._hidden   = False
+        self._hovering = False
+        self._last_active = time.time()   # drives idle ghost-fade
 
         # Offscreen placeholder — real position set in _place() after mapping
         self.geometry(f"{self.W}x{self.H}+16+900")
@@ -1136,6 +1138,7 @@ class _FloatingChatButton(ctk.CTkToplevel):
                                      font=("Segoe UI", 7))
 
         cv.bind("<Button-1>", lambda e: self._click())
+        cv.bind("<Button-3>", lambda e: self.hide())   # right-click: hide for now
         cv.bind("<Enter>",    self._hover_in)
         cv.bind("<Leave>",    self._hover_out)
         cv.configure(cursor="hand2")
@@ -1168,6 +1171,7 @@ class _FloatingChatButton(ctk.CTkToplevel):
         _hide_from_taskbar(self)
         self._fade_in()
         self._pulse()
+        self._idle_loop()
 
     # ── Show / hide (called when chat opens / closes) ─────────────────────────
 
@@ -1185,6 +1189,7 @@ class _FloatingChatButton(ctk.CTkToplevel):
         if self._hidden:
             self._hidden = False
             self._alpha  = 0.0
+            self._last_active = time.time()
             self.deiconify()
             _hide_from_taskbar(self)
             self._fade_in()
@@ -1202,12 +1207,36 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self._on_click()
 
     def _hover_in(self, _) -> None:
+        self._hovering    = True
+        self._last_active = time.time()
+        self._alpha       = 0.95
+        try:
+            self.attributes("-alpha", 0.95)
+        except Exception:
+            pass
         self._cv.itemconfig(self._bg,  fill="#16124A", outline="#3FDDFA")
         self._cv.itemconfig(self._lbl, fill=ACCENT)
 
     def _hover_out(self, _) -> None:
+        self._hovering    = False
+        self._last_active = time.time()
         self._cv.itemconfig(self._bg,  fill="#0D0B2E", outline="#3FDDFA")
         self._cv.itemconfig(self._lbl, fill="#C0E8FF")
+
+    def _idle_loop(self) -> None:
+        """Ghost mode: after 5s of no interaction the pill fades to a faint
+        watermark so it stops competing for attention; hover brings it back."""
+        if not self._alive:
+            return
+        try:
+            if (not self._hidden and not self._hovering
+                    and time.time() - self._last_active > 5.0
+                    and self._alpha > 0.30):
+                self._alpha = max(0.30, self._alpha - 0.06)
+                self.attributes("-alpha", self._alpha)
+        except Exception:
+            pass
+        self.after(120, self._idle_loop)
 
     # ── Animations ────────────────────────────────────────────────────────────
 
@@ -1253,14 +1282,15 @@ class ChatWindow(ctk.CTkToplevel):
             BTN_TXT="#020810", VERSION_TXT="#28204C", WELCOME_BG="#1C1848",
             WELCOME_BORDER="#2E2870",
         ),
+        # Claude-style warm cream light theme (#FAF9F5 family, not blue-white)
         "light": dict(
-            PAGE="#F7F5FC", SIDE="#FFFFFF", SURF2="#F0ECFA", USERBG="#E4EEFF",
-            BORDER="#E2DCF2", UBORDER="#C8D8F4", TXT="#211A38", USERTXT="#1B3D6E",
-            NAME_G="#0B9CB8", NAME_U="#2A5DAE", MUTED="#8479A6", INPUT="#FBFAFF",
-            ACCENT="#0B9CB8", PURPLE="#7C5CDB", DIMMED="#6B6090",
-            AVATAR_BG="#E8E2FA", SEP="#E6E0F4", SCROLL="#FBFAFF",
-            BTN_TXT="#FFFFFF", VERSION_TXT="#B4ACD4", WELCOME_BG="#EFE9FC",
-            WELCOME_BORDER="#D8CCF4",
+            PAGE="#FAF9F5", SIDE="#F0EEE5", SURF2="#F4F2EB", USERBG="#FFFFFF",
+            BORDER="#E5E3D9", UBORDER="#DAD7C9", TXT="#141413", USERTXT="#3D3929",
+            NAME_G="#0B9CB8", NAME_U="#C96442", MUTED="#8D8A7F", INPUT="#FFFFFF",
+            ACCENT="#0B9CB8", PURPLE="#7C5CDB", DIMMED="#6E6B60",
+            AVATAR_BG="#EFEDE3", SEP="#E5E3D9", SCROLL="#F0EEE5",
+            BTN_TXT="#FFFFFF", VERSION_TXT="#C9C6B8", WELCOME_BG="#F0EEE5",
+            WELCOME_BORDER="#DDD9CB",
         ),
     }
 
@@ -1903,28 +1933,51 @@ class ChatWindow(ctk.CTkToplevel):
 
     def _toggle_theme(self) -> None:
         """
-        Switch dark/light and reopen the window with the new palette applied.
-        A full live re-theme would mean touching every widget's color at
-        runtime; closing and recreating the window is far lower risk and
-        the chat reopens instantly since history loading is already fast.
+        Switch dark/light IN PLACE: swap the palette, rebuild the window's
+        content, and restore the open session — the Toplevel itself never
+        closes, so there's no flicker of the window disappearing/reappearing.
         """
         new_theme = "light" if self._theme_name == "dark" else "dark"
         self._save_theme_pref(new_theme)
-        gil_window = self._gil_window
+        self._theme_name = new_theme
+        for key, val in self._THEMES[new_theme].items():
+            setattr(self, f"_{key}", val)
+
         current_session = self._current_session
-        self.destroy()
-        if hasattr(gil_window, "_chat_win"):
-            del gil_window._chat_win
-        gil_window._open_chat_window()
+        # Cancel animations and drop references into widgets we're destroying
+        for handle in ("_typing_id", "_act_spin_id"):
+            h = getattr(self, handle, None)
+            if h:
+                try:
+                    self.after_cancel(h)
+                except Exception:
+                    pass
+                setattr(self, handle, None)
+        self._typing_lbl = self._typing_frame_ref = None
+        self._act_card = self._act_body = self._act_header = None
+        self._act_rows = {}; self._act_running = set(); self._act_group = ""
+        self._last_gil_frames = []
+        self._slash_menu = None
+
+        for w in self.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self.configure(fg_color=self._PAGE)
+        self._build()
+        self.update_idletasks()
+        self._refresh_sidebar()
         try:
-            new_win = gil_window._chat_win
             from chat_history import list_sessions
             sessions = {s["id"]: s for s in list_sessions(30)}
             if current_session in sessions:
                 s = sessions[current_session]
-                new_win._open_session(current_session, s.get("name") or "Conversation")
+                self._open_session(current_session, s.get("name") or "Conversation")
+            else:
+                self._load_current()
         except Exception:
-            pass
+            self._load_current()
 
     def _new_chat(self) -> None:
         try:

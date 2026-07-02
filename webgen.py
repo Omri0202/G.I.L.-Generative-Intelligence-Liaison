@@ -257,29 +257,92 @@ def _generate_claude(user_prompt: str, api_key: str) -> str:
         return _generate_groq(user_prompt, keys) if keys else f"ERROR: {exc}"
 
 def _generate_groq(user_prompt: str, api_keys: list[str]) -> str:
+    import time as _t
     import requests as _rq
     _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-    _MODELS   = ["llama-3.3-70b-versatile", "gemma2-9b-it"]
+    _MODELS   = ["llama-3.3-70b-versatile", "gemma2-9b-it", "llama-3.1-8b-instant"]
     messages  = [{"role": "system", "content": _SYSTEM},
                  {"role": "user",   "content": user_prompt}]
-    for model in _MODELS:
-        print(f"[G.I.L. WEBGEN] Trying {model}...")
-        payload = {"model": model, "messages": messages,
-                   "max_tokens": 8000, "temperature": 0.7}
-        for key in api_keys:
-            hdrs = {"Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json"}
-            try:
-                resp = _rq.post(_GROQ_URL, json=payload, headers=hdrs, timeout=120)
-                if resp.status_code == 429:
+    # Two rounds: if every model is rate-limited, wait and try once more —
+    # Groq per-minute limits usually clear within ~20 seconds.
+    for attempt in range(2):
+        if attempt:
+            print("[G.I.L. WEBGEN] All models limited — waiting 20s and retrying…")
+            _t.sleep(20)
+        for model in _MODELS:
+            print(f"[G.I.L. WEBGEN] Trying {model}...")
+            payload = {"model": model, "messages": messages,
+                       "max_tokens": 8000, "temperature": 0.7}
+            for key in api_keys:
+                hdrs = {"Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json"}
+                try:
+                    resp = _rq.post(_GROQ_URL, json=payload, headers=hdrs, timeout=120)
+                    if resp.status_code == 429:
+                        continue
+                    resp.raise_for_status()
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+                except _rq.exceptions.Timeout:
                     continue
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"].strip()
-            except _rq.exceptions.Timeout:
-                continue
-            except Exception as exc:
-                print(f"[G.I.L. WEBGEN] {model}: {exc}")
+                except Exception as exc:
+                    print(f"[G.I.L. WEBGEN] {model}: {exc}")
     return "ERROR: Groq failed on all models — wait a minute and try again."
+
+def _offline_site(description: str) -> str:
+    """
+    No-LLM emergency template: when every AI model is unreachable, GIL still
+    delivers a clean, professional one-pager built from the description.
+    Uses the same :root CSS-variable structure as generated sites, so the
+    injected customizer (colors/fonts/images) works on it too.
+    """
+    name = re.sub(r"\s+", " ", description).strip().title()[:48] or "My Business"
+    return f"""<!--GIL-OFFLINE--><!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name}</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;800&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{{--bg:#0C0A08;--bg2:#141110;--text:#F5F1EA;--muted:rgba(245,241,234,.62);
+--card:#191512;--border:rgba(255,255,255,.09);--accent:#F4A261;--accent2:#E76F51;
+--accent-rgb:244,162,97;--font-d:'Playfair Display',serif;--font-b:'Inter',sans-serif;}}
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{background:var(--bg);color:var(--text);font-family:var(--font-b);line-height:1.6;}}
+h1,h2,h3{{font-family:var(--font-d);}}
+.hero{{min-height:88vh;display:flex;align-items:center;justify-content:center;text-align:center;
+background:linear-gradient(rgba(0,0,0,.55),rgba(12,10,8,.92)),url('HERO_IMG') center/cover;padding:24px;}}
+.hero h1{{font-size:clamp(2.6rem,7vw,5rem);color:var(--text);}}
+.hero p{{color:var(--muted);max-width:560px;margin:18px auto 30px;font-size:1.1rem;}}
+.btn{{display:inline-block;background:var(--accent);color:#000;padding:15px 40px;border-radius:40px;
+text-decoration:none;font-weight:600;}}
+section{{max-width:1100px;margin:0 auto;padding:80px 24px;}}
+.label{{font-size:.8rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);}}
+h2{{font-size:clamp(1.8rem,4vw,2.8rem);margin:8px 0 34px;}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px;}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;}}
+.card img{{width:100%;height:210px;object-fit:cover;display:block;}}
+.card .pad{{padding:22px;}}
+.card h3{{color:var(--accent);margin-bottom:8px;}}
+.card p{{color:var(--muted);font-size:.95rem;}}
+footer{{border-top:1px solid var(--border);text-align:center;padding:36px 20px;color:var(--muted);font-size:.9rem;}}
+</style></head><body>
+<header class="hero"><div>
+<h1>{name}</h1>
+<p>Welcome — we're glad you're here. Everything on this page is a starting point: open the Customize panel to make it yours.</p>
+<a class="btn" href="#about">Discover more</a>
+</div></header>
+<section id="about"><span class="label">About us</span>
+<h2>Made for you</h2>
+<div class="grid">
+<div class="card"><img src="CARD_IMG_1" alt=""><div class="pad"><h3>Our story</h3>
+<p>Tell your visitors who you are and what makes you different. Click this text in edit mode and write your own.</p></div></div>
+<div class="card"><img src="CARD_IMG_2" alt=""><div class="pad"><h3>What we offer</h3>
+<p>Describe your products or services here — the things people come to you for.</p></div></div>
+<div class="card"><img src="CARD_IMG_3" alt=""><div class="pad"><h3>Visit us</h3>
+<p>Add your address, opening hours and how to get in touch.</p></div></div>
+</div></section>
+<footer>© {name} — built with G.I.L.</footer>
+</body></html>"""
+
 
 _GENERIC_WORDS = {
     "website","webpage","page","site","web","app","application",
@@ -481,13 +544,26 @@ def _run_generation(description: str, out_folder: Path) -> str:
         pass
 
     if html.startswith("ERROR:"):
-        return html
+        # Last line of defense: build the site from the offline template so
+        # the user still gets what they asked for even with every LLM down.
+        print(f"[G.I.L. WEBGEN] {html} — falling back to offline template")
+        try:
+            import activity
+            activity.instant("code", "AI unavailable — using offline template")
+        except Exception:
+            pass
+        html = _offline_site(description)
 
     html = _inject_images(html, images)
     if images:
         print(f"[G.I.L. WEBGEN] Injected {len(images)} real images")
 
     html = _fix_html(html)
+    try:
+        from web_editor import inject_editor
+        html = inject_editor(html)
+    except Exception as exc:
+        print(f"[G.I.L. WEBGEN] editor injection skipped: {exc}")
     return html
 
 
@@ -551,7 +627,7 @@ def generate_for_project(folder_path: str | Path, description: str = None) -> tu
     _open_file(out)
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = m.group(1).strip() if m else folder.name.replace("-", " ").title()
-    return f"Done — '{title}' is open in your browser.", out
+    return _done_message(title, html), out
 
 
 def generate(utterance: str) -> tuple[str, Path | None]:
@@ -580,4 +656,13 @@ def generate(utterance: str) -> tuple[str, Path | None]:
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = m.group(1).strip() if m else description.title()
 
-    return f"Done — '{title}' is open in your browser.", path
+    return _done_message(title, html), path
+
+
+def _done_message(title: str, html: str) -> str:
+    if "<!--GIL-OFFLINE-->" in html:
+        return (f"My AI models are busy right now, so I built '{title}' from my "
+                "offline template — it's open in your browser. Use the Customize "
+                "panel on the page to add your own text, colors and images.")
+    return (f"Done — '{title}' is open in your browser. "
+            "Click Customize on the page to make it yours.")
