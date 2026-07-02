@@ -921,42 +921,57 @@ def _dev_docker_ps(text: str, lower: str, eng) -> bool:
 
 # ── Master entry point ────────────────────────────────────────────────────────
 
+_FIX_YES = {"yes", "yeah", "sure", "go ahead", "do it", "fix it", "run it",
+            "ok", "okay", "yep", "please", "go", "approve", "approved"}
+_FIX_NO  = {"no", "nope", "nah", "dont", "don't", "cancel", "skip",
+            "nevermind", "never mind", "stop", "not now", "decline"}
+
+
 def _fix_confirm(text: str, lower: str, eng) -> bool:
-    """User said yes/no to a pending error-fix plan (see error_fixer.py)."""
+    """
+    Routes yes/no answers to (1) the coding agent's approval gate for a
+    specific change, or (2) a pending fix offer — which launches the agent.
+    """
+    words = set(lower.replace(".", "").replace(",", "").split())
+
+    # 1. The coding agent is waiting for approval on a specific step
+    gate = getattr(eng, "_agent_gate", None)
+    if gate:
+        if words & _FIX_YES:
+            gate["approved"] = True
+            gate["event"].set()
+            log.debug("fast-path: agent step approved")
+            return True
+        if words & _FIX_NO:
+            gate["approved"] = False
+            gate["event"].set()
+            log.debug("fast-path: agent step declined")
+            return True
+        return False   # unrelated speech — keep waiting
+
+    # 2. A diagnosed fix is waiting for permission to start
     pending = getattr(eng, "_pending_fix", None)
     if not pending:
         return False
 
-    _YES = {"yes", "yeah", "sure", "go ahead", "do it", "fix it", "run it",
-            "ok", "okay", "yep", "please", "go"}
-    _NO  = {"no", "nope", "nah", "dont", "don't", "cancel", "skip",
-            "nevermind", "never mind", "stop", "not now"}
-    words = set(lower.replace(".", "").replace(",", "").split())
-
-    if words & _YES:
+    if words & _FIX_YES:
         eng._pending_fix = None
-        log.debug("fast-path: fix confirmed (%d commands)", len(pending))
-
-        def _run():
-            from ears import unmute
-            import error_fixer
-            results = error_fixer.execute(pending)
-            detail = "\n".join(
-                f"{'✓' if ok else '✕'} `{cmd}`" + (f"\n```\n{out}\n```" if out else "")
-                for cmd, ok, out in results)
-            eng.window.add_chat_message("**Fix results:**\n" + detail, "gil")
-            summary = error_fixer.summarize(results)
-            unmute()
-            eng.window.set_state("speaking", said=summary)
-            eng._speak(summary)
-            eng._last_spoke_at[0] = time.time() - 1.5
-            eng._last_said[0]     = summary
-            eng.window.set_state("listening")
-
-        threading.Thread(target=_run, daemon=True, name="GIL-RunFix").start()
+        log.debug("fast-path: fix confirmed — launching code agent")
+        import code_agent
+        if isinstance(pending, dict):
+            code_agent.run_async(eng, pending.get("task", ""),
+                                 pending.get("commands") or None)
+        else:   # legacy: bare command list
+            code_agent.run_async(eng, "Apply this fix and verify it works.",
+                                 list(pending))
+        msg = "On it — I'll ask before I change anything."
+        eng.window.set_state("speaking", said=msg)
+        eng._speak(msg)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0]     = msg
         return True
 
-    if words & _NO:
+    if words & _FIX_NO:
         eng._pending_fix = None
         log.debug("fast-path: fix dismissed")
         msg = "Okay, skipped. The plan stays in the chat if you change your mind."

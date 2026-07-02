@@ -396,22 +396,36 @@ def dispatch(
             _act.done(aid, analysis.get("diagnosis", "")[:120])
             report = error_fixer.format_report(analysis)
             window.add_chat_message(report, "gil")
-            auto = (analysis.get("fix_type") == "auto"
-                    and analysis.get("commands"))
-            if auto:
-                engine._pending_fix = analysis["commands"]
-                spoken = (analysis.get("diagnosis", "Found it.")
-                          + " I can fix this myself — want me to?")
-            else:
-                engine._pending_fix = None
-                spoken = (analysis.get("diagnosis", "Found it.")
-                          + " I've put the steps in the chat.")
+            # Always offer hands-on fixing — the coding agent investigates,
+            # edits code and runs commands itself, asking approval per change.
+            engine._pending_fix = {
+                "task": (f"Fix this error:\n{err}\n\n"
+                         f"Diagnosis: {analysis.get('diagnosis', '')}\n"
+                         + (f"Screen context:\n{scr[:800]}" if scr else "")),
+                "commands": analysis.get("commands") or [],
+            }
+            spoken = (analysis.get("diagnosis", "Found it.")
+                      + " I can fix this myself — want me to?")
             unmute()
             window.set_state("speaking", said=spoken); speak(spoken)
             last_spoke_at[0] = __import__("time").time() - 1.5
             last_said[0] = spoken
             window.set_state("listening")
         threading.Thread(target=_fix, daemon=True, name="GIL-FixError").start()
+        return True
+
+    # ── Hands-on coding task (agent works immediately, approval per change) ──
+    elif action == "code_task":
+        import code_agent
+        try:
+            from context_engine import get_screen_context
+            _scr = get_screen_context()
+        except Exception:
+            _scr = ""
+        task_text = (target or text)
+        if _scr:
+            task_text += f"\n\nScreen context:\n{_scr[:800]}"
+        code_agent.run_async(engine, task_text)
         return True
 
     elif action == "look":
