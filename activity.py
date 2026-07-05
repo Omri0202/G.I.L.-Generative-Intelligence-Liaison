@@ -86,6 +86,12 @@ ACTION_LABELS = {
     "build_website":   ("code",     "Building website"),
     "generate_image":  ("image",    "Generating image"),
     "create_3d":       ("code",     "Creating 3D scene: {t}"),
+    "edit_website":    ("web",      "Editing website: {t}"),
+    "publish_website": ("web",      "Publishing website"),
+    "analyze_screen":  ("vision",   "Looking at the screen"),
+    "fix_error":       ("brain",    "Analyzing error"),
+    "code_task":       ("code",     "Coding: {t}"),
+    "set_voice":       ("system",   "Voice {t}"),
     # Dev tools
     "git_status":      ("code", "git status"),
     "git_commit":      ("code", "git commit"),

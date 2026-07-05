@@ -59,12 +59,44 @@ def _clean(text: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def voice_enabled() -> bool:
+    """User-controlled master switch: when off, GIL is text-only (chat still works)."""
+    try:
+        import json
+        from pathlib import Path
+        cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")
+                         .read_text(encoding="utf-8"))
+        return bool(cfg.get("voice_enabled", True))
+    except Exception:
+        return True
+
+
+def set_voice_enabled(on: bool) -> None:
+    try:
+        import json
+        from pathlib import Path
+        p = Path(__file__).parent / "data" / "gil_config.json"
+        cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        cfg["voice_enabled"] = bool(on)
+        p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception:
+        log.error("could not save voice setting", exc_info=True)
+
+
 def speak(text: str) -> bool:
     """
     Deliver spoken output. Returns True if speech was delivered, False if skipped.
     Drops (never queues) if another voice is already active.
     Mic stays live during playback so the user can say "stop" to interrupt.
+    Silent no-op when the user turned GIL's voice off (text-only mode).
     """
+    if not voice_enabled():
+        try:
+            from ears import unmute
+            unmute()
+        except Exception:
+            pass
+        return False
     if not _speak_lock.acquire(blocking=False):
         log.debug("skipped (busy): %r", text[:40])
         try:

@@ -593,10 +593,11 @@ class ConversationEngine:
                     self._last_spoke_at[0] = time.time()
                     self._last_said[0] = ack
                     self.window.show_webgen_progress()
+                    html_path = None
                     try:
                         from webgen import generate as _wg, generate_for_project as _wgp, _find_web_project
                         proj   = _find_web_project(t)
-                        result = _wgp(proj) if proj else _wg(t)
+                        result, html_path = _wgp(proj) if proj else _wg(t)
                     except Exception as exc:
                         result = f"Website generation failed — {exc.__class__.__name__}."
                         self._last_spoke_at[0] = time.time()
@@ -605,6 +606,8 @@ class ConversationEngine:
                     self._last_spoke_at[0] = time.time() - 1.5
                     self._last_said[0] = result
                     self.window.set_state("listening")
+                    if html_path:
+                        self.window.send_rich_to_chat("website", html_path)
                 threading.Thread(target=_bw, daemon=True, name="GIL-WebGen").start()
                 return
             handle_build(target)
@@ -614,7 +617,15 @@ class ConversationEngine:
             from actions import open_terminal
             open_terminal(target)
         else:
-            self._execute_action(action, target)
+            result = self._execute_action(action, target)
+            # Feed the ground truth back to the brain so the next reply is
+            # based on what actually happened, not what it assumed.
+            if result and isinstance(result, str):
+                try:
+                    self.brain.pending_results.append(
+                        f"{action}({target[:60]}) -> {result[:250]}")
+                except Exception:
+                    pass
 
     # ── STT callback ──────────────────────────────────────────────────────────
 

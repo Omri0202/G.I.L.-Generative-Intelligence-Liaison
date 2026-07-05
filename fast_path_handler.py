@@ -992,8 +992,58 @@ def _fix_confirm(text: str, lower: str, eng) -> bool:
     return False
 
 
+_VOICE_OFF = ("voice off", "mute yourself", "stop talking", "text only",
+              "turn off your voice", "be quiet", "silent mode", "disable voice")
+_VOICE_ON  = ("voice on", "unmute yourself", "start talking", "speak again",
+              "turn on your voice", "enable voice", "talk to me again")
+
+
+def _voice_toggle(text: str, lower: str, eng) -> bool:
+    """User decides whether GIL speaks at all — chat always keeps working."""
+    from voice import set_voice_enabled
+    if any(p in lower for p in _VOICE_OFF):
+        set_voice_enabled(False)
+        eng.window.add_chat_message(
+            "Voice off — I'll answer here in the chat only. "
+            "Say or type 'voice on' anytime.", "gil")
+        eng.window.set_state("listening")
+        log.info("voice disabled by user")
+        return True
+    if any(p in lower for p in _VOICE_ON):
+        set_voice_enabled(True)
+        msg = "Voice is back on."
+        eng.window.add_chat_message(msg, "gil")
+        eng.window.set_state("speaking", said=msg)
+        eng._speak(msg)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0] = msg
+        eng.window.set_state("listening")
+        log.info("voice enabled by user")
+        return True
+    return False
+
+
+def _undo_agent(text: str, lower: str, eng) -> bool:
+    """'undo your changes' — restore every file the code agent touched."""
+    if not any(p in lower for p in ("undo your changes", "undo the changes",
+                                    "undo the fix", "revert your changes",
+                                    "undo what you did", "restore the files")):
+        return False
+    import code_agent
+    result = code_agent.undo_last_changes()
+    eng.window.add_chat_message(result, "gil")
+    eng.window.set_state("speaking", said=result)
+    eng._speak(result)
+    eng._last_spoke_at[0] = time.time() - 1.5
+    eng._last_said[0] = result
+    eng.window.set_state("listening")
+    return True
+
+
 _HANDLERS = [
     _fix_confirm,        # pending error-fix yes/no — must win when armed
+    _voice_toggle,
+    _undo_agent,
     _dev_mode_toggle,    # check first — very specific phrases
     _recap_confirm,
     _whatsapp,

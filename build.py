@@ -164,7 +164,7 @@ HIDDEN = [
     "briefing", "spotify_control", "pc_control", "notes",
     "webgen", "eyes", "face_id", "gestures", "visualizer", "gil_icons",
     "meeting_detector", "watcher", "activity", "missions", "web_editor",
-    "error_fixer", "code_agent",
+    "error_fixer", "code_agent", "web_iterate", "screen_vision",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",
 ]

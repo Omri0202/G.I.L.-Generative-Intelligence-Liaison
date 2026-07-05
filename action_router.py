@@ -379,6 +379,66 @@ def dispatch(
         threading.Thread(target=_webgen, daemon=True, name="GIL-WebGen").start()
         return True
 
+    # ── Voice on/off (user's choice — chat always works) ────────────────────
+    elif action == "set_voice":
+        from voice import set_voice_enabled
+        turning_on = "on" in (target or "").lower()
+        set_voice_enabled(turning_on)
+        window.add_chat_message(
+            "Voice is back on." if turning_on else
+            "Voice off — I'll answer in the chat only. Say or type 'voice on' anytime.",
+            "gil")
+        if turning_on:
+            window.set_state("speaking", said="Voice is back on.")
+            speak("Voice is back on.")
+            last_spoke_at[0] = __import__("time").time() - 1.5
+
+    # ── Conversational website editing / publishing ──────────────────────────
+    elif action == "edit_website":
+        def _edit(instr=target or text):
+            from ears import unmute
+            from web_iterate import edit as _we
+            msg, path = _we(instr)
+            unmute()
+            window.set_state("speaking", said=msg); speak(msg)
+            last_spoke_at[0] = __import__("time").time() - 1.5
+            last_said[0] = msg
+            window.set_state("listening")
+            if path:
+                window.send_rich_to_chat("website", path)
+        threading.Thread(target=_edit, daemon=True, name="GIL-WebEdit").start()
+        return True
+
+    elif action == "publish_website":
+        def _pub():
+            from ears import unmute
+            from web_iterate import publish as _wp
+            msg = _wp()
+            unmute()
+            window.add_chat_message(msg, "gil")
+            window.set_state("speaking", said=msg); speak(msg)
+            last_spoke_at[0] = __import__("time").time() - 1.5
+            last_said[0] = msg
+            window.set_state("listening")
+        threading.Thread(target=_pub, daemon=True, name="GIL-WebPublish").start()
+        return True
+
+    # ── Real screen vision ────────────────────────────────────────────────────
+    elif action == "analyze_screen":
+        def _see(q=target or ""):
+            from ears import unmute
+            from screen_vision import describe
+            result = describe(q)
+            unmute()
+            window.add_chat_message(result, "gil")
+            spoken = result if len(result) < 280 else result[:260] + "… full answer in the chat."
+            window.set_state("speaking", said=spoken); speak(spoken)
+            last_spoke_at[0] = __import__("time").time() - 1.5
+            last_said[0] = spoken
+            window.set_state("listening")
+        threading.Thread(target=_see, daemon=True, name="GIL-ScreenSee").start()
+        return True
+
     # ── Error analysis & repair ───────────────────────────────────────────────
     elif action == "fix_error":
         def _fix(err=target or text):
@@ -390,6 +450,16 @@ def dispatch(
                 scr = get_screen_context()
             except Exception:
                 scr = ""
+            # When the error is "on screen", look at the actual pixels
+            if "screen" in err.lower():
+                try:
+                    from screen_vision import describe
+                    seen = describe("Find any error message, exception, or "
+                                    "problem dialog on this screen and quote "
+                                    "it exactly, with surrounding context.")
+                    scr = (seen + "\n" + scr).strip()
+                except Exception:
+                    pass
             analysis = error_fixer.analyze(err, scr)
             if not analysis:
                 _act.fail(aid, "analysis failed")

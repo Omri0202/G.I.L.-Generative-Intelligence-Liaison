@@ -180,6 +180,61 @@ def _t_run(cmd: str) -> str:
         return f"ERROR: {exc}"
 
 
+# ── Checkpoints — every file the agent touches is backed up first ─────────────
+
+_BACKUP_ROOT = Path(__file__).parent / "data" / "agent_backups"
+_session_backups: dict[str, Path] = {}   # original path -> backup copy
+
+
+def _checkpoint(p: Path) -> None:
+    """Save the pre-edit version of a file (once per session per file)."""
+    key = str(p.resolve())
+    if key in _session_backups:
+        return
+    try:
+        import shutil, hashlib
+        _BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+        tag = hashlib.md5(key.encode()).hexdigest()[:10]
+        dest = _BACKUP_ROOT / f"{tag}_{p.name}"
+        if p.exists():
+            shutil.copy2(str(p), str(dest))
+        else:
+            dest = _BACKUP_ROOT / f"{tag}_{p.name}.NEW"   # marks a created file
+            dest.write_text("", encoding="utf-8")
+        _session_backups[key] = dest
+    except Exception:
+        log.debug("checkpoint failed for %s", p, exc_info=True)
+
+
+def undo_last_changes() -> str:
+    """Restore every file the agent modified since GIL started. Deletes files
+    the agent created. Called by the 'undo your changes' fast path."""
+    if not _session_backups:
+        return "Nothing to undo — I haven't changed any files this session."
+    import shutil
+    restored, removed, failed = 0, 0, 0
+    for orig, backup in list(_session_backups.items()):
+        try:
+            if backup.name.endswith(".NEW"):
+                Path(orig).unlink(missing_ok=True)
+                removed += 1
+            else:
+                shutil.copy2(str(backup), orig)
+                restored += 1
+        except Exception:
+            failed += 1
+    _session_backups.clear()
+    parts = []
+    if restored:
+        parts.append(f"restored {restored} file{'s' if restored != 1 else ''}")
+    if removed:
+        parts.append(f"deleted {removed} file{'s' if removed != 1 else ''} I had created")
+    msg = "Undone — " + " and ".join(parts) + "." if parts else "Nothing restored."
+    if failed:
+        msg += f" ({failed} failed — check the backups in data/agent_backups)"
+    return msg
+
+
 def _t_edit_file(args: dict) -> str:
     p = Path(args.get("path", ""))
     old, new = args.get("old", ""), args.get("new", "")
@@ -194,6 +249,7 @@ def _t_edit_file(args: dict) -> str:
         return "ERROR: old text not found — read the file again and copy it exactly"
     if n > 1:
         return f"ERROR: old text appears {n} times — include more surrounding context"
+    _checkpoint(p)
     p.write_text(src.replace(old, new, 1), encoding="utf-8")
     return f"OK — edited {p}"
 
@@ -201,6 +257,7 @@ def _t_edit_file(args: dict) -> str:
 def _t_write_file(args: dict) -> str:
     p = Path(args.get("path", ""))
     try:
+        _checkpoint(p)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(args.get("content", ""), encoding="utf-8")
         return f"OK — wrote {p} ({len(args.get('content', ''))} chars)"

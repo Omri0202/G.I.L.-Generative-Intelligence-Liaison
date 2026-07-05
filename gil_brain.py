@@ -109,6 +109,67 @@ def _pick_model(user_input: str, sub_prompt: str) -> str:
     return GROQ_MODEL
 
 
+
+def _try_anthropic_brain(system: str, history: list, complex_q: bool):
+    """Frontier brain: use Claude when an Anthropic key exists (markedly better
+    judgment, Hebrew and planning). Returns raw text or None to fall back."""
+    key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not key:
+        return None
+    model = "claude-sonnet-5" if complex_q else "claude-haiku-4-5-20251001"
+    try:
+        r = _session.post(
+            "https://api.anthropic.com/v1/messages",
+            json={"model": model, "max_tokens": 900,
+                  "system": system, "messages": history},
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            timeout=25)
+        r.raise_for_status()
+        data = r.json()
+        log.info("brain: Claude %s answered", model)
+        return data["content"][0]["text"].strip()
+    except Exception as exc:
+        log.warning("Anthropic brain failed (%s) - falling back to Groq", exc)
+        return None
+
+
+def _recall_past(user_input: str) -> str:
+    """Semantic-ish recall: search past chat history for the query's key words
+    and surface the most relevant older exchanges to the brain."""
+    words = sorted((w.strip(".,?!\"'") for w in user_input.split()),
+                   key=len, reverse=True)
+    words = [w for w in words if len(w) > 4][:3]
+    if not words:
+        return ""
+    try:
+        import sqlite3
+        from pathlib import Path as _P
+        db = _P(__file__).parent / "data" / "chat_history.db"
+        if not db.exists():
+            return ""
+        con = sqlite3.connect(str(db), timeout=2)
+        try:
+            clauses = " OR ".join("content LIKE ?" for _ in words)
+            rows = con.execute(
+                f"SELECT sender, content, ts FROM messages "
+                f"WHERE ({clauses}) AND content NOT LIKE '[IMAGE:%' "
+                f"AND content NOT LIKE '[WEBSITE:%' "
+                f"ORDER BY ts DESC LIMIT 30",
+                [f"%{w}%" for w in words]).fetchall()
+        finally:
+            con.close()
+        import time as _t
+        cutoff = _t.time() - 600   # skip the live conversation itself
+        old = [(s, c) for s, c, ts in rows if ts < cutoff][:3]
+        if not old:
+            return ""
+        lines = [f"  - {'User' if s == 'user' else 'You'}: {c[:150]}"
+                 for s, c in old]
+        return ("\nRELEVANT PAST CONVERSATIONS (older sessions):\n" + "\n".join(lines))
+    except Exception:
+        return ""
+
+
 _groq_key_index = 0
 
 
@@ -175,7 +236,8 @@ return a "mission" instead of a plain actions array:
 â”â” INTELLIGENCE RULES â”â”
 â€¢ CONTEXT: Read screen context, active projects, memory, calendar â€” reference them naturally.
 â€¢ MEMORY: When RELEVANT MEMORIES appear â€” weave them in. Never say "I don't have memory."
-â€¢ JUDGMENT: Challenge flawed ideas in one sentence. Question destructive actions before executing.
+â€¢ ANSWER EVERYTHING: any question (knowledge, math, advice, translation) gets a direct answer in speech - you are a full AI, never say a task is outside your scope.
+• JUDGMENT: Challenge flawed ideas in one sentence. Question destructive actions before executing.
 â€¢ FOLLOW-UP: Only ask a follow-up if genuinely needed. Do NOT ask "anything else?" after every reply.
 â€¢ INFERENCE: If user says "open it" / "play that" / "go there" â€” infer from context. Never ask "which one?".
 â€¢ SCREEN-AWARE: If screen shows an error, crash, or something notable â€” mention it proactively once.
@@ -230,6 +292,10 @@ look â†’ question or blank | open_camera â†’ null | close_camera â†
 build_website â†’ detailed description of the website to build
 generate_image -> detailed image description
 fix_error -> the exact error text or a description of the problem (G.I.L. diagnoses it, then fixes it hands-on with per-change approval)
+set_voice -> on|off (user controls whether G.I.L. speaks aloud; chat always works)
+edit_website -> change instruction (edits the most recently generated website)
+publish_website -> null (publishes the latest generated site to the public web)
+analyze_screen -> question about what is visually on screen right now
 code_task -> coding/debugging task description (G.I.L. works like a coding agent: reads files, edits code, runs terminal commands - asking approval before every change)
 
 DEV TOOLS (coding/development requests only):
@@ -337,6 +403,12 @@ User: there's an error on my screen, can you fix it
 User: debug why my flask app crashes on startup, the project is on my desktop
 {{"speech": "Digging in - I'll ask before I change anything.", "actions": [{{"action": "code_task", "target": "Debug why the Flask app on the desktop crashes on startup; find the project folder, read the traceback, fix the bug and verify"}}], "report": null}}
 
+User: make the website darker and change the title to Roma Pizza
+{{"speech": "Updating the site.", "actions": [{{"action": "edit_website", "target": "make the color scheme darker and change the main title to Roma Pizza"}}], "report": null}}
+
+User: stop talking / voice off
+{{"speech": "", "actions": [{{"action": "set_voice", "target": "off"}}], "report": null}}
+
 CRITICAL: Return ONE valid JSON object. Use "actions" array (or "mission" for 3+ steps). Nothing outside the JSON.\
 """
 
@@ -410,6 +482,7 @@ class GILBrain:
             self.history: list[dict] = _load_mem()
         except Exception:
             self.history: list[dict] = []
+        self.pending_results: list[str] = []
 
     def query(self, user_input: str, project_context: str = "",
               camera_state: str = "closed", _retry: int = 0) -> dict:
@@ -444,6 +517,7 @@ class GILBrain:
             memory_context = build_memory_context(user_input)
         except Exception:
             memory_context = "LAST SESSION: No recent session on record."
+        memory_context += _recall_past(user_input)
 
         # Screen context â€” use rich context_engine if available, fall back to screen.py
         try:
@@ -501,7 +575,15 @@ class GILBrain:
         project_block = f"\nACTIVE PROJECT CONTEXT:\n{project_context}\n" if project_context else ""
 
         # Build extra context block for new engines
+        results_ctx = ""
+        if getattr(self, "pending_results", None):
+            results_ctx = ("RECENT ACTION RESULTS (ground truth of what actually happened):\n"
+                           + "\n".join(self.pending_results[-5:]))
+            self.pending_results = []
+
         extra_blocks = []
+        if results_ctx:
+            extra_blocks.append(results_ctx)
         if goal_context:
             extra_blocks.append(goal_context)
         if pref_context:
@@ -548,58 +630,64 @@ class GILBrain:
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             return _session.post(GROQ_URL, json=payload, headers=hdrs, timeout=15)
 
-        if not GROQ_KEYS:
+        if not GROQ_KEYS and not os.getenv("ANTHROPIC_API_KEY"):
             self.history.pop()
-            return {"speech": "No Groq API key is configured — check your .env file.",
+            return {"speech": "No AI key is configured — add GROQ_API_KEY or ANTHROPIC_API_KEY to .env.",
                     "action": None, "target": None, "report": None}
 
         # _response_saved prevents double-pop when retrying on timeout
         _response_saved = False
         raw = ""
         try:
-            with _groq_key_lock:
-                _cur_idx = _groq_key_index
-            resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
-
-            if resp.status_code == 429:
+            raw = _try_anthropic_brain(system, self.history,
+                                       chosen_model == _SMART_MODEL) or ""
+            if not raw and not GROQ_KEYS:
+                return {"speech": "My AI service is unreachable right now - try again in a moment.",
+                        "action": None, "target": None, "report": None}
+            if not raw:
                 with _groq_key_lock:
-                    _groq_key_index += 1
                     _cur_idx = _groq_key_index
-                log.warning("Groq key rate-limited, rotating")
                 resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
 
-            if resp.status_code == 429:
-                log.warning("All Groq keys rate-limited — trying fallback models")
-                fallback_resp = None
-                for fb_model in _FALLBACK_MODELS:
-                    for key in GROQ_KEYS:
-                        fb_payload = {**payload, "model": fb_model}
-                        hdrs = {"Authorization": f"Bearer {key}",
-                                "Content-Type": "application/json"}
-                        try:
-                            r = _session.post(GROQ_URL, json=fb_payload,
-                                              headers=hdrs, timeout=15)
-                            if r.status_code != 429:
-                                fallback_resp = r
-                                log.info("Groq fallback succeeded on %s", fb_model)
-                                break
-                        except Exception:
-                            continue
-                    if fallback_resp is not None:
-                        break
-                if fallback_resp is None:
-                    log.warning("All Groq models rate-limited")
-                    return {"speech": "Rate-limited — give me 30 seconds and ask again.",
-                            "action": None, "target": None, "report": None}
-                resp = fallback_resp
+                if resp.status_code == 429:
+                    with _groq_key_lock:
+                        _groq_key_index += 1
+                        _cur_idx = _groq_key_index
+                    log.warning("Groq key rate-limited, rotating")
+                    resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
 
-            resp.raise_for_status()
-            resp_json = resp.json()
-            raw = resp_json["choices"][0]["message"]["content"].strip()
-            # Track token usage for the context indicator
-            usage = resp_json.get("usage", {})
-            self.last_tokens_used   = usage.get("total_tokens", 0)
-            self.last_prompt_tokens = usage.get("prompt_tokens", 0)
+                if resp.status_code == 429:
+                    log.warning("All Groq keys rate-limited — trying fallback models")
+                    fallback_resp = None
+                    for fb_model in _FALLBACK_MODELS:
+                        for key in GROQ_KEYS:
+                            fb_payload = {**payload, "model": fb_model}
+                            hdrs = {"Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json"}
+                            try:
+                                r = _session.post(GROQ_URL, json=fb_payload,
+                                                  headers=hdrs, timeout=15)
+                                if r.status_code != 429:
+                                    fallback_resp = r
+                                    log.info("Groq fallback succeeded on %s", fb_model)
+                                    break
+                            except Exception:
+                                continue
+                        if fallback_resp is not None:
+                            break
+                    if fallback_resp is None:
+                        log.warning("All Groq models rate-limited")
+                        return {"speech": "Rate-limited — give me 30 seconds and ask again.",
+                                "action": None, "target": None, "report": None}
+                    resp = fallback_resp
+
+                resp.raise_for_status()
+                resp_json = resp.json()
+                raw = resp_json["choices"][0]["message"]["content"].strip()
+                # Track token usage for the context indicator
+                usage = resp_json.get("usage", {})
+                self.last_tokens_used   = usage.get("total_tokens", 0)
+                self.last_prompt_tokens = usage.get("prompt_tokens", 0)
 
         except requests.exceptions.ConnectionError:
             log.error("No internet connection")
