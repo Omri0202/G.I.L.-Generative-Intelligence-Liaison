@@ -478,6 +478,12 @@ def _webgen(text: str, lower: str, eng) -> bool:
         or _WEB_DIRECT_RE.search(lower)
     ):
         return False
+    # Overheard conversation must never build a website — only run when the
+    # user actually addressed GIL (named him, typed it, or answered his question)
+    if not eng.creation_allowed():
+        log.info("webgen suppressed — GIL wasn't addressed: %r", text[:50])
+        eng.window.set_state("listening")
+        return True
     log.debug("fast-path: website generation")
 
     def _run(utterance=text):
@@ -719,6 +725,10 @@ def _image_gen(text: str, lower: str, eng) -> bool:
     # Don't steal website-generation requests
     if any(w in lower for w in _IMAGE_EXCLUDE):
         return False
+    if not eng.creation_allowed():
+        log.info("image gen suppressed — GIL wasn't addressed: %r", text[:50])
+        eng.window.set_state("listening")
+        return True
     log.debug("fast-path: image generation")
 
     # Strip the command prefix to get the actual description

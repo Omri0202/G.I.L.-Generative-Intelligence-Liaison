@@ -189,8 +189,16 @@ OUTPUT: Only the HTML. Start with <!DOCTYPE html>.
 
 # ── Image pre-generation (Pollinations.ai, concurrent) ───────────────────────
 
-def _image_prompts(description: str) -> list[tuple[str, str, int, int]]:
-    """(prompt, filename, w, h) for each image needed."""
+def _image_prompts(description: str, intent: str = "promo") -> list[tuple[str, str, int, int]]:
+    """(prompt, filename, w, h) for each image needed — matched to site type
+    so an informational site gets topic photos, not product shots."""
+    if intent == "info":
+        return [
+            (f"Iconic defining photograph of {description}, famous landmark or signature scenery, National Geographic quality, 4k", "hero.jpg", 1920, 1080),
+            (f"Documentary photograph showing the culture and daily life of {description}, photojournalism style", "photo1.jpg", 900, 700),
+            (f"Beautiful landscape or nature photograph of {description}, golden hour light", "photo2.jpg", 800, 800),
+            (f"Historic or architectural photograph related to {description}, rich detail", "photo3.jpg", 800, 600),
+        ]
     return [
         (f"Cinematic hero photograph for {description}, dramatic professional lighting, ultra sharp, 4k", "hero.jpg", 1920, 1080),
         (f"Beautiful lifestyle photo for {description}, warm natural light, professional photography", "photo1.jpg", 900, 700),
@@ -199,7 +207,8 @@ def _image_prompts(description: str) -> list[tuple[str, str, int, int]]:
     ]
 
 
-def _generate_site_images(description: str, img_dir: Path) -> dict[str, str]:
+def _generate_site_images(description: str, img_dir: Path,
+                          intent: str = "promo") -> dict[str, str]:
     """
     Generate real AI images concurrently using Pollinations FLUX.
     Returns {filename: './images/filename'} for HTML injection.
@@ -221,7 +230,7 @@ def _generate_site_images(description: str, img_dir: Path) -> dict[str, str]:
 
     result: dict[str, str] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        for fname, path in ex.map(_gen, _image_prompts(description)):
+        for fname, path in ex.map(_gen, _image_prompts(description, intent)):
             if path:
                 result[fname] = path
     print(f"[G.I.L. WEBGEN] Generated {len(result)} images")
@@ -516,9 +525,76 @@ def _find_web_project(text: str) -> Path | None:
     return None
 
 
+# ── Site-intent classification ────────────────────────────────────────────────
+# GIL answers an internal question before designing: is this a PROMOTIONAL
+# site (a business selling something → prices, offers, CTAs) or an
+# INFORMATIONAL one (a country, a topic, a person → facts, history, knowledge)?
+# Nobody is trying to sell a country, so no prices on informational sites.
+
+_PROMO_WORDS = (
+    "shop", "store", "business", "restaurant", "cafe", "coffee shop", "salon",
+    "barber", "gym", "studio", "agency", "company", "brand", "startup",
+    "portfolio", "freelance", "services", "booking", "menu", "product",
+    "clinic", "hotel", "bakery", "boutique", "my ", "our ",
+)
+_INFO_WORDS = (
+    "country", "city", "history", "about the", "information", "informational",
+    "educational", "encyclopedia", "wiki", "facts", "science", "biology",
+    "physics", "animal", "planet", "war", "culture", "religion", "language",
+    "explain", "biography", "the life of", "what is",
+)
+
+_INFO_OVERRIDE = """
+SITE TYPE: INFORMATIONAL / EDUCATIONAL — this is a knowledge site, NOT a business.
+ABSOLUTELY FORBIDDEN: prices, price tags, currency amounts, testimonials,
+"order/book/buy/get started" buttons, services for sale, sales contact forms.
+STRUCTURE INSTEAD: hero (title + one-line definition), key-facts stats strip
+(REAL numbers — population, area, founding year, size, speed, etc.),
+overview split section, history/timeline section, deep-dive card grid
+(each card = a real subtopic with real facts), gallery, FAQ (questions people
+actually ask about this topic), footer with "further reading" source names.
+TONE: encyclopedic but vivid — like a beautifully designed Wikipedia article.
+Every fact must be real and specific to the topic."""
+
+
+def classify_intent(description: str) -> str:
+    """Return 'promo' or 'info'. LLM first (1 short call), heuristic fallback."""
+    import requests as _rq
+    prompt = (f'Website request: "{description[:200]}"\n'
+              "Is this a PROMOTIONAL site (a business/person selling or offering "
+              "something) or an INFORMATIONAL site (a country, topic, concept, "
+              "or thing being explained)? Reply with exactly one word: "
+              "PROMO or INFO.")
+    for key in _groq_keys():
+        try:
+            r = _rq.post("https://api.groq.com/openai/v1/chat/completions",
+                         json={"model": "llama-3.1-8b-instant",
+                               "messages": [{"role": "user", "content": prompt}],
+                               "temperature": 0, "max_tokens": 4},
+                         headers={"Authorization": f"Bearer {key}",
+                                  "Content-Type": "application/json"},
+                         timeout=8)
+            r.raise_for_status()
+            word = r.json()["choices"][0]["message"]["content"].strip().upper()
+            if "INFO" in word:
+                return "info"
+            if "PROMO" in word:
+                return "promo"
+        except Exception:
+            continue
+    # Heuristic fallback
+    low = f" {description.lower()} "
+    if any(w in low for w in _PROMO_WORDS):
+        return "promo"
+    if any(w in low for w in _INFO_WORDS):
+        return "info"
+    return "promo"
+
+
 # ── Generation pipeline ───────────────────────────────────────────────────────
 
-def _run_generation(description: str, out_folder: Path) -> str:
+def _run_generation(description: str, out_folder: Path,
+                    intent: str = "promo") -> str:
     """
     Concurrent pipeline — ONE LLM call, images injected after:
     - Thread A: generate HTML using HERO_IMG/CARD_IMG_N placeholder tokens
@@ -537,8 +613,8 @@ def _run_generation(description: str, out_folder: Path) -> str:
         aid_html = aid_imgs = None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-        html_future = ex.submit(_generate_html, description, {})
-        img_future  = ex.submit(_generate_site_images, description, img_dir)
+        html_future = ex.submit(_generate_html, description, {}, intent)
+        img_future  = ex.submit(_generate_site_images, description, img_dir, intent)
         html   = html_future.result()
         images = img_future.result()
 
@@ -586,14 +662,17 @@ def _run_generation(description: str, out_folder: Path) -> str:
     return html
 
 
-def _generate_html(description: str, images: dict | None = None) -> str:
+def _generate_html(description: str, images: dict | None = None,
+                   intent: str = "promo") -> str:
     """
     Core HTML generation. Passes real image paths to the LLM when available.
     Falls back to empty dict (model uses its own image strategy).
     """
-    print(f"[G.I.L. WEBGEN] Generating HTML for: {description[:80]}")
+    print(f"[G.I.L. WEBGEN] Generating HTML for: {description[:80]} ({intent})")
     ant_key = _anthropic_key()
     user_prompt = _build_user_prompt(description, images or {})
+    if intent == "info":
+        user_prompt += "\n" + _INFO_OVERRIDE
 
     if ant_key:
         html = _generate_claude(user_prompt, ant_key)
@@ -633,7 +712,8 @@ def generate_for_project(folder_path: str | Path, description: str = None) -> tu
         return (f"I found the {folder.name} folder but there's no TASK.md in it. "
                 "Add one describing what you want and ask me again.", None)
 
-    html = _run_generation(description, folder)
+    intent = _announce_intent(description)
+    html = _run_generation(description, folder, intent)
     if html.startswith("ERROR:"):
         return html[6:].strip(), None
 
@@ -645,7 +725,7 @@ def generate_for_project(folder_path: str | Path, description: str = None) -> tu
 
     _open_file(out)
     try:
-        _spawn_subpages(description, folder, html)
+        _spawn_subpages(description, folder, html, intent)
     except Exception:
         pass
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
@@ -665,7 +745,8 @@ def generate(utterance: str) -> tuple[str, Path | None]:
     folder = _OUT_DIR / slug
     folder.mkdir(parents=True, exist_ok=True)
 
-    html = _run_generation(description, folder)
+    intent = _announce_intent(description)
+    html = _run_generation(description, folder, intent)
     if html.startswith("ERROR:"):
         return html[6:].strip(), None
 
@@ -677,7 +758,7 @@ def generate(utterance: str) -> tuple[str, Path | None]:
 
     _open_file(path)
     try:
-        _spawn_subpages(description, folder, html)
+        _spawn_subpages(description, folder, html, intent)
     except Exception:
         pass
     m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
@@ -695,11 +776,33 @@ def _done_message(title: str, html: str) -> str:
             "Click Customize on the page to make it yours.")
 
 
+def _announce_intent(description: str) -> str:
+    """Classify the site type and surface the decision in the activity feed."""
+    intent = classify_intent(description)
+    try:
+        import activity
+        activity.instant("brain", "Site type: informational — no prices, facts only"
+                         if intent == "info" else "Site type: promotional")
+    except Exception:
+        pass
+    return intent
+
+
 _SUBPAGES = [
     ("about.html",    "About",    "the story, mission, values, team and a timeline"),
     ("services.html", "Services", "the full offering: services/menu/products with names, prices, categories and details"),
     ("contact.html",  "Contact",  "a contact form, address, opening hours, phone/email, FAQ and a map placeholder"),
 ]
+
+_SUBPAGES_INFO = [
+    ("about.html",    "History",   "the full history and timeline of the topic, with real dates and events"),
+    ("services.html", "Facts",     "key facts, geography/characteristics, culture, notable figures and records"),
+    ("contact.html",  "Gallery",   "a rich photo gallery section plus further reading and sources"),
+]
+
+
+def _subpages_for(intent: str) -> list:
+    return _SUBPAGES_INFO if intent == "info" else _SUBPAGES
 
 
 def _extract_root(html: str) -> str:
@@ -719,8 +822,8 @@ def _page_image_map(folder: Path) -> dict:
     return out
 
 
-def _subpage_nav(current: str) -> str:
-    links = [("index.html", "Home")] + [(f, t) for f, t, _ in _SUBPAGES]
+def _subpage_nav(current: str, pages: list | None = None) -> str:
+    links = [("index.html", "Home")] + [(f, t) for f, t, _ in (pages or _SUBPAGES)]
     items = "".join(
         f'<a href="{f}" style="color:{"var(--accent)" if f == current else "var(--text)"};'
         f'text-decoration:none;margin:0 14px;font-weight:600;font-size:.95rem;">{t}</a>'
@@ -732,7 +835,8 @@ def _subpage_nav(current: str) -> str:
 
 
 def _offline_subpage(fname: str, title: str, brief: str,
-                     description: str, root_css: str) -> str:
+                     description: str, root_css: str,
+                     pages: list | None = None) -> str:
     """Instant placeholder subpage in the site's own palette — written before
     the LLM upgrade so nav links work from second zero."""
     root = root_css or (":root{--bg:#0C0A08;--bg2:#141110;--text:#F5F1EA;"
@@ -752,7 +856,7 @@ h1{{font-size:clamp(2.2rem,5vw,3.6rem);color:var(--accent);margin-bottom:18px;}}
 p{{color:var(--muted);margin-bottom:16px;}}
 .card{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:26px;margin-top:22px;}}
 </style></head><body>
-{_subpage_nav(fname)}
+{_subpage_nav(fname, pages)}
 <main><h1>{title}</h1>
 <p>This page covers {brief}.</p>
 <div class="card"><p>G.I.L. is writing the full {title} page right now — refresh in about half a
@@ -760,7 +864,8 @@ minute. You can already edit everything here with the Customize panel.</p></div>
 </main></body></html>"""
 
 
-def _spawn_subpages(description: str, folder: Path, index_html: str) -> None:
+def _spawn_subpages(description: str, folder: Path, index_html: str,
+                    intent: str = "promo") -> None:
     """Write instant placeholder subpages, then upgrade each with the LLM in
     a background thread. Never raises — the placeholders always exist."""
     import threading as _th
@@ -768,11 +873,13 @@ def _spawn_subpages(description: str, folder: Path, index_html: str) -> None:
 
     root_css = _extract_root(index_html)
     imgmap   = _page_image_map(folder)
+    pages    = _subpages_for(intent)
 
-    for fname, title, brief in _SUBPAGES:
+    for fname, title, brief in pages:
         try:
             (folder / fname).write_text(
-                _ed(_offline_subpage(fname, title, brief, description, root_css)),
+                _ed(_offline_subpage(fname, title, brief, description,
+                                     root_css, pages)),
                 encoding="utf-8")
         except Exception:
             pass
@@ -782,7 +889,7 @@ def _spawn_subpages(description: str, folder: Path, index_html: str) -> None:
             import activity
         except Exception:
             activity = None
-        for fname, title, brief in _SUBPAGES:
+        for fname, title, brief in pages:
             aid = None
             try:
                 if activity:
@@ -795,6 +902,7 @@ def _spawn_subpages(description: str, folder: Path, index_html: str) -> None:
                     f"Navbar links: index.html (Home), about.html, services.html, contact.html — "
                     f"mark {fname} as the active page.\n"
                     f"Images: only the CARD_IMG_1 / CARD_IMG_2 / CARD_IMG_3 placeholders."
+                    + (_INFO_OVERRIDE if intent == "info" else "")
                 )
                 key = _anthropic_key()
                 html = (_generate_claude(prompt, key) if key
@@ -805,7 +913,7 @@ def _spawn_subpages(description: str, folder: Path, index_html: str) -> None:
                     html = html.replace(token, path)
                 html = _fix_html(html)
                 if 'href="index.html"' not in html:
-                    html = html.replace("<body>", "<body>" + _subpage_nav(fname), 1)
+                    html = html.replace("<body>", "<body>" + _subpage_nav(fname, pages), 1)
                 (folder / fname).write_text(_ed(html), encoding="utf-8")
                 if activity and aid is not None:
                     activity.done(aid)

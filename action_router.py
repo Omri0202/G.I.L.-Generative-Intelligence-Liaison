@@ -164,6 +164,10 @@ def dispatch(
 
     # ── 3-D ───────────────────────────────────────────────────────────────────
     elif action == "create_3d":
+        if not engine.creation_allowed():
+            log.info("create_3d suppressed — not addressed")
+            window.set_state("listening")
+            return True
         threading.Thread(
             target=handle_create_3d,
             args=(target, engine._active_project[0] or ""),
@@ -343,6 +347,10 @@ def dispatch(
 
     # ── Website generation ────────────────────────────────────────────────────
     elif action == "build_website":
+        if not engine.creation_allowed():
+            log.info("build_website suppressed — not addressed")
+            window.set_state("listening")
+            return True
         def _webgen(desc=target or speech, utterance=text):
             from ears import unmute
             import time as _t
@@ -416,6 +424,10 @@ def dispatch(
 
     # ── Hands-on coding task (agent works immediately, approval per change) ──
     elif action == "code_task":
+        if not engine.creation_allowed():
+            log.info("code_task suppressed — not addressed")
+            window.set_state("listening")
+            return True
         import code_agent
         try:
             from context_engine import get_screen_context

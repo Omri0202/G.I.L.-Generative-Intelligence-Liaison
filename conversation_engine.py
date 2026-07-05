@@ -105,6 +105,7 @@ class ConversationEngine:
         # Attention-management state
         self._last_was_question = False   # True → use QUESTION_SECS window
         self._last_groq_call_at = 0.0    # rate-limit guard for Groq calls
+        self._utterance_addressed = True  # did the current input actually address GIL?
 
         # speak() function — set in start()
         self._speak = None
@@ -114,6 +115,18 @@ class ConversationEngine:
     @property
     def pending_recap_global(self) -> list:
         return self._pending_recap_g
+
+    def creation_allowed(self) -> bool:
+        """
+        Heavy creative actions (websites, images, 3D scenes, missions, code
+        tasks) only run when the current input actually addressed GIL:
+        he was named, the message was typed in chat, or it directly answers
+        a question GIL just asked. Overheard conversation never triggers them.
+        """
+        if self._utterance_addressed:
+            return True
+        return (self._last_was_question and
+                time.time() - self._last_addressed_at[0] < self.QUESTION_SECS)
 
     def trim_last_exchange(self) -> None:
         """
@@ -291,7 +304,7 @@ class ConversationEngine:
 
     # ── Voice input gatekeeper ─────────────────────────────────────────────────
 
-    def _process(self, text: str) -> None:
+    def _process(self, text: str, addressed: bool = True) -> None:
         """Voice input: apply cooldown + similarity filter, then dispatch."""
         from ears import mute, unmute
 
@@ -299,6 +312,7 @@ class ConversationEngine:
             log.debug("busy — ignored: %r", text[:40])
             return
         try:
+            self._utterance_addressed = addressed
             # Post-speech echo cooldown
             if time.time() - self._last_spoke_at[0] < 2.0:
                 log.debug("echo suppressed (cooldown): %r", text[:40])
@@ -328,6 +342,7 @@ class ConversationEngine:
             self.window.chat_hide_typing()
             return
         try:
+            self._utterance_addressed = True   # typed chat always addresses GIL
             self._last_addressed_at[0] = time.time()
             if not self.conv.active:
                 self.conv.activate()
@@ -464,6 +479,11 @@ class ConversationEngine:
 
         # ── Mission: brain returned a multi-step plan ──────────────────────────
         mission = response.get("mission")
+        if isinstance(mission, dict) and mission.get("steps") and not self.creation_allowed():
+            log.info("mission suppressed — GIL wasn't addressed: %r", text[:50])
+            unmute()
+            window.set_state("listening")
+            return
         if isinstance(mission, dict) and mission.get("steps"):
             self._last_groq_call_at = time.time()
             if speech:
@@ -774,7 +794,7 @@ class ConversationEngine:
                     log.debug("groq rate-limit guard: dropped %r", text[:40])
                     return
 
-                threading.Thread(target=self._process, args=(text,),
+                threading.Thread(target=self._process, args=(text, addressed),
                                  daemon=True, name="GIL-Process").start()
             else:
                 log.debug("outside attention window — ignored: %r", text[:50])
