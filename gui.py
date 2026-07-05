@@ -1273,14 +1273,16 @@ class ChatWindow(ctk.CTkToplevel):
     """
 
     _THEMES = {
+        # Calm slate dark — smooth, low-saturation, easy on the eyes
+        # (replaces the loud purple/navy of v1)
         "dark": dict(
-            PAGE="#0D0B1E", SIDE="#100E24", SURF2="#131028", USERBG="#0C1D42",
-            BORDER="#1E1840", UBORDER="#1A3870", TXT="#EDE9FF", USERTXT="#A8D0FF",
-            NAME_G="#3FDDFA", NAME_U="#4A90E2", MUTED="#4A3A7A", INPUT="#16123A",
-            ACCENT="#3FDDFA", PURPLE="#A78BFA", DIMMED="#8A7AAA",
-            AVATAR_BG="#1A1540", SEP="#0A0820", SCROLL="#0A0820",
-            BTN_TXT="#020810", VERSION_TXT="#28204C", WELCOME_BG="#1C1848",
-            WELCOME_BORDER="#2E2870",
+            PAGE="#15161B", SIDE="#191A21", SURF2="#1C1E26", USERBG="#242B3D",
+            BORDER="#282B36", UBORDER="#3A465F", TXT="#E9EAF2", USERTXT="#C9D7F2",
+            NAME_G="#58C4DD", NAME_U="#87A9DE", MUTED="#787D91", INPUT="#20222C",
+            ACCENT="#58C4DD", PURPLE="#A78BFA", DIMMED="#9BA0B4",
+            AVATAR_BG="#232833", SEP="#22242E", SCROLL="#191A21",
+            BTN_TXT="#0A1014", VERSION_TXT="#3A3E4E", WELCOME_BG="#1D2029",
+            WELCOME_BORDER="#2C3040", HOVER="#262935",
         ),
         # Claude-style warm cream light theme (#FAF9F5 family, not blue-white)
         "light": dict(
@@ -1290,7 +1292,7 @@ class ChatWindow(ctk.CTkToplevel):
             ACCENT="#0B9CB8", PURPLE="#7C5CDB", DIMMED="#6E6B60",
             AVATAR_BG="#EFEDE3", SEP="#E5E3D9", SCROLL="#F0EEE5",
             BTN_TXT="#FFFFFF", VERSION_TXT="#C9C6B8", WELCOME_BG="#F0EEE5",
-            WELCOME_BORDER="#DDD9CB",
+            WELCOME_BORDER="#DDD9CB", HOVER="#E9E6DA",
         ),
     }
 
@@ -1341,6 +1343,9 @@ class ChatWindow(ctk.CTkToplevel):
         self._act_card      = None    # current group card frame
         self._act_body      = None    # rows container inside the card
         self._act_header    = None    # header label (updates to "Done")
+        self._act_bar       = None    # animated progress ribbon
+        self._act_chip_icon = None    # kind icon chip in the card header
+        self._act_chip_set  = True
         self._act_rows      = {}      # activity id -> row widget dict
         self._act_running   = set()   # ids still running (drives spinner)
         self._act_group     = ""      # group label of current card
@@ -1440,13 +1445,13 @@ class ChatWindow(ctk.CTkToplevel):
         actions_row.pack(fill="x", padx=8, pady=4)
         ctk.CTkButton(actions_row, text=" Export", image=_icon("export", self._MUTED, 13),
                       compound="left", width=90, height=28,
-                      fg_color="transparent", hover_color="#1A1640",
+                      fg_color="transparent", hover_color=self._HOVER,
                       text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                       corner_radius=6, command=self._export_chat,
                       ).pack(side="left", padx=(0, 4))
         ctk.CTkButton(actions_row, text=" Starred", image=_icon("star_outline", self._MUTED, 13),
                       compound="left", width=90, height=28,
-                      fg_color="transparent", hover_color="#1A1640",
+                      fg_color="transparent", hover_color=self._HOVER,
                       text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                       corner_radius=6, command=self._show_starred,
                       ).pack(side="left")
@@ -1569,7 +1574,7 @@ class ChatWindow(ctk.CTkToplevel):
         ctk.CTkButton(
             self._input_wrap, text="", image=_icon("attach", self._MUTED, 16),
             width=36, height=36,
-            fg_color="transparent", hover_color="#1A1640",
+            fg_color="transparent", hover_color=self._HOVER,
             corner_radius=8, command=self._upload_file,
         ).pack(side="right", padx=(0, 2), pady=8)
         send_col = ctk.CTkFrame(self._input_wrap, fg_color="transparent")
@@ -1955,6 +1960,7 @@ class ChatWindow(ctk.CTkToplevel):
                 setattr(self, handle, None)
         self._typing_lbl = self._typing_frame_ref = None
         self._act_card = self._act_body = self._act_header = None
+        self._act_bar = None; self._act_chip_icon = None; self._act_chip_set = True
         self._act_rows = {}; self._act_running = set(); self._act_group = ""
         self._last_gil_frames = []
         self._slash_menu = None
@@ -2135,7 +2141,7 @@ class ChatWindow(ctk.CTkToplevel):
                          text_color=self._ACCENT).pack(expand=True)
             lbl = ctk.CTkLabel(row, text="  ●  ·  ·  ",
                                font=ctk.CTkFont("Segoe UI", 16, "bold"),
-                               text_color="#2A2060", anchor="w")
+                               text_color=self._DIMMED, anchor="w")
             lbl.pack(side="left")
             self._typing_lbl       = lbl
             self._typing_frame_ref = frame
@@ -2178,8 +2184,26 @@ class ChatWindow(ctk.CTkToplevel):
     # ✓/✕ with duration when finished. Missions get their own titled card.
 
     _ACT_SPIN  = ["◐", "◓", "◑", "◒"]
-    _ACT_OK    = "#22C55E"
-    _ACT_FAIL  = "#EF4444"
+    _ACT_OK    = "#4ADE80"
+    _ACT_FAIL  = "#F87171"
+
+    # Per-task-kind visual identity: (icon name, accent color)
+    _KIND_STYLE = {
+        "brain":  ("robot",    "#A78BFA"),
+        "code":   ("code",     "#4ADE80"),
+        "web":    ("globe",    "#58C4DD"),
+        "search": ("search",   "#FBBF24"),
+        "image":  ("image",    "#F472B6"),
+        "file":   ("file",     "#60A5FA"),
+        "system": ("activity", "#94A3B8"),
+        "media":  ("music",    "#34D399"),
+        "vision": ("camera",   "#F87171"),
+        "note":   ("edit",     "#FACC15"),
+        "app":    ("spark",    "#58C4DD"),
+    }
+
+    def _kind_style(self, kind: str) -> tuple:
+        return self._KIND_STYLE.get(kind, ("activity", self._ACCENT))
 
     def on_activity(self, entry: dict) -> None:
         """Main-thread entry point — called via GILWindow.after(0, ...)."""
@@ -2220,55 +2244,101 @@ class ChatWindow(ctk.CTkToplevel):
 
         holder = ctk.CTkFrame(self._scroll, fg_color="transparent")
         holder.pack(fill="x")
-        card = ctk.CTkFrame(holder, fg_color=self._INPUT, corner_radius=12,
+        card = ctk.CTkFrame(holder, fg_color=self._INPUT, corner_radius=14,
                             border_width=1, border_color=self._BORDER)
         card.pack(anchor="w", padx=28, pady=(6, 6), fill="x")
 
         head = ctk.CTkFrame(card, fg_color="transparent")
-        head.pack(fill="x", padx=14, pady=(8, 2))
-        ctk.CTkLabel(head, text="", image=_icon("activity", self._ACCENT, 13),
-                     width=16).pack(side="left", padx=(0, 7))
+        head.pack(fill="x", padx=12, pady=(10, 4))
+        # Kind chip — colored rounded square with the task-type icon,
+        # set from the first activity that lands in this card.
+        chip = ctk.CTkFrame(head, fg_color=self._HOVER, corner_radius=8,
+                            width=26, height=26)
+        chip.pack(side="left", padx=(2, 9)); chip.pack_propagate(False)
+        chip_icon = ctk.CTkLabel(chip, text="",
+                                 image=_icon("activity", self._ACCENT, 14))
+        chip_icon.pack(expand=True)
         title = group if group else "G.I.L. is working"
         hdr = ctk.CTkLabel(head, text=title,
-                           font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                           font=ctk.CTkFont("Segoe UI", 11, "bold"),
                            text_color=self._DIMMED, anchor="w")
         hdr.pack(side="left")
 
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=14, pady=(0, 8))
+        body.pack(fill="x", padx=14, pady=(0, 4))
 
-        self._act_card   = holder
-        self._act_body   = body
-        self._act_header = hdr
+        # Animated progress ribbon — alive while any step is running
+        bar = ctk.CTkProgressBar(card, height=3, corner_radius=2,
+                                 fg_color=self._SEP,
+                                 progress_color=self._ACCENT,
+                                 mode="indeterminate",
+                                 indeterminate_speed=0.9)
+        bar.pack(fill="x", padx=14, pady=(2, 10))
+        bar.start()
+
+        self._act_card      = holder
+        self._act_body      = body
+        self._act_header    = hdr
+        self._act_bar       = bar
+        self._act_chip_icon = chip_icon
+        self._act_chip_set  = False
 
     def _add_activity_row(self, aid: int, entry: dict) -> None:
+        kind_icon, kind_color = self._kind_style(entry.get("kind", ""))
+        # First row stamps the card's kind chip
+        if not getattr(self, "_act_chip_set", True):
+            try:
+                self._act_chip_icon.configure(
+                    image=_icon(kind_icon, kind_color, 14))
+                self._act_chip_set = True
+            except Exception:
+                pass
+
         row = ctk.CTkFrame(self._act_body, fg_color="transparent")
-        row.pack(fill="x", pady=1)
+        row.pack(fill="x", pady=2)
         running = entry["status"] == "running"
         st = ctk.CTkLabel(row, text=self._ACT_SPIN[0] if running else
                           ("✓" if entry["status"] == "done" else "✕"),
                           width=18,
                           font=ctk.CTkFont("Segoe UI", 11, "bold"),
-                          text_color=self._ACCENT if running else
+                          text_color=kind_color if running else
                           (self._ACT_OK if entry["status"] == "done"
                            else self._ACT_FAIL))
         st.pack(side="left")
+        # small kind icon before the label
+        ki = ctk.CTkLabel(row, text="", width=18,
+                          image=_icon(kind_icon, kind_color, 12))
+        ki.pack(side="left", padx=(2, 2))
         lbl = ctk.CTkLabel(row, text=entry["title"],
                            font=ctk.CTkFont("Segoe UI", 11),
                            text_color=self._TXT, anchor="w")
-        lbl.pack(side="left", padx=(6, 0))
+        lbl.pack(side="left", padx=(4, 0))
         dur = ctk.CTkLabel(row, text="",
                            font=ctk.CTkFont("Segoe UI", 9),
-                           text_color=self._MUTED, anchor="e")
-        dur.pack(side="right")
+                           text_color=self._DIMMED, anchor="e")
+        dur.pack(side="right", padx=(6, 2))
         det = ctk.CTkLabel(row, text=(entry.get("detail") or "")[:80],
                            font=ctk.CTkFont("Segoe UI", 9),
                            text_color=self._MUTED, anchor="w")
         det.pack(side="left", padx=(10, 6))
         self._act_rows[aid] = {"status": st, "label": lbl, "detail": det,
-                               "dur": dur}
+                               "dur": dur, "color": kind_color}
         if running:
             self._act_running.add(aid)
+            # Revive the card if it had already settled: restart the ribbon
+            # and restore the header while new work is in flight.
+            bar = getattr(self, "_act_bar", None)
+            if bar is not None:
+                try:
+                    if bar.winfo_exists() and bar.cget("mode") != "indeterminate":
+                        bar.configure(mode="indeterminate",
+                                      progress_color=self._ACCENT)
+                        bar.start()
+                        if self._act_header is not None:
+                            self._act_header.configure(
+                                text=self._act_group or "G.I.L. is working")
+                except Exception:
+                    pass
             self._start_act_spinner()
         else:
             self._maybe_finish_card()
@@ -2307,6 +2377,20 @@ class ChatWindow(ctk.CTkToplevel):
             except Exception:
                 pass
             self._act_spin_id = None
+        # Freeze the progress ribbon: full bar, green for success / red if any step failed
+        bar = getattr(self, "_act_bar", None)
+        if bar is not None:
+            try:
+                if bar.winfo_exists():
+                    any_fail = any(w["status"].cget("text") == "✕"
+                                   for w in self._act_rows.values())
+                    bar.stop()
+                    bar.configure(mode="determinate",
+                                  progress_color=self._ACT_FAIL if any_fail
+                                  else self._ACT_OK)
+                    bar.set(1.0)
+            except Exception:
+                pass
         hdr, rows = self._act_header, self._act_rows
         if hdr is not None and rows:
             try:
@@ -2645,24 +2729,56 @@ class ChatWindow(ctk.CTkToplevel):
                           ).pack(side="left", padx=(8, 0))
 
         elif kind == "website":
-            card = ctk.CTkFrame(inner, fg_color=self._AVATAR_BG,
+            # Mini browser-window mockup: traffic-light dots + URL bar + title
+            card = ctk.CTkFrame(inner, fg_color=self._INPUT,
                                 corner_radius=12, border_width=1,
                                 border_color=self._BORDER, cursor="hand2")
             card.pack(anchor="w", fill="x", pady=(0, 4))
-            title = path.parent.name.replace("-", " ").replace("_", " ").title()
-            ctk.CTkLabel(card, text=title,
-                         font=ctk.CTkFont("Segoe UI", 13, "bold"),
-                         text_color=self._TXT, anchor="w").pack(
-                             padx=14, pady=(10, 2), fill="x")
+
+            chrome = ctk.CTkFrame(card, fg_color=self._HOVER,
+                                  corner_radius=10, height=30)
+            chrome.pack(fill="x", padx=4, pady=(4, 0))
+            dots = ctk.CTkFrame(chrome, fg_color="transparent")
+            dots.pack(side="left", padx=(10, 6), pady=6)
+            for dc in ("#FF5F57", "#FEBC2E", "#28C840"):
+                ctk.CTkLabel(dots, text="●", width=12,
+                             font=ctk.CTkFont("Segoe UI", 8),
+                             text_color=dc).pack(side="left")
             uri = path.as_uri()
-            short = uri if len(uri) <= 55 else uri[:52] + "..."
-            ctk.CTkLabel(card, text=short,
+            short = uri if len(uri) <= 48 else uri[:45] + "..."
+            ctk.CTkLabel(chrome, text=short,
                          font=ctk.CTkFont("Segoe UI", 9),
-                         text_color=self._ACCENT, anchor="w").pack(
-                             padx=14, pady=(0, 10), fill="x")
-            card.bind("<Button-1>", lambda e, p=path: self._open_file(p))
-            for child in card.winfo_children():
-                child.bind("<Button-1>", lambda e, p=path: self._open_file(p))
+                         text_color=self._DIMMED, anchor="w").pack(
+                             side="left", fill="x", expand=True, padx=(0, 10))
+
+            body_row = ctk.CTkFrame(card, fg_color="transparent")
+            body_row.pack(fill="x", padx=14, pady=(8, 10))
+            ctk.CTkLabel(body_row, text="",
+                         image=_icon("globe", self._ACCENT, 20),
+                         width=26).pack(side="left", padx=(0, 10))
+            tcol = ctk.CTkFrame(body_row, fg_color="transparent")
+            tcol.pack(side="left", fill="x", expand=True)
+            title = path.parent.name.replace("-", " ").replace("_", " ").title()
+            ctk.CTkLabel(tcol, text=title,
+                         font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                         text_color=self._TXT, anchor="w").pack(fill="x")
+            ctk.CTkLabel(tcol, text="Multi-page site • click to open • Customize on the page",
+                         font=ctk.CTkFont("Segoe UI", 9),
+                         text_color=self._MUTED, anchor="w").pack(fill="x")
+            ctk.CTkButton(body_row, text="Open", width=62, height=26,
+                          fg_color=self._ACCENT, hover_color=self._NAME_G,
+                          text_color=self._BTN_TXT,
+                          font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                          corner_radius=8,
+                          command=lambda p=path: self._open_file(p),
+                          ).pack(side="right", padx=(10, 0))
+
+            def _bind_all(w):
+                w.bind("<Button-1>", lambda e, p=path: self._open_file(p))
+                for c in w.winfo_children():
+                    if not isinstance(c, ctk.CTkButton):
+                        _bind_all(c)
+            _bind_all(card)
 
     @staticmethod
     def _has_code(text: str) -> bool:
@@ -2763,7 +2879,7 @@ class ChatWindow(ctk.CTkToplevel):
         act.pack(fill="x", padx=28, pady=(0, 6))
         ctk.CTkButton(act, text=" Copy", image=_icon("copy", self._MUTED, 12),
                       compound="left", width=72, height=24,
-                      fg_color="transparent", hover_color="#1A1640",
+                      fg_color="transparent", hover_color=self._HOVER,
                       text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                       corner_radius=6,
                       command=lambda t=text: self._copy_to_clipboard(self, t),
@@ -2790,7 +2906,7 @@ class ChatWindow(ctk.CTkToplevel):
         star_btn.configure(command=lambda b=star_btn: self._pin_last(b))
         ctk.CTkButton(act, text=" Regenerate", image=_icon("regenerate", self._MUTED, 12),
                       compound="left", width=96, height=24,
-                      fg_color="transparent", hover_color="#1A1640",
+                      fg_color="transparent", hover_color=self._HOVER,
                       text_color=self._MUTED, font=ctk.CTkFont("Segoe UI", 10),
                       corner_radius=6, command=self._regenerate,
                       ).pack(side="left")
@@ -2848,9 +2964,9 @@ class ChatWindow(ctk.CTkToplevel):
         for chip_text in chips:
             chip = ctk.CTkButton(
                 wrap, text=chip_text, height=28,
-                fg_color="#161236", hover_color="#221C50",
+                fg_color=self._INPUT, hover_color=self._HOVER,
                 text_color=self._ACCENT, font=ctk.CTkFont("Segoe UI", 10),
-                corner_radius=14, border_width=1, border_color="#2A2060",
+                corner_radius=14, border_width=1, border_color=self._BORDER,
                 command=lambda t=chip_text: self._send_text(t),
             )
             chip.pack(side="left", padx=(0, 6), pady=2)
@@ -2908,7 +3024,7 @@ class ChatWindow(ctk.CTkToplevel):
                          font=ctk.CTkFont("Segoe UI", 9),
                          text_color=self._MUTED).pack(side="left", padx=(10, 0))
             ctk.CTkButton(name_row, text="⎘", width=28, height=22,
-                          fg_color="transparent", hover_color="#1A1640",
+                          fg_color="transparent", hover_color=self._HOVER,
                           text_color=self._MUTED,
                           font=ctk.CTkFont("Segoe UI", 10),
                           corner_radius=5,
@@ -2955,7 +3071,7 @@ class ChatWindow(ctk.CTkToplevel):
             meta.pack(anchor="e", pady=(0, 6))
             ctk.CTkButton(meta, text="", image=_icon("edit", self._MUTED, 12),
                           width=26, height=22,
-                          fg_color="transparent", hover_color="#1A1640",
+                          fg_color="transparent", hover_color=self._HOVER,
                           corner_radius=5,
                           command=lambda t=text, ets=ts: self._edit_message(t, ets),
                           ).pack(side="left", padx=(0, 6))

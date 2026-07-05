@@ -129,6 +129,66 @@ def _i_copy(d, c, w, ss):
     _stroke(d, [(4, 15.5), (4, 4), (15.5, 4)], c, w, ss)
 
 
+def _i_code(d, c, w, ss):
+    _stroke(d, [(8, 7), (3.5, 12), (8, 17)], c, w, ss)
+    _stroke(d, [(16, 7), (20.5, 12), (16, 17)], c, w, ss)
+    _stroke(d, [(13.6, 4.5), (10.4, 19.5)], c, w * 0.9, ss)
+
+
+def _i_globe(d, c, w, ss):
+    _circle(d, 12, 12, 8.5, c, w, ss)
+    _stroke(d, [(3.5, 12), (20.5, 12)], c, w * 0.85, ss)
+    # meridian ellipse approximated with two arcs
+    f = ss / _GRID
+    d.arc([8 * f, 3.5 * f, 16 * f, 20.5 * f], start=0, end=360,
+          fill=c, width=round(w * 0.85))
+
+
+def _i_image(d, c, w, ss):
+    _stroke(d, [(4, 5), (20, 5), (20, 19), (4, 19)], c, w, ss, closed=True)
+    _circle(d, 9, 9.6, 1.7, c, w * 0.9, ss)
+    _stroke(d, [(4.6, 17.5), (10, 12), (13, 15), (16, 11.5), (19.5, 15.5)],
+            c, w * 0.9, ss)
+
+
+def _i_file(d, c, w, ss):
+    _stroke(d, [(6, 3.5), (14.5, 3.5), (18.5, 7.5), (18.5, 20.5), (6, 20.5)],
+            c, w, ss, closed=True)
+    _stroke(d, [(14.5, 3.5), (14.5, 7.5), (18.5, 7.5)], c, w * 0.85, ss)
+    _stroke(d, [(9, 12), (15.5, 12)], c, w * 0.8, ss)
+    _stroke(d, [(9, 15.5), (15.5, 15.5)], c, w * 0.8, ss)
+
+
+def _i_terminal(d, c, w, ss):
+    _stroke(d, [(3.5, 5), (20.5, 5), (20.5, 19), (3.5, 19)], c, w, ss, closed=True)
+    _stroke(d, [(7, 9.5), (10.5, 12.5), (7, 15.5)], c, w, ss)
+    _stroke(d, [(12.5, 15.5), (17, 15.5)], c, w, ss)
+
+
+def _i_music(d, c, w, ss):
+    _stroke(d, [(9.5, 17.5), (9.5, 5.5), (19, 4), (19, 16)], c, w, ss)
+    _circle(d, 7.2, 17.6, 2.4, c, w, ss)
+    _circle(d, 16.7, 16.1, 2.4, c, w, ss)
+
+
+def _i_camera(d, c, w, ss):
+    _stroke(d, [(3.5, 8), (8.5, 8), (10, 5.5), (14, 5.5), (15.5, 8),
+                (20.5, 8), (20.5, 19), (3.5, 19)], c, w, ss, closed=True)
+    _circle(d, 12, 13.3, 3.4, c, w, ss)
+
+
+def _i_spark(d, c, w, ss):
+    # four-point sparkle
+    _stroke(d, [(12, 3.5), (13.8, 10.2), (20.5, 12), (13.8, 13.8),
+                (12, 20.5), (10.2, 13.8), (3.5, 12), (10.2, 10.2)],
+            c, w * 0.9, ss, closed=True)
+    _circle(d, 18.6, 5.4, 1.1, c, w * 0.8, ss, fill=True)
+
+
+def _i_check(d, c, w, ss):
+    _stroke(d, [(4.5, 12.5), (9.8, 18), (19.5, 6.5)], c, w * 1.15, ss)
+
+
 def _i_regenerate(d, c, w, ss):
     _arc(d, 11, 11, 8, 130, 360, c, w, ss)
     _stroke(d, [(21, 7), (21, 11.5), (16.5, 11.5)], c, w, ss)
@@ -196,6 +256,15 @@ _ICONS = {
     "edit":         _i_edit,
     "attach":       _i_attach,
     "copy":         _i_copy,
+    "code":         _i_code,
+    "globe":        _i_globe,
+    "image":        _i_image,
+    "file":         _i_file,
+    "terminal":     _i_terminal,
+    "music":        _i_music,
+    "camera":       _i_camera,
+    "spark":        _i_spark,
+    "check":        _i_check,
     "regenerate":   _i_regenerate,
     "send":         _i_send,
     "robot":        _i_robot,
