@@ -2782,6 +2782,123 @@ class ChatWindow(ctk.CTkToplevel):
                         _bind_all(c)
             _bind_all(card)
 
+    def _gil_avatar_row(self):
+        """Build a standard GIL avatar + name header row; returns (row, inner)."""
+        row = ctk.CTkFrame(self._scroll, fg_color=self._SURF2, corner_radius=0)
+        row.pack(fill="x")
+        inner = ctk.CTkFrame(row, fg_color="transparent")
+        inner.pack(fill="x", padx=28, pady=(10, 10))
+        nr = ctk.CTkFrame(inner, fg_color="transparent")
+        nr.pack(fill="x", pady=(0, 8))
+        av = ctk.CTkFrame(nr, fg_color=self._AVATAR_BG, corner_radius=8,
+                          width=26, height=26, border_width=1,
+                          border_color=self._ACCENT)
+        av.pack(side="left", padx=(0, 10)); av.pack_propagate(False)
+        ctk.CTkLabel(av, text="◈", font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                     text_color=self._ACCENT).pack(expand=True)
+        ctk.CTkLabel(nr, text="G.I.L.", font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=self._NAME_G).pack(side="left")
+        return row, inner
+
+    def add_file_listing(self, path, listing: str) -> None:
+        """Render a folder's contents as a clean file browser card (Claude-style)."""
+        def _do():
+            from pathlib import Path as _P
+            self.hide_typing()
+            _row, inner = self._gil_avatar_row()
+            card = ctk.CTkFrame(inner, fg_color=self._INPUT, corner_radius=12,
+                                border_width=1, border_color=self._BORDER)
+            card.pack(anchor="w", fill="x")
+            head = ctk.CTkFrame(card, fg_color="transparent")
+            head.pack(fill="x", padx=12, pady=(10, 4))
+            ctk.CTkLabel(head, text="", image=_icon("folder", self._ACCENT, 15),
+                         width=18).pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(head, text=str(path),
+                         font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                         text_color=self._TXT, anchor="w").pack(side="left")
+
+            lines = [l for l in listing.splitlines() if l.strip()]
+            body = lines[1:] if lines and lines[0].strip() == str(path) else lines
+            base = _P(os.path.expandvars(os.path.expanduser(str(path))))
+            for entry in body[:40]:
+                name = entry.replace("📁", "").replace("📄", "").strip()
+                is_dir = "📁" in entry
+                r = ctk.CTkFrame(card, fg_color="transparent")
+                r.pack(fill="x", padx=14, pady=1)
+                ctk.CTkLabel(r, text="",
+                             image=_icon("folder" if is_dir else "file",
+                                         self._DIMMED, 12), width=16).pack(side="left")
+                ctk.CTkLabel(r, text=name, font=ctk.CTkFont("Consolas", 11),
+                             text_color=self._TXT, anchor="w").pack(
+                                 side="left", padx=(6, 0))
+                full = base / name
+                if is_dir:
+                    ctk.CTkButton(r, text="Open", width=48, height=22,
+                                  fg_color="transparent", hover_color=self._HOVER,
+                                  text_color=self._ACCENT,
+                                  font=ctk.CTkFont("Segoe UI", 9), corner_radius=6,
+                                  command=lambda p=full: self._open_file(p)).pack(side="right")
+                else:
+                    ctk.CTkButton(r, text="Read", width=48, height=22,
+                                  fg_color="transparent", hover_color=self._HOVER,
+                                  text_color=self._ACCENT,
+                                  font=ctk.CTkFont("Segoe UI", 9), corner_radius=6,
+                                  command=lambda p=full: self._request_read(p)).pack(side="right")
+            ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+        self.after(0, _do)
+
+    def _request_read(self, path) -> None:
+        """User clicked Read on a file — go through the permission gate."""
+        try:
+            from actions import read_file
+            content = read_file(str(path))
+            self.add_file_content(path, content)
+        except Exception:
+            pass
+
+    def add_file_content(self, path, content: str) -> None:
+        """Render a file's text content as a read-only code-style card."""
+        def _do():
+            from pathlib import Path as _P
+            self.hide_typing()
+            _row, inner = self._gil_avatar_row()
+            card = ctk.CTkFrame(inner, fg_color=self._INPUT, corner_radius=12,
+                                border_width=1, border_color=self._BORDER)
+            card.pack(anchor="w", fill="x")
+            head = ctk.CTkFrame(card, fg_color=self._HOVER, corner_radius=10)
+            head.pack(fill="x", padx=4, pady=(4, 0))
+            ctk.CTkLabel(head, text="", image=_icon("file", self._ACCENT, 13),
+                         width=16).pack(side="left", padx=(10, 6), pady=6)
+            ctk.CTkLabel(head, text=_P(str(path)).name,
+                         font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                         text_color=self._TXT, anchor="w").pack(side="left")
+            ctk.CTkButton(head, text="Open in editor", width=100, height=24,
+                          fg_color="transparent", hover_color=self._SURF2,
+                          text_color=self._DIMMED,
+                          font=ctk.CTkFont("Segoe UI", 9), corner_radius=6,
+                          command=lambda p=path: self._open_file(p)).pack(
+                              side="right", padx=8)
+            # strip the "[path — N lines]" header actions.read_file prepends
+            body = content
+            if body.startswith("[") and "]\n" in body:
+                body = body.split("]\n", 1)[1]
+            box = ctk.CTkTextbox(card, height=min(320, 20 + body.count("\n") * 16),
+                                 font=ctk.CTkFont("Consolas", 11),
+                                 fg_color=self._PAGE, text_color=self._TXT,
+                                 wrap="none", border_width=0)
+            box.pack(fill="x", padx=8, pady=8)
+            box.insert("0.0", body)
+            box.configure(state="disabled")
+            try:
+                self._scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+        self.after(0, _do)
+
     @staticmethod
     def _has_code(text: str) -> bool:
         import re
@@ -3822,6 +3939,20 @@ class GILWindow(ctk.CTk):
                     win.add_link_message(path)
         except Exception:
             pass
+
+    def show_file_listing(self, path, listing: str) -> None:
+        def _do():
+            win = getattr(self, "_chat_win", None)
+            if win and win.winfo_exists():
+                win.add_file_listing(path, listing)
+        self.after(0, _do)
+
+    def show_file_content(self, path, content: str) -> None:
+        def _do():
+            win = getattr(self, "_chat_win", None)
+            if win and win.winfo_exists():
+                win.add_file_content(path, content)
+        self.after(0, _do)
 
     def show_proactive_suggestion(self, message: str) -> None:
         """

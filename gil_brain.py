@@ -274,6 +274,7 @@ open_terminal â†’ command | prompt_project â†’ "folder|task"
 focus_window â†’ app | arrange_windows â†’ "app1|app2" | close_window â†’ app
 minimize_all â†’ null | maximize_window â†’ app
 open_file â†’ path | read_file â†’ path | list_directory â†’ path | find_file â†’ filename
+  (FILE ACCESS: G.I.L. asks permission before reading files or listing folders not yet granted; approved folders stay open for the session. Always DO what the user asks - never refuse a file task, just request access if needed.)
 set_clipboard â†’ text | get_clipboard â†’ null
 create_3d â†’ scene description
 tv â†’ on|off|mute|unmute|volume up|volume down|volume up N|volume down N|volume N|hdmi N|netflix|youtube

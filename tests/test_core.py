@@ -166,6 +166,36 @@ def test_parse_mission_passthrough():
     assert p["mission"]["title"] == "t"
 
 
+def test_file_access_permissions(tmp_path, monkeypatch):
+    import file_access as fa
+    from pathlib import Path
+    # pre-trusted home folders read without asking
+    assert fa.is_read_allowed(str(Path.home() / "Downloads" / "x.txt"))
+    # sensitive + foreign paths require a grant
+    assert not fa.is_read_allowed(str(Path.home() / "AppData" / "s.txt"))
+    assert not fa.is_read_allowed(r"D:\proj\a.txt")
+    fa.grant(r"D:\proj\a.txt")
+    assert fa.is_read_allowed(r"D:\proj\a.txt")
+
+
+def test_file_access_gate_runs_or_defers():
+    import file_access as fa, types
+    from pathlib import Path
+    ran = []
+    class E:
+        _pending_file_access = None
+        window = types.SimpleNamespace(add_chat_message=lambda *a: None,
+                                       set_state=lambda *a, **k: None)
+        _last_spoke_at = [0.0]; _last_said = [""]
+        def _speak(self, t): pass
+    e = E()
+    assert fa.request(e, str(Path.home() / "Downloads" / "a.txt"),
+                      "read", lambda: ran.append(1)) and ran == [1]
+    e2 = E()
+    assert not fa.request(e2, r"D:\zzz\x.txt", "read", lambda: ran.append(2))
+    assert e2._pending_file_access is not None
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(

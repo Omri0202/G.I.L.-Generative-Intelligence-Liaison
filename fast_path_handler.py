@@ -944,6 +944,29 @@ def _fix_confirm(text: str, lower: str, eng) -> bool:
     """
     words = set(lower.replace(".", "").replace(",", "").split())
 
+    # 0. GIL is waiting for permission to access a folder on the computer
+    fa = getattr(eng, "_pending_file_access", None)
+    if fa:
+        always = any(w in words for w in ("always", "remember", "forever"))
+        if (words & _FIX_YES) or always:
+            eng._pending_file_access = None
+            import file_access
+            file_access.grant(fa["folder"], remember=always)
+            log.info("file access granted: %s (remember=%s)", fa["folder"], always)
+            try:
+                threading.Thread(target=fa["on_approved"], daemon=True,
+                                 name="GIL-FileAccess").start()
+            except Exception:
+                pass
+            return True
+        if words & _FIX_NO:
+            eng._pending_file_access = None
+            eng.window.add_chat_message(
+                "Understood — I won't access that folder.", "gil")
+            eng.window.set_state("listening")
+            return True
+        return False
+
     # 1. The coding agent is waiting for approval on a specific step
     gate = getattr(eng, "_agent_gate", None)
     if gate:

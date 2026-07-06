@@ -181,13 +181,40 @@ def dispatch(
             daemon=True, name=f"GIL-{action}",
         ).start()
 
+    # ── File access (permission-gated, Claude-style) ──────────────────────────
+    elif action in ("read_file", "list_directory", "open_file"):
+        import file_access
+        why = {"read_file": "to read the file for you",
+               "list_directory": "to show you what's inside",
+               "open_file": "to open it for you"}[action]
+
+        def _do_file(act=action, tgt=target):
+            from ears import unmute
+            result = run_action(act, tgt)
+            unmute()
+            if act == "list_directory" and result:
+                window.show_file_listing(tgt, result)
+                spoken = f"Here's what's in {tgt}."
+            elif act == "read_file" and result:
+                window.show_file_content(tgt, result)
+                spoken = f"Opened {tgt} — it's in the chat."
+            else:
+                spoken = result or "Done."
+            if act != "list_directory":
+                window.set_state("speaking", said=spoken); speak(spoken)
+                last_spoke_at[0] = __import__("time").time() - 1.5
+                last_said[0] = spoken
+            window.set_state("listening")
+
+        file_access.request(engine, target, why, _do_file)
+        return True
+
     # ── Window management ─────────────────────────────────────────────────────
     elif action in ("focus_window", "arrange_windows", "close_window",
-                    "minimize_all", "maximize_window", "open_file",
-                    "read_file", "list_directory", "find_file",
-                    "set_clipboard", "get_clipboard"):
+                    "minimize_all", "maximize_window",
+                    "find_file", "set_clipboard", "get_clipboard"):
         result = run_action(action, target)
-        if result and action in ("read_file", "list_directory", "find_file", "get_clipboard"):
+        if result and action in ("find_file", "get_clipboard"):
             log.info("result: %s", result[:200])
 
     # ── TV / mode / PC ────────────────────────────────────────────────────────

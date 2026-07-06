@@ -267,7 +267,11 @@ def _auto_name_session(session_id: str) -> None:
     if not rows:
         return
 
-    transcript = "\n".join(f"{r['sender']}: {r['content'][:200]}" for r in rows)
+    # Title from the USER's intent only — feeding GIL's reply in made the
+    # model echo it back verbatim ("gil: I've located the file named…").
+    user_lines = [r["content"][:200] for r in rows if r["sender"] == "user"]
+    transcript = "\n".join(user_lines) or "\n".join(
+        f"{r['sender']}: {r['content'][:200]}" for r in rows)
 
     try:
         import os
@@ -282,10 +286,13 @@ def _auto_name_session(session_id: str) -> None:
                 "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content":
-                        "Generate a short 3-5 word title summarizing this conversation's "
-                        "topic. No quotes, no trailing punctuation, no 'Title:' prefix — "
-                        "just the title text itself."},
-                    {"role": "user", "content": transcript},
+                        "You write a short 3-5 word topic label for a chat, based on "
+                        "what the USER wanted. Output ONLY the label — a noun phrase in "
+                        "Title Case. Never start with 'gil', 'I', 'I've', or a verb of "
+                        "speech; never quote or repeat the assistant's reply; no colons, "
+                        "no quotes, no punctuation. Example good labels: 'Find Gil File', "
+                        "'Israel Country Info', 'Coffee Shop Website'."},
+                    {"role": "user", "content": "USER MESSAGES:\n" + transcript},
                 ],
                 "max_tokens": 20,
                 "temperature": 0.3,
@@ -294,6 +301,14 @@ def _auto_name_session(session_id: str) -> None:
         )
         resp.raise_for_status()
         title = resp.json()["choices"][0]["message"]["content"].strip().strip('"\'').strip()
+        if not title:
+            return
+        # Guard against the model echoing GIL's reply as the title
+        import re as _re
+        title = _re.sub(r"^(gil|g\.i\.l\.?)\s*[:,-]?\s*", "", title, flags=_re.IGNORECASE)
+        title = _re.sub(r"^(i've|ive|i have|here'?s|sure|okay|ok)\b[\s,:-]*", "",
+                        title, flags=_re.IGNORECASE).strip()
+        title = title.split("\n")[0].strip(' .:—-"\'')
         if not title:
             return
         title = title[:48]
