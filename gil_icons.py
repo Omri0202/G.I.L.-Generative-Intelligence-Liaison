@@ -189,6 +189,16 @@ def _i_check(d, c, w, ss):
     _stroke(d, [(4.5, 12.5), (9.8, 18), (19.5, 6.5)], c, w * 1.15, ss)
 
 
+def _i_arrow_up(d, c, w, ss):
+    _stroke(d, [(12, 19), (12, 5)], c, w * 1.2, ss)
+    _stroke(d, [(6, 11), (12, 5), (18, 11)], c, w * 1.2, ss)
+
+
+def _i_folder(d, c, w, ss):
+    _stroke(d, [(3.5, 7), (9.5, 7), (11.5, 9.5), (20.5, 9.5), (20.5, 18.5),
+                (3.5, 18.5)], c, w, ss, closed=True)
+
+
 def _i_regenerate(d, c, w, ss):
     _arc(d, 11, 11, 8, 130, 360, c, w, ss)
     _stroke(d, [(21, 7), (21, 11.5), (16.5, 11.5)], c, w, ss)
@@ -265,6 +275,8 @@ _ICONS = {
     "camera":       _i_camera,
     "spark":        _i_spark,
     "check":        _i_check,
+    "arrow_up":     _i_arrow_up,
+    "folder":       _i_folder,
     "regenerate":   _i_regenerate,
     "send":         _i_send,
     "robot":        _i_robot,

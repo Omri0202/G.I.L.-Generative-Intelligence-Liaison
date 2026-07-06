@@ -198,6 +198,14 @@ class ConversationEngine:
         self.window.after(0, self.window._create_floating_chat_button)
         self.window.register_activate_callback(self._manual_activate)
 
+        # ── Proactive on-screen error detection ───────────────────────────────
+        try:
+            from error_watch import ErrorWatcher
+            self._error_watcher = ErrorWatcher(self)
+            self._error_watcher.start()
+        except Exception:
+            log.warning("error watcher unavailable", exc_info=True)
+
         # ── Global hotkeys ────────────────────────────────────────────────────
         try:
             import keyboard

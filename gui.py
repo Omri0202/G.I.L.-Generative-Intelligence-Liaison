@@ -1579,11 +1579,13 @@ class ChatWindow(ctk.CTkToplevel):
         ).pack(side="right", padx=(0, 2), pady=8)
         send_col = ctk.CTkFrame(self._input_wrap, fg_color="transparent")
         send_col.pack(side="right", padx=(0, 8), pady=8)
+        # Small circular up-arrow in the OPPOSITE of the theme colour:
+        # black button in light mode, light button in dark mode (like Claude).
         ctk.CTkButton(
-            send_col, text="", image=_icon("send", "#020810", 18),
-            fg_color=self._ACCENT, hover_color="#00B8D4",
-            text_color="#020810", font=ctk.CTkFont("Segoe UI", 18, "bold"),
-            corner_radius=10, command=self._send,
+            send_col, text="", image=_icon("arrow_up", self._PAGE, 16),
+            width=32, height=32,
+            fg_color=self._TXT, hover_color=self._DIMMED,
+            corner_radius=16, command=self._send,
         ).pack()
 
     # ── Placeholder handling ──────────────────────────────────────────────────

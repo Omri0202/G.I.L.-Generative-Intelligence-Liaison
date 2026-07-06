@@ -368,7 +368,18 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     continue
                 activity.done(aid, "approved")
 
-            aid = activity.start("code", f"[{step}] {why}")
+            # Show exactly what GIL is touching — path/dir/pattern/command —
+            # not just the reason, so the user sees where he is working (Claude-style).
+            _tgt = (args.get("path") or args.get("dir")
+                    or args.get("command") or args.get("pattern") or "")
+            _kind = {"read_file": "file", "list_dir": "file", "search": "search",
+                     "run": "code", "edit_file": "code",
+                     "write_file": "code"}.get(tool, "code")
+            _verb = {"read_file": "Reading", "list_dir": "Listing",
+                     "search": "Searching", "run": "Running",
+                     "edit_file": "Editing", "write_file": "Writing"}.get(tool, why)
+            _label = f"[{step}] {_verb} {_tgt}".strip() if _tgt else f"[{step}] {why}"
+            aid = activity.start(_kind, _label[:100])
             try:
                 if tool == "read_file":
                     result = _t_read_file(args)

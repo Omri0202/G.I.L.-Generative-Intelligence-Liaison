@@ -964,12 +964,35 @@ def find_file(name: str) -> str:
     from pathlib import Path
     home = Path.home()
     try:
-        matches = list(home.glob(f"**/{name}"))[:8]
-        if matches:
-            return "\n".join(str(m) for m in matches)
-        return f"No files matching '{name}' found in home directory."
-    except Exception as exc:
-        return f"Search failed: {exc}"
+        import activity
+    except Exception:
+        activity = None
+    # Search common locations, publishing each folder scanned as its own live
+    # activity step — so the chat shows exactly where GIL is looking, like Claude.
+    search_dirs = [
+        home / "Documents", home / "Desktop", home / "Downloads",
+        home / "project_gil", home / "Pictures", home,
+    ]
+    seen, matches = set(), []
+    for d in search_dirs:
+        if not d.is_dir() or d in seen:
+            continue
+        seen.add(d)
+        aid = activity.start("search", f"Searching {d}") if activity else None
+        try:
+            found = list(d.glob(f"**/{name}"))[:8]
+        except Exception:
+            found = []
+        if activity and aid is not None:
+            activity.done(aid, f"{len(found)} match(es)" if found else "nothing here")
+        for m in found:
+            if str(m) not in {str(x) for x in matches}:
+                matches.append(m)
+        if len(matches) >= 8:
+            break
+    if matches:
+        return "\n".join(str(m) for m in matches[:8])
+    return f"No files matching '{name}' found in the usual locations."
 
 
 # ── New feature wrappers ─────────────────────────────────────────────────────
