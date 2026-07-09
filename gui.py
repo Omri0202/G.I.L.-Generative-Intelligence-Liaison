@@ -1095,7 +1095,7 @@ class _FloatingChatButton(ctk.CTkToplevel):
     Hovering slides it open into a labeled pill; click opens the chat.
     Right-click hides it for the session. Stays off the taskbar.
     """
-    W_MIN, W_MAX, H = 12, 148, 66
+    W_MIN, W_MAX, H = 15, 148, 66
 
     def __init__(self, parent, on_click: callable):
         super().__init__(parent)
@@ -1144,11 +1144,24 @@ class _FloatingChatButton(ctk.CTkToplevel):
                            font=("Segoe UI", 7))
             self._strip = None
         else:
-            # thin two-tone strip (cyan → purple) hugging the edge
-            cv.create_rectangle(0, 4, self.W_MIN - 3, self.H // 2,
-                                fill=ACCENT, outline="")
-            cv.create_rectangle(0, self.H // 2, self.W_MIN - 3, self.H - 4,
-                                fill="#A78BFA", outline="")
+            # smooth cyan→purple gradient strip with rounded caps and a soft
+            # edge glow — drawn as interpolated 1px slices (tk has no gradients)
+            w   = self.W_MIN - 4
+            top, bot = 7, self.H - 7
+            n = bot - top
+            for i in range(n):
+                f = i / max(1, n - 1)
+                cv.create_line(0, top + i, w, top + i,
+                               fill=_blend(ACCENT, "#A78BFA", f))
+            cv.create_oval(0, top - 5, w, top + 5, fill=ACCENT, outline="")
+            cv.create_oval(0, bot - 5, w, bot + 5, fill="#A78BFA", outline="")
+            # faint glow falloff to the right of the strip
+            for gx in range(1, 4):
+                for i in range(0, n, 2):
+                    f = i / max(1, n - 1)
+                    base = _blend(ACCENT, "#A78BFA", f)
+                    cv.create_line(w + gx, top + i, w + gx, top + i + 2,
+                                   fill=_blend(base, "#10101E", 0.35 + gx * 0.22))
             self._strip = True
 
     def _place(self) -> None:
