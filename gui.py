@@ -1091,11 +1091,11 @@ class _SpeakBubble(ctk.CTkToplevel):
 # ── Floating chat launcher (bottom-left, always on screen) ───────────────────
 class _FloatingChatButton(ctk.CTkToplevel):
     """
-    Always-visible pill at the bottom-left corner.
-    Does NOT use transient() so it stays visible even when GIL hides to tray.
-    WS_EX_TOOLWINDOW keeps it off the taskbar.
+    Edge tab: a thin glowing strip hugging the LEFT screen edge.
+    Hovering slides it open into a labeled pill; click opens the chat.
+    Right-click hides it for the session. Stays off the taskbar.
     """
-    W, H = 148, 52
+    W_MIN, W_MAX, H = 12, 148, 66
 
     def __init__(self, parent, on_click: callable):
         super().__init__(parent)
@@ -1104,92 +1104,81 @@ class _FloatingChatButton(ctk.CTkToplevel):
         self.attributes("-alpha", 0.0)
         self.configure(fg_color=BG)
         self.attributes("-transparentcolor", BG)
-        self._on_click = on_click
-        self._alive    = True
-        self._alpha    = 0.0
-        self._pulse_t  = 0.0
-        self._hidden   = False
-        self._hovering = False
-        self._last_active = time.time()   # drives idle ghost-fade
+        self._on_click  = on_click
+        self._alive     = True
+        self._alpha     = 0.0
+        self._pulse_t   = 0.0
+        self._hidden    = False
+        self._expanded  = False
+        self._collapse_id = None
+        self._x = 0
+        self._y = 600
 
-        # Offscreen placeholder — real position set in _place() after mapping
-        self.geometry(f"{self.W}x{self.H}+16+900")
-
-        cv = tk.Canvas(self, width=self.W, height=self.H,
+        self.geometry(f"{self.W_MAX}x{self.H}+0+600")
+        cv = tk.Canvas(self, width=self.W_MAX, height=self.H,
                        bg=BG, highlightthickness=0)
         cv.pack()
         self._cv = cv
-
-        # Clean pill: dark surface, thin cyan border, ◈ icon + label
-        self._bg = cv.create_rectangle(3, 3, self.W - 3, self.H - 3,
-                                        fill="#06061A", outline=ACCENT, width=1)
-        # ◈ left circle
-        cv.create_oval(9, 11, 37, 39, fill="#08082C", outline=ACCENT, width=1)
-        cv.create_text(23, 25, text="◈", fill=ACCENT,
-                       font=("Segoe UI", 13, "bold"))
-        # Divider
-        cv.create_line(44, 10, 44, self.H - 10, fill="#0A1428", width=1)
-        # Labels
-        self._lbl  = cv.create_text(94, 20, text="Chat",
-                                     fill="#EEF4FF",
-                                     font=("Segoe UI", 11, "bold"))
-        self._hint = cv.create_text(94, 34, text="Ctrl+Shift+C",
-                                     fill="#1A3050",
-                                     font=("Segoe UI", 7))
-
         cv.bind("<Button-1>", lambda e: self._click())
-        cv.bind("<Button-3>", lambda e: self.hide())   # right-click: hide for now
+        cv.bind("<Button-3>", lambda e: self.hide())
         cv.bind("<Enter>",    self._hover_in)
         cv.bind("<Leave>",    self._hover_out)
         cv.configure(cursor="hand2")
-
-        # Dev mode badge (green dot — shown when developer mode is active)
-        self._dev_dot = cv.create_oval(
-            self.W - 18, 8, self.W - 6, 20,
-            fill="#4ADE80", outline="#080D08", width=2,
-            state="hidden",
-        )
-
-        # Position and show after the window is fully mapped
+        self._draw()
         self.after(100, self._place)
-        self.after(500, self._update_dev_badge)
+
+    # ── drawing ───────────────────────────────────────────────────────────────
+
+    def _draw(self) -> None:
+        cv = self._cv
+        cv.delete("all")
+        if self._expanded:
+            cv.create_rectangle(2, 4, self.W_MAX - 6, self.H - 4,
+                                fill="#06101E", outline=ACCENT, width=1)
+            cv.create_oval(10, 15, 46, 51, fill="#08182C", outline=ACCENT, width=1)
+            cv.create_text(28, 33, text="◈", fill=ACCENT,
+                           font=("Segoe UI", 14, "bold"))
+            cv.create_text(92, 26, text="Chat", fill="#EAF6FF",
+                           font=("Segoe UI", 12, "bold"))
+            cv.create_text(92, 44, text="Ctrl+Shift+C", fill="#3A6A8A",
+                           font=("Segoe UI", 7))
+            self._strip = None
+        else:
+            # thin two-tone strip (cyan → purple) hugging the edge
+            cv.create_rectangle(0, 4, self.W_MIN - 3, self.H // 2,
+                                fill=ACCENT, outline="")
+            cv.create_rectangle(0, self.H // 2, self.W_MIN - 3, self.H - 4,
+                                fill="#A78BFA", outline="")
+            self._strip = True
 
     def _place(self) -> None:
-        """Pin to the bottom-left corner using the Windows work-area API.
-        This is DPI-safe and accounts for taskbar height/position correctly."""
+        """Dock to the left edge of the work area, lower third."""
         import ctypes, ctypes.wintypes as _wt
         try:
-            # SPI_GETWORKAREA (0x30) — returns usable screen rect excl. taskbar
             rc = _wt.RECT()
             ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0)
-            x = rc.left + 16
-            y = rc.bottom - self.H - 4   # 4 px above where taskbar starts
+            self._x = rc.left
+            self._y = rc.bottom - self.H - 120
         except Exception:
-            sh = self.winfo_screenheight()
-            x, y = 16, sh - self.H - 52
-        self.geometry(f"{self.W}x{self.H}+{x}+{y}")
+            self._x, self._y = 0, self.winfo_screenheight() - self.H - 160
+        self._apply_geometry()
         _hide_from_taskbar(self)
         self._fade_in()
         self._pulse()
-        self._idle_loop()
 
-    # ── Show / hide (called when chat opens / closes) ─────────────────────────
+    def _apply_geometry(self) -> None:
+        w = self.W_MAX if self._expanded else self.W_MIN
+        self.geometry(f"{w}x{self.H}+{self._x}+{self._y}")
+
+    # ── show / hide ───────────────────────────────────────────────────────────
 
     def _update_dev_badge(self) -> None:
-        """Show/hide the green dev-mode dot. Re-checks every 5 s."""
-        try:
-            from dev_config import is_enabled
-            state = "normal" if is_enabled() else "hidden"
-            self._cv.itemconfig(self._dev_dot, state=state)
-        except Exception:
-            pass
-        self.after(5000, self._update_dev_badge)
+        pass   # dev dot not shown in edge-tab mode
 
     def show(self) -> None:
         if self._hidden:
             self._hidden = False
             self._alpha  = 0.0
-            self._last_active = time.time()
             self.deiconify()
             _hide_from_taskbar(self)
             self._fade_in()
@@ -1199,61 +1188,57 @@ class _FloatingChatButton(ctk.CTkToplevel):
             self._hidden = True
             self.withdraw()
 
-    # ── Interactions ──────────────────────────────────────────────────────────
+    # ── interactions ─────────────────────────────────────────────────────────
 
     def _click(self) -> None:
-        self._cv.itemconfig(self._bg, fill="#0A2044")
-        self.after(130, lambda: self._cv.itemconfig(self._bg, fill="#04041A"))
         self._on_click()
 
-    def _hover_in(self, _) -> None:
-        self._hovering    = True
-        self._last_active = time.time()
-        self._alpha       = 0.95
+    def _hover_in(self, _=None) -> None:
+        if self._collapse_id:
+            try: self.after_cancel(self._collapse_id)
+            except Exception: pass
+            self._collapse_id = None
+        if not self._expanded:
+            self._expanded = True
+            self._apply_geometry()
+            self._draw()
         try:
-            self.attributes("-alpha", 0.95)
+            self.attributes("-alpha", 0.97)
+            self._alpha = 0.97
         except Exception:
             pass
-        self._cv.itemconfig(self._bg,  fill="#16124A", outline="#3FDDFA")
-        self._cv.itemconfig(self._lbl, fill=ACCENT)
 
-    def _hover_out(self, _) -> None:
-        self._hovering    = False
-        self._last_active = time.time()
-        self._cv.itemconfig(self._bg,  fill="#0D0B2E", outline="#3FDDFA")
-        self._cv.itemconfig(self._lbl, fill="#C0E8FF")
+    def _hover_out(self, _=None) -> None:
+        def _collapse():
+            self._expanded = False
+            self._apply_geometry()
+            self._draw()
+            self._collapse_id = None
+        if self._collapse_id:
+            try: self.after_cancel(self._collapse_id)
+            except Exception: pass
+        self._collapse_id = self.after(450, _collapse)
 
-    def _idle_loop(self) -> None:
-        """Ghost mode: after 5s of no interaction the pill fades to a faint
-        watermark so it stops competing for attention; hover brings it back."""
-        if not self._alive:
-            return
-        try:
-            if (not self._hidden and not self._hovering
-                    and time.time() - self._last_active > 5.0
-                    and self._alpha > 0.30):
-                self._alpha = max(0.30, self._alpha - 0.06)
-                self.attributes("-alpha", self._alpha)
-        except Exception:
-            pass
-        self.after(120, self._idle_loop)
-
-    # ── Animations ────────────────────────────────────────────────────────────
+    # ── animations ────────────────────────────────────────────────────────────
 
     def _fade_in(self) -> None:
-        self._alpha = min(0.95, self._alpha + 0.055)
+        self._alpha = min(0.92, self._alpha + 0.055)
         self.attributes("-alpha", self._alpha)
-        if self._alpha < 0.95:
+        if self._alpha < 0.92:
             self.after(18, self._fade_in)
 
     def _pulse(self) -> None:
         if not self._alive:
             return
-        self._pulse_t += 0.06
-        t = abs(math.sin(self._pulse_t))
-        self._cv.itemconfig(self._bg,
-                             outline=_blend(ACCENT, "#80EEFF", t * 0.5))
-        self.after(45, self._pulse)
+        self._pulse_t += 0.05
+        if not self._expanded and not self._hidden:
+            # gentle breathing glow on the strip
+            t = (math.sin(self._pulse_t) + 1) / 2
+            try:
+                self.attributes("-alpha", 0.55 + 0.4 * t)
+            except Exception:
+                pass
+        self.after(60, self._pulse)
 
     def kill(self) -> None:
         self._alive = False
