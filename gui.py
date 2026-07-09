@@ -2264,8 +2264,31 @@ class ChatWindow(ctk.CTkToplevel):
         "app":    ("spark",    "#58C4DD"),
     }
 
+    # Card header phrased by what GIL is actually doing (Claude-style)
+    _KIND_HEADER = {
+        "brain":  "Thinking",
+        "code":   "Working on code",
+        "web":    "Building the site",
+        "search": "Searching your computer",
+        "image":  "Creating an image",
+        "file":   "Accessing your files",
+        "vision": "Looking at the screen",
+        "media":  "Controlling media",
+    }
+
     def _kind_style(self, kind: str) -> tuple:
         return self._KIND_STYLE.get(kind, ("activity", self._ACCENT))
+
+    @staticmethod
+    def _extract_path(text: str):
+        """Pull a file/folder path out of an activity label, if present."""
+        import re as _re
+        m = _re.search(r"[A-Za-z]:\\[^\n:*?\"<>|]+|/(?:[\w.\- ]+/)+[\w.\- ]+",
+                       text or "")
+        if not m:
+            return None
+        p = m.group(0).strip().rstrip(".,;)")
+        return p if len(p) > 3 else None
 
     def on_activity(self, entry: dict) -> None:
         """Main-thread entry point — called via GILWindow.after(0, ...)."""
@@ -2346,13 +2369,18 @@ class ChatWindow(ctk.CTkToplevel):
         self._act_chip_set  = False
 
     def _add_activity_row(self, aid: int, entry: dict) -> None:
-        kind_icon, kind_color = self._kind_style(entry.get("kind", ""))
-        # First row stamps the card's kind chip
+        kind = entry.get("kind", "")
+        kind_icon, kind_color = self._kind_style(kind)
+        # First row stamps the card's kind chip AND names the header by what
+        # GIL is actually doing ("Searching your computer", "Accessing files"…)
         if not getattr(self, "_act_chip_set", True):
             try:
                 self._act_chip_icon.configure(
                     image=_icon(kind_icon, kind_color, 14))
                 self._act_chip_set = True
+                if self._act_header is not None and not self._act_group:
+                    self._act_header.configure(
+                        text=self._KIND_HEADER.get(kind, "G.I.L. is working"))
             except Exception:
                 pass
 
@@ -2383,6 +2411,22 @@ class ChatWindow(ctk.CTkToplevel):
                            font=ctk.CTkFont("Segoe UI", 9),
                            text_color=self._MUTED, anchor="w")
         det.pack(side="left", padx=(10, 6))
+
+        # Claude-style: if this row references a real file/folder, make it
+        # clickable to open, with a hand cursor and an "open" hint.
+        path = self._extract_path(entry["title"]) or self._extract_path(
+            entry.get("detail") or "")
+        if path:
+            def _open(_e=None, p=path):
+                self._open_file(p)
+            for w in (row, ki, lbl):
+                try:
+                    w.configure(cursor="hand2")
+                    w.bind("<Button-1>", _open)
+                except Exception:
+                    pass
+            lbl.configure(text_color=self._NAME_G)   # tint like a link
+
         self._act_rows[aid] = {"status": st, "label": lbl, "detail": det,
                                "dur": dur, "color": kind_color}
         if running:
