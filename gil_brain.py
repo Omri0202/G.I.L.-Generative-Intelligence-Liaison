@@ -488,9 +488,9 @@ class GILBrain:
     def query(self, user_input: str, project_context: str = "",
               camera_state: str = "closed", _retry: int = 0) -> dict:
         global _groq_key_index
-        if _retry > 2:
-            log.error("Groq timed out 3 times — giving up")
-            return {"speech": "My connection to Groq keeps timing out. Check your internet and try again.",
+        if _retry > 7:
+            log.error("brain gave up after %d silent retries", _retry)
+            return {"speech": "My AI services have been unreachable for a few minutes — I'll be back as soon as they are.",
                     "action": None, "target": None, "report": None}
         log.info("query: %s", user_input[:80])
         self.history.append({"role": "user", "content": user_input})
@@ -677,8 +677,16 @@ class GILBrain:
                         if fallback_resp is not None:
                             break
                     if fallback_resp is None:
-                        log.warning("All Groq models rate-limited")
-                        return {"speech": "Rate-limited — give me 30 seconds and ask again.",
+                        # Silent recovery: wait out the rate-limit window and
+                        # retry — user sees the typing indicator, not an error.
+                        if _retry < 6:
+                            log.warning("rate-limited — silent retry %d in 22s", _retry + 1)
+                            time.sleep(22)
+                            if self.history and self.history[-1].get("role") == "user":
+                                self.history.pop()
+                            return self.query(user_input, project_context=project_context,
+                                              camera_state=camera_state, _retry=_retry + 1)
+                        return {"speech": "I'm being rate-limited hard right now — ask me again in a couple of minutes.",
                                 "action": None, "target": None, "report": None}
                     resp = fallback_resp
 
@@ -692,8 +700,8 @@ class GILBrain:
 
         except requests.exceptions.ConnectionError:
             log.error("No internet connection")
-            if _retry < 1:
-                import time as _t3; _t3.sleep(2)
+            if _retry < 6:
+                import time as _t3; _t3.sleep(5 + _retry * 6)
                 return self.query(user_input, project_context=project_context,
                                   camera_state=camera_state, _retry=_retry + 1)
             return _err("No internet connection — check your network.")
@@ -707,12 +715,13 @@ class GILBrain:
                               camera_state=camera_state, _retry=_retry + 1)
         except Exception as exc:
             log.error("Brain error: %s", exc, exc_info=True)
-            # Retry once more after 2s before giving up
-            if _retry < 1:
-                import time as _t2; _t2.sleep(2)
+            # Silent recovery: keep retrying quietly (typing indicator stays)
+            # instead of surfacing "couldn't reach my AI service".
+            if _retry < 6:
+                import time as _t2; _t2.sleep(4 + _retry * 8)
                 return self.query(user_input, project_context=project_context,
                                   camera_state=camera_state, _retry=_retry + 1)
-            return {"speech": "I couldn't reach my AI service. Check your internet or API key and try again.",
+            return {"speech": "My AI services have been unreachable for a few minutes — I'll be back as soon as they are.",
                     "action": None, "target": None, "report": None}
         finally:
             # Remove orphaned user message if no response was obtained
@@ -721,11 +730,19 @@ class GILBrain:
                     self.history.pop()
 
         log.debug("raw response: %s", raw[:200])
+        try:
+            _payload_est = (len(system) + sum(len(m["content"]) for m in self.history)) // 4
+            _health("ok", chosen_model, _payload_est)
+        except Exception:
+            pass
         parsed = _parse_json(raw)
-        self.history.append({"role": "assistant", "content": raw})
+        # Store speech-only (not raw JSON) — cuts ~40% of every payload,
+        # the root cause of the tokens-per-minute rate-limit failures.
+        _speech_mem = parsed.get("speech") or raw[:200]
+        self.history.append({"role": "assistant", "content": _speech_mem})
 
-        if len(self.history) > 40:
-            self.history = self.history[-40:]
+        if len(self.history) > 12:
+            self.history = self.history[-12:]
 
         # Persist this task to memory â€” skip trivial replies and garbled/non-Latin STT
         try:
@@ -857,6 +874,18 @@ def _parse_json(raw: str) -> dict:
         parsed["extra_actions"] = []
 
     return parsed
+
+
+def _health(status: str, model: str, tokens: int = 0, note: str = "") -> None:
+    """One line per brain request → data/brain_health.log (proves failures)."""
+    try:
+        from pathlib import Path as _P
+        p = _P(__file__).parent / "data" / "brain_health.log"
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%m-%d %H:%M:%S} {status:8s} {model:28s} "
+                    f"~{tokens}tok {note[:80]}\n")
+    except Exception:
+        pass
 
 
 def _err(msg: str) -> dict:
