@@ -1565,6 +1565,16 @@ class ChatWindow(ctk.CTkToplevel):
         self._textbox.bind("<Escape>",       self._on_textbox_escape)
         self._slash_menu = None
         self._placeholder_active = True
+        # Spell check: red underline on misspelled words (Claude-style)
+        self._spell    = None
+        self._spell_id = None
+        try:
+            self._textbox._textbox.tag_config(
+                "misspell", underline=True, underlinefg="#EF4444")
+        except Exception:
+            pass
+        threading.Thread(target=self._load_spellchecker, daemon=True,
+                         name="GIL-SpellDict").start()
         self._textbox.insert("0.0", "Message G.I.L.  •  Enter sends  •  Shift+Enter = new line")
         self._textbox.configure(text_color=self._MUTED, state="disabled")
 
@@ -1623,9 +1633,61 @@ class ChatWindow(ctk.CTkToplevel):
 
     # ── Slash command menu wiring ────────────────────────────────────────────
 
+    # ── Spell check ───────────────────────────────────────────────────────────
+
+    def _load_spellchecker(self) -> None:
+        """Load the English dictionary in the background (~1s)."""
+        try:
+            from spellchecker import SpellChecker
+            sc = SpellChecker(language="en")
+            sc.word_frequency.load_words([
+                "gil", "groq", "spotify", "whatsapp", "youtube", "gmail",
+                "omri", "webgen", "ok", "todo", "config", "url", "app",
+                "apps", "ai", "dnd", "pomodoro", "screenshot", "wifi",
+            ])
+            self._spell = sc
+        except Exception:
+            self._spell = None
+
+    def _schedule_spellcheck(self) -> None:
+        if self._spell_id:
+            try:
+                self.after_cancel(self._spell_id)
+            except Exception:
+                pass
+        self._spell_id = self.after(500, self._run_spellcheck)
+
+    def _run_spellcheck(self) -> None:
+        self._spell_id = None
+        if self._spell is None or self._placeholder_active:
+            return
+        try:
+            tkt = self._textbox._textbox
+            tkt.tag_remove("misspell", "1.0", "end")
+            text = tkt.get("1.0", "end-1c")
+            if not text.strip() or text.startswith("/"):
+                return
+            try:
+                cursor = tkt.count("1.0", "insert", "chars")
+                cursor = cursor[0] if cursor else -1
+            except Exception:
+                cursor = -1
+            for m in re.finditer(r"[A-Za-z']{3,}", text):
+                # don't flag the word still being typed under the cursor
+                if m.start() <= cursor <= m.end():
+                    continue
+                w = m.group(0).strip("'").lower()
+                if len(w) < 3 or w in self._spell:
+                    continue
+                tkt.tag_add("misspell",
+                            f"1.0+{m.start()}c", f"1.0+{m.end()}c")
+        except Exception:
+            pass
+
     def _on_textbox_keyrelease(self, event) -> None:
         if self._placeholder_active:
             return
+        self._schedule_spellcheck()
         content = self._textbox.get("0.0", "end-1c")
         if content.startswith("/") and "\n" not in content and " " not in content:
             query = content[1:]

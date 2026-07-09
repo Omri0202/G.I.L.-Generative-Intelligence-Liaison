@@ -106,6 +106,15 @@ def collect_datas() -> list[tuple[str, str]]:
     except Exception as exc:
         print(f"[BUILD] Warning: could not locate customtkinter: {exc}")
 
+    # Spell-check dictionary (pyspellchecker resources)
+    try:
+        import spellchecker
+        res = Path(spellchecker.__file__).parent / "resources"
+        if res.exists():
+            datas.append((str(res), "spellchecker/resources"))
+    except Exception:
+        pass
+
     # edge_tts has no bundled data, but let's grab any package data
     try:
         import edge_tts
@@ -164,7 +173,8 @@ HIDDEN = [
     "briefing", "spotify_control", "pc_control", "notes",
     "webgen", "eyes", "face_id", "gestures", "visualizer", "gil_icons",
     "meeting_detector", "watcher", "activity", "missions", "web_editor",
-    "error_fixer", "code_agent", "web_iterate", "screen_vision", "error_watch",
+    "error_fixer", "code_agent", "web_iterate", "screen_vision",
+    "spellchecker", "error_watch",
     "file_access",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",
