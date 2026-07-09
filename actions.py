@@ -973,26 +973,71 @@ def find_file(name: str) -> str:
         home / "Documents", home / "Desktop", home / "Downloads",
         home / "project_gil", home / "Pictures", home,
     ]
-    seen, matches = set(), []
+    # Fuzzy scoring: "retrac" finds retract.pdf, re-trac_v2.docx, Retrace…
+    # exact > prefix > substring > close-spelling (difflib) > subsequence.
+    from difflib import SequenceMatcher
+
+    query = name.strip().lower()
+    query_stem = query.rsplit(".", 1)[0]
+    q_clean = "".join(c for c in query_stem if c.isalnum())
+
+    def _score(fname: str) -> float:
+        stem = fname.rsplit(".", 1)[0].lower()
+        clean = "".join(c for c in stem if c.isalnum())
+        if stem == query_stem or fname.lower() == query:
+            return 1.0
+        if stem.startswith(query_stem) or clean.startswith(q_clean):
+            return 0.92
+        if query_stem in stem or q_clean in clean:
+            return 0.85
+        ratio = SequenceMatcher(None, q_clean, clean).ratio()
+        if ratio >= 0.72:
+            return ratio * 0.9
+        it = iter(clean)   # subsequence: "rtc" hidden inside "retract"
+        if len(q_clean) >= 4 and all(ch in it for ch in q_clean):
+            return 0.55
+        return 0.0
+
+    SKIP = {"__pycache__", ".git", "node_modules", "appdata", "dist",
+            "venv", ".venv", "_internal"}
+    seen_dirs, scored = set(), {}
     for d in search_dirs:
-        if not d.is_dir() or d in seen:
+        if not d.is_dir() or d in seen_dirs:
             continue
-        seen.add(d)
+        seen_dirs.add(d)
         aid = activity.start("search", f"Searching {d}") if activity else None
+        found_here, scanned = 0, 0
         try:
-            found = list(d.glob(f"**/{name}"))[:8]
+            import os as _os
+            for root, dirs, files in _os.walk(str(d)):
+                dirs[:] = [x for x in dirs if x.lower() not in SKIP
+                           and not x.startswith(".")]
+                if root[len(str(d)):].count(_os.sep) >= 4:
+                    dirs[:] = []
+                for f in files:
+                    scanned += 1
+                    if scanned > 20000:
+                        break
+                    s = _score(f)
+                    if s > 0:
+                        p = _os.path.join(root, f)
+                        if p not in scored or scored[p] < s:
+                            scored[p] = s
+                            found_here += 1
+                if scanned > 20000:
+                    break
         except Exception:
-            found = []
+            pass
         if activity and aid is not None:
-            activity.done(aid, f"{len(found)} match(es)" if found else "nothing here")
-        for m in found:
-            if str(m) not in {str(x) for x in matches}:
-                matches.append(m)
-        if len(matches) >= 8:
-            break
-    if matches:
-        return "\n".join(str(m) for m in matches[:8])
-    return f"No files matching '{name}' found in the usual locations."
+            activity.done(aid, f"{found_here} match(es)" if found_here
+                          else "nothing here")
+
+    if scored:
+        best = sorted(scored.items(), key=lambda kv: -kv[1])[:8]
+        return "\n".join(p if s >= 0.99 else f"{p}   (close match)"
+                         for p, s in best)
+    return (f"No files similar to '{name}' found in the usual locations — "
+            "I checked spelling variations too.")
 
 
 # ── New feature wrappers ─────────────────────────────────────────────────────
