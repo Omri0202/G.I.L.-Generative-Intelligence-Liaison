@@ -3808,6 +3808,26 @@ class GILWindow(ctk.CTk):
         send_fn = getattr(self, "_chat_send_fn", None)
         if not send_fn:
             return
+        # G.I.L. 4.0: web-rendered chat in Edge --app mode (real Chromium:
+        # document typography, 60fps motion, native spell-check). Falls back
+        # to the classic tkinter window if anything goes wrong.
+        if self._use_web_chat():
+            try:
+                from chat_web import WebChat
+                win = getattr(self, "_chat_win", None)
+                if isinstance(win, WebChat) and win.winfo_exists():
+                    win.show()
+                else:
+                    self._chat_win = WebChat(self)
+                    try:
+                        from chat_history import set_session_name_callback
+                        set_session_name_callback(self._chat_win.session_named)
+                    except Exception:
+                        pass
+                self._hide_float_btn()
+                return
+            except Exception:
+                import traceback; traceback.print_exc()
         if hasattr(self, "_chat_win") and self._chat_win.winfo_exists():
             self._chat_win.lift()
             self._chat_win.focus()
@@ -3819,6 +3839,18 @@ class GILWindow(ctk.CTk):
             self._chat_win.protocol("WM_DELETE_WINDOW", self._on_chat_close)
         # Hide floating button while chat is open
         self._hide_float_btn()
+
+    @staticmethod
+    def _use_web_chat() -> bool:
+        """G.I.L. 4.0 web chat renders in Edge --app mode. On by default;
+        set web_chat:false in gil_config.json to use the classic tk window."""
+        try:
+            import json as _json
+            cfg = _json.loads((Path(__file__).parent / "data" / "gil_config.json")
+                              .read_text(encoding="utf-8"))
+            return bool(cfg.get("web_chat", True))
+        except Exception:
+            return True
 
     def _hide_float_btn(self) -> None:
         if hasattr(self, "_float_btn") and self._float_btn.winfo_exists():

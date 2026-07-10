@@ -106,6 +106,17 @@ def collect_datas() -> list[tuple[str, str]]:
     except Exception as exc:
         print(f"[BUILD] Warning: could not locate customtkinter: {exc}")
 
+    # G.I.L. 4.0 web chat: UI file + pywebview runtime pieces
+    datas.append((str(ROOT / "web_chat"), "web_chat"))
+    try:
+        import webview
+        wv = Path(webview.__file__).parent
+        for sub in ("lib", "js"):
+            if (wv / sub).exists():
+                datas.append((str(wv / sub), f"webview/{sub}"))
+    except Exception:
+        pass
+
     # Spell-check dictionary (pyspellchecker resources)
     try:
         import spellchecker
@@ -174,7 +185,7 @@ HIDDEN = [
     "webgen", "eyes", "face_id", "gestures", "visualizer", "gil_icons",
     "meeting_detector", "watcher", "activity", "missions", "web_editor",
     "error_fixer", "code_agent", "web_iterate", "screen_vision",
-    "spellchecker", "error_watch",
+    "spellchecker", "chat_web", "error_watch",
     "file_access",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",
