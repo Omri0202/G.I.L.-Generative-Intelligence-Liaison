@@ -33,6 +33,14 @@ body {
 ::-webkit-scrollbar-thumb { background:var(--border); border-radius:5px; }
 ::-webkit-scrollbar-thumb:hover { background:var(--muted); }
 button { font-family:inherit; cursor:pointer; border:none; background:none; color:inherit; }
+button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
+#newchat { display:flex; align-items:center; justify-content:center; gap:2px; }
+.chip svg, .ic svg { display:block; }
+.chip { color:var(--accent); }
+.arow .ic { color:inherit; display:flex; align-items:center; justify-content:center; }
+.rich .g svg { width:20px; height:20px; }
+.actions button { display:inline-flex; align-items:center; gap:5px; }
+.sess .del { display:flex; align-items:center; }
 
 #app { display:flex; height:100%; }
 
@@ -279,15 +287,18 @@ button { font-family:inherit; cursor:pointer; border:none; background:none; colo
   <div id="sidebar">
     <div id="brand"><div class="gem">◈</div><b>G.I.L.</b></div>
     <input id="search" placeholder="Search conversations…" oninput="gil.filter(this.value)">
-    <button id="newchat" onclick="api('new_chat')">＋ &nbsp;New chat</button>
+    <button id="newchat" onclick="api('new_chat')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/></svg>&nbsp;New chat</button>
     <div id="sessions"></div>
     <div id="foot"><span id="ver">G.I.L. 4.0</span><span>web engine</span></div>
   </div>
   <div id="main">
     <div id="topbar">
       <div id="title">New conversation</div>
-      <button class="iconbtn" id="voicebtn" title="Voice on/off" onclick="api('toggle_voice')">🔊</button>
-      <button class="iconbtn" id="themebtn" title="Theme" onclick="gil.toggleTheme()">☾</button>
+      <button class="iconbtn" id="voicebtn" title="Voice on/off" onclick="api('toggle_voice')"></button>
+      <button class="iconbtn" id="themebtn" title="Theme" onclick="gil.toggleTheme()"></button>
     </div>
     <div id="scroll"><div id="msgs">
       <div id="welcome">
@@ -367,19 +378,45 @@ function md(src) {
   return src;
 }
 
+/* ═══════════ hand-drawn line icons (no emoji — GIL design rule) ═══════════ */
+const _P = {
+  robot:  '<rect x="5" y="8" width="14" height="10" rx="3"/><line x1="12" y1="8" x2="12" y2="4.5"/><circle cx="12" cy="3.8" r="1"/><circle cx="9.5" cy="13" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13" r="1.1" fill="currentColor" stroke="none"/>',
+  code:   '<polyline points="8 7 3.5 12 8 17"/><polyline points="16 7 20.5 12 16 17"/><line x1="13.5" y1="4.5" x2="10.5" y2="19.5"/>',
+  globe:  '<circle cx="12" cy="12" r="8.5"/><line x1="3.5" y1="12" x2="20.5" y2="12"/><path d="M12 3.5a13 13 0 0 1 0 17a13 13 0 0 1 0-17z"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/>',
+  image:  '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="9.7" r="1.6"/><polyline points="4.5 17.5 10 12 13 15 16 11.5 19.5 15.5"/>',
+  file:   '<path d="M6 3.5h8.5l4 4v13H6z"/><polyline points="14.5 3.5 14.5 7.5 18.5 7.5"/><line x1="9" y1="12" x2="15.5" y2="12"/><line x1="9" y1="15.5" x2="15.5" y2="15.5"/>',
+  system: '<polyline points="3 12 7.5 12 10 5.5 14 18.5 16.5 12 21 12"/>',
+  music:  '<path d="M9.5 17.5V5.5L19 4v12"/><circle cx="7.2" cy="17.6" r="2.3"/><circle cx="16.7" cy="16.1" r="2.3"/>',
+  vision: '<path d="M3.5 8h5l2-2.5h4L16.5 8h4v11h-17z"/><circle cx="12" cy="13.3" r="3.3"/>',
+  note:   '<path d="M4 20l1-4L16.5 4.5l3 3L8 19l-4 1z"/>',
+  spark:  '<path d="M12 3.5l1.8 6.7 6.7 1.8-6.7 1.8L12 20.5l-1.8-6.7L3.5 12l6.7-1.8z"/>',
+  volume: '<path d="M4 9.5v5h3.5l4.5 3.7V5.8L7.5 9.5H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18 6.8a8 8 0 0 1 0 10.4"/>',
+  muted:  '<path d="M4 9.5v5h3.5l4.5 3.7V5.8L7.5 9.5H4z"/><line x1="16" y1="9.5" x2="21" y2="14.5"/><line x1="21" y1="9.5" x2="16" y2="14.5"/>',
+  moon:   '<path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5z"/>',
+  sun:    '<circle cx="12" cy="12" r="4"/><line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/><line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/><line x1="5.3" y1="5.3" x2="7" y2="7"/><line x1="17" y1="17" x2="18.7" y2="18.7"/><line x1="18.7" y1="5.3" x2="17" y2="7"/><line x1="7" y1="17" x2="5.3" y2="18.7"/>',
+  trash:  '<line x1="4.5" y1="7" x2="19.5" y2="7"/><path d="M6.5 7l1 13h9l1-13"/><path d="M9.5 7V4h5v3"/><line x1="10.5" y1="10.5" x2="10.5" y2="16.5"/><line x1="13.5" y1="10.5" x2="13.5" y2="16.5"/>',
+  copy:   '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M4 15.5V5a1 1 0 0 1 1-1h10.5"/>',
+};
+function svg(name, size) {
+  return `<svg width="${size||14}" height="${size||14}" viewBox="0 0 24 24" fill="none" ` +
+    `stroke="currentColor" stroke-width="1.8" stroke-linecap="round" ` +
+    `stroke-linejoin="round">${_P[name] || _P.system}</svg>`;
+}
+
 /* ═══════════ core UI object (called from Python too) ═══════════ */
 const KIND = {
-  brain:  ["🤖", "Thinking"],
-  code:   ["⌨", "Working on code"],
-  web:    ["🌐", "Building the site"],
-  search: ["🔍", "Searching your computer"],
-  image:  ["🖼", "Creating an image"],
-  file:   ["📄", "Accessing your files"],
-  system: ["⚙", "Working"],
-  media:  ["♫", "Controlling media"],
-  vision: ["👁", "Looking at the screen"],
-  note:   ["✎", "Notes"],
-  app:    ["✦", "Working"],
+  brain:  ["robot",  "Thinking",              "#A78BFA"],
+  code:   ["code",   "Working on code",        "#4ADE80"],
+  web:    ["globe",  "Building the site",      "#58C4DD"],
+  search: ["search", "Searching your computer","#FBBF24"],
+  image:  ["image",  "Creating an image",      "#F472B6"],
+  file:   ["file",   "Accessing your files",   "#60A5FA"],
+  system: ["system", "Working",                "#94A3B8"],
+  media:  ["music",  "Controlling media",      "#34D399"],
+  vision: ["vision", "Looking at the screen",  "#F87171"],
+  note:   ["note",   "Notes",                  "#FACC15"],
+  app:    ["spark",  "Working",                "#58C4DD"],
 };
 const PATH_RE = /[A-Za-z]:\\[^\n:*?"<>|]{3,}/;
 
@@ -402,7 +439,7 @@ const gil = {
       wrap.innerHTML =
         `<div class="head"><div class="av">◈</div><span class="who">G.I.L.</span>` +
         `<span class="ts">${fmtTime(m.ts)}</span></div><div class="body"></div>` +
-        `<div class="actions"><button onclick="gil.copyMsg(this)">⧉ copy</button></div>`;
+        `<div class="actions"><button onclick="gil.copyMsg(this)">${svg("copy",12)} copy</button></div>`;
       $("msgs").insertBefore(wrap, $("typing"));
       const body = wrap.querySelector(".body");
       if (m.stream === false) { body.innerHTML = md(m.text); scrollDown(); }
@@ -431,7 +468,8 @@ const gil = {
 
   copyMsg(btn) {
     navigator.clipboard.writeText(btn.closest(".msg").dataset.raw || "");
-    btn.textContent = "✓ copied"; setTimeout(() => btn.textContent = "⧉ copy", 1200);
+    btn.textContent = "✓ copied";
+    setTimeout(() => btn.innerHTML = svg("copy",12) + " copy", 1200);
   },
   copyCode(btn) {
     navigator.clipboard.writeText(btn.closest("pre").querySelector("code").textContent);
@@ -451,7 +489,7 @@ const gil = {
     const k = KIND[e.kind] || KIND.system;
     const c = document.createElement("div");
     c.className = "actcard"; c.dataset.group = e.group || "";
-    c.innerHTML = `<div class="ahead"><div class="chip">${k[0]}</div>` +
+    c.innerHTML = `<div class="ahead"><div class="chip" style="color:${k[2]}">${svg(k[0], 14)}</div>` +
       `<div class="atitle">${esc(e.group || k[1])}</div></div>` +
       `<div class="rows"></div><div class="ribbon"><i></i></div>`;
     $("msgs").insertBefore(c, $("typing"));
@@ -466,7 +504,7 @@ const gil = {
     const pathM = (e.title || "").match(PATH_RE) || (e.detail || "").match(PATH_RE);
     r.innerHTML =
       `<span class="st ${running ? "run" : ""}" style="color:${running ? "var(--accent)" : e.status === "done" ? "var(--ok)" : "var(--fail)"}">${running ? "◐" : e.status === "done" ? "✓" : "✕"}</span>` +
-      `<span class="ic">${k[0]}</span>` +
+      `<span class="ic" style="color:${k[2]}">${svg(k[0], 12)}</span>` +
       `<span class="lbl ${pathM ? "link" : ""}">${esc(e.title)}</span>` +
       `<span class="det">${esc(e.detail || "")}</span><span class="dur"></span>`;
     if (pathM) r.querySelector(".lbl").onclick = () => api("open_path", pathM[0]);
@@ -511,7 +549,7 @@ const gil = {
         `<div class="site"><div class="chrome"><div class="dots">` +
         `<i style="background:#FF5F57"></i><i style="background:#FEBC2E"></i><i style="background:#28C840"></i></div>` +
         `<span>${esc((c.path || "").slice(-44))}</span></div>` +
-        `<div class="body2"><span class="g">🌐</span><div><div class="tt">${esc(c.title || "Website")}</div>` +
+        `<div class="body2"><span class="g">${svg("globe", 20)}</span><div><div class="tt">${esc(c.title || "Website")}</div>` +
         `<div class="sub">Multi-page site • Customize panel on the page</div></div>` +
         `<button class="open">Open</button></div></div>`;
       d.querySelector(".site").onclick = () => api("open_path", c.path);
@@ -530,7 +568,7 @@ const gil = {
       .forEach(s => {
         const d = document.createElement("div");
         d.className = "sess" + (s.id === this.current ? " active" : "");
-        d.innerHTML = `<div class="t"></div><div class="p"></div><button class="del">🗑</button>`;
+        d.innerHTML = `<div class="t"></div><div class="p"></div><button class="del">${svg("trash", 13)}</button>`;
         d.querySelector(".t").textContent = s.name || "Conversation";
         d.querySelector(".p").textContent = s.preview || (s.msg_count + " messages");
         d.onclick = () => api("open_session", s.id);
@@ -562,14 +600,14 @@ const gil = {
   /* ---- controls ---- */
   setTheme(t) {
     document.body.dataset.theme = t;
-    $("themebtn").textContent = t === "dark" ? "☾" : "☀";
+    $("themebtn").innerHTML = svg(t === "dark" ? "moon" : "sun", 16);
   },
   toggleTheme() {
     const t = document.body.dataset.theme === "dark" ? "light" : "dark";
     this.setTheme(t); api("set_theme", t);
   },
   setVoice(on) {
-    $("voicebtn").textContent = on ? "🔊" : "🔇";
+    $("voicebtn").innerHTML = svg(on ? "volume" : "muted", 16);
     $("voicebtn").classList.toggle("off", !on);
   },
   setVersion(v) { $("ver").textContent = "G.I.L. v" + v; },
