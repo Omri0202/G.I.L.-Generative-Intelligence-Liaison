@@ -170,10 +170,14 @@ button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
   border-radius:8px; transition:background .15s, color .15s; }
 .actions button:hover { background:var(--hover); color:var(--accent); }
 
-/* streaming caret */
+/* streaming caret + word-fade (Claude-style typing feel) */
 .caret { display:inline-block; width:8px; height:16px; background:var(--accent);
-  vertical-align:-2px; border-radius:2px; animation:blink .9s step-end infinite; }
+  vertical-align:-2px; border-radius:2px; margin-left:2px;
+  animation:blink .9s step-end infinite; }
 @keyframes blink { 50% { opacity:0; } }
+.msg.gil .body span.w { opacity:0; animation:wfade .3s ease forwards; }
+@keyframes wfade { from { opacity:0; filter:blur(1.5px); }
+                   to   { opacity:1; filter:none; } }
 
 /* ── Typing indicator ────────────────────────────────── */
 #typing { display:none; padding:2px 0 18px 37px; }
@@ -449,16 +453,44 @@ const gil = {
   },
 
   streamInto(el, text) {
+    // Claude-style streaming: words fade in one after another with a live
+    // caret, pacing eases so it reads like a person typing very fast.
     const words = text.split(/(\s+)/);
     let i = 0;
-    el.innerHTML = `<span class="caret"></span>`;
+    el.innerHTML = "";
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    el.appendChild(caret);
     const step = () => {
-      i = Math.min(words.length, i + 2);
-      el.textContent = words.slice(0, i).join("");
-      el.innerHTML = esc(el.textContent).replace(/\n/g,"<br>") + `<span class="caret"></span>`;
+      let added = 0;
+      while (added < 2 && i < words.length) {
+        const w = words[i++];
+        if (!w) continue;
+        if (w.trim()) {
+          const s = document.createElement("span");
+          s.className = "w";
+          s.textContent = w;
+          el.insertBefore(s, caret);
+          added++;
+        } else {
+          // whitespace — preserve line breaks while streaming
+          const parts = w.split("\n");
+          parts.forEach((p, idx) => {
+            if (idx > 0) el.insertBefore(document.createElement("br"), caret);
+            if (p) el.insertBefore(document.createTextNode(p), caret);
+          });
+        }
+      }
       scrollDown();
-      if (i < words.length) setTimeout(step, 24);
-      else { el.innerHTML = md(text); scrollDown(); }
+      if (i < words.length) {
+        // ease: quick through the middle, tiny pause at sentence ends
+        const last = words[i - 1] || "";
+        const pause = /[.!?:]$/.test(last.trim()) ? 120 : 26;
+        setTimeout(step, pause);
+      } else {
+        el.innerHTML = md(text);   // final pass: full markdown
+        scrollDown();
+      }
     };
     step();
   },

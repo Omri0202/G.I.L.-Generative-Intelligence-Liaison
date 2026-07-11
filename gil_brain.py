@@ -120,7 +120,7 @@ def _try_anthropic_brain(system: str, history: list, complex_q: bool):
     try:
         r = _session.post(
             "https://api.anthropic.com/v1/messages",
-            json={"model": model, "max_tokens": 900,
+            json={"model": model, "max_tokens": 2000 if complex_q else 900,
                   "system": system, "messages": history},
             headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
             timeout=25)
@@ -486,7 +486,8 @@ class GILBrain:
         self.pending_results: list[str] = []
 
     def query(self, user_input: str, project_context: str = "",
-              camera_state: str = "closed", _retry: int = 0) -> dict:
+              camera_state: str = "closed", _retry: int = 0,
+              mode: str = "voice") -> dict:
         global _groq_key_index
         if _retry > 7:
             log.error("brain gave up after %d silent retries", _retry)
@@ -606,6 +607,21 @@ class GILBrain:
             camera_state=camera_state,
         ) + project_block + extra_str
 
+        # Typed chat deserves full, rich answers - the 1-3 sentence rule
+        # exists for spoken TTS replies only.
+        if mode == "chat":
+            system += (
+                "\n\nCHAT MODE - the user is TYPING in the chat window right now.\n"
+                "This OVERRIDES the 1-3 sentence speech rule:\n"
+                "- Write a COMPLETE, generous answer like the best AI assistants: "
+                "full paragraphs, markdown structure (## headings, **bold**, "
+                "bullet lists), concrete facts, numbers, names and context.\n"
+                "- For informational questions aim for 150-400+ words. "
+                "Never a one-liner unless the user asked something trivial "
+                "or you are just confirming an action.\n"
+                "- The speech field IS the chat message - markdown is welcome there.\n"
+                "- Task requests still return the same JSON with actions/mission.")
+
         # Hard per-query language override — detected from the actual text,
         # not from the user profile. This overrides any "native: Hebrew" confusion.
         detected_lang = _detect_response_language(user_input)
@@ -625,7 +641,7 @@ class GILBrain:
             "model":       chosen_model,
             "messages":    [{"role": "system", "content": system}] + self.history,
             "temperature": 0.30,
-            "max_tokens":  900,
+            "max_tokens":  2000 if mode == "chat" else 900,
         }
         def _try_groq(key: str):
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -703,7 +719,8 @@ class GILBrain:
             if _retry < 6:
                 import time as _t3; _t3.sleep(5 + _retry * 6)
                 return self.query(user_input, project_context=project_context,
-                                  camera_state=camera_state, _retry=_retry + 1)
+                                  camera_state=camera_state, _retry=_retry + 1,
+                                  mode=mode)
             return _err("No internet connection — check your network.")
         except requests.exceptions.Timeout:
             log.warning("Groq timed out — retrying in 3 s")
@@ -712,7 +729,8 @@ class GILBrain:
                 self.history.pop()
             _response_saved = True   # prevent double-pop in finally
             return self.query(user_input, project_context=project_context,
-                              camera_state=camera_state, _retry=_retry + 1)
+                              camera_state=camera_state, _retry=_retry + 1,
+                              mode=mode)
         except Exception as exc:
             log.error("Brain error: %s", exc, exc_info=True)
             # Silent recovery: keep retrying quietly (typing indicator stays)
@@ -720,7 +738,8 @@ class GILBrain:
             if _retry < 6:
                 import time as _t2; _t2.sleep(4 + _retry * 8)
                 return self.query(user_input, project_context=project_context,
-                                  camera_state=camera_state, _retry=_retry + 1)
+                                  camera_state=camera_state, _retry=_retry + 1,
+                                  mode=mode)
             return {"speech": "My AI services have been unreachable for a few minutes — I'll be back as soon as they are.",
                     "action": None, "target": None, "report": None}
         finally:

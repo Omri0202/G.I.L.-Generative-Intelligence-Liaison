@@ -321,6 +321,7 @@ class ConversationEngine:
             return
         try:
             self._utterance_addressed = addressed
+            self._input_mode = "voice"
             # Post-speech echo cooldown
             if time.time() - self._last_spoke_at[0] < 2.0:
                 log.debug("echo suppressed (cooldown): %r", text[:40])
@@ -351,6 +352,7 @@ class ConversationEngine:
             return
         try:
             self._utterance_addressed = True   # typed chat always addresses GIL
+            self._input_mode = "chat"          # full-length written answers
             self._last_addressed_at[0] = time.time()
             if not self.conv.active:
                 self.conv.activate()
@@ -463,7 +465,8 @@ class ConversationEngine:
             _aid_think = None
         try:
             response = self.brain.query(text, project_context=project_ctx,
-                                         camera_state=_cam_state)
+                                         camera_state=_cam_state,
+                                         mode=getattr(self, "_input_mode", "voice"))
             if _aid_think is not None:
                 _activity.done(_aid_think)
         except Exception as exc:
@@ -549,9 +552,16 @@ class ConversationEngine:
                 # Collapse window: user must re-address GIL after ~4s
                 self._last_addressed_at[0] = time.time() - (self.ATTENTION_SECS - 4.0)
 
-            window.set_state("speaking", said=speech)
+            # Long written chat answers: show everything, speak only the gist
+            spoken = speech
+            if (getattr(self, "_input_mode", "voice") == "chat"
+                    and len(speech) > 320):
+                flat = _re.sub(r"[#*`>\-]", "", speech.replace("\n", " "))
+                sentences = _re.split(r"(?<=[.!?])\s+", flat.strip())
+                spoken = " ".join(sentences[:2])[:300]
+            window.set_state("speaking", said=spoken)
             window.add_chat_message(speech, "gil")
-            delivered = speak(speech)
+            delivered = speak(spoken)
             if delivered:
                 self._last_spoke_at[0] = time.time()
             else:
