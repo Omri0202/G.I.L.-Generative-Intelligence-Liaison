@@ -75,7 +75,7 @@ gsap.utils.toArray('.reveal-right').forEach(el=>
     scrollTrigger:{trigger:el,start:'top 85%'}}));
 document.querySelectorAll('[data-count]').forEach(el=>{
   const end=+el.dataset.count,suf=el.dataset.suf||'';
-  gsap.from({v:0},{v:end,duration:2.5,ease:'power1.out',
+  gsap.to({v:0},{v:end,duration:2.5,ease:'power1.out',
     scrollTrigger:{trigger:el,start:'top 80%'},
     onUpdate(){el.textContent=Math.round(this.targets()[0].v).toLocaleString()+suf}});
 });
@@ -207,6 +207,67 @@ def _image_prompts(description: str, intent: str = "promo") -> list[tuple[str, s
     ]
 
 
+_UA_IMG = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
+def _topic_photo_urls(topic: str, n: int = 6) -> list[str]:
+    """REAL photos of the actual topic (not random stock): Openverse first,
+    Wikimedia Commons second — both free, keyless, and license-friendly."""
+    import requests as _rq
+    urls: list[str] = []
+    try:
+        r = _rq.get("https://api.openverse.org/v1/images/",
+                    params={"q": topic, "page_size": n * 2, "mature": "false"},
+                    timeout=10, headers={"User-Agent": _UA_IMG})
+        for it in r.json().get("results", []):
+            u = it.get("url") or ""
+            if u.startswith("http") and not u.lower().endswith(".svg"):
+                urls.append(u)
+            if len(urls) >= n:
+                break
+    except Exception as exc:
+        print(f"[G.I.L. WEBGEN] openverse failed: {exc}")
+    if len(urls) < n:
+        try:
+            r = _rq.get("https://commons.wikimedia.org/w/api.php",
+                        params={"action": "query", "generator": "search",
+                                "gsrsearch": f"filetype:bitmap {topic}",
+                                "gsrnamespace": 6, "gsrlimit": n * 2,
+                                "prop": "imageinfo", "iiprop": "url",
+                                "iiurlwidth": 1400, "format": "json"},
+                        timeout=10, headers={"User-Agent": "GIL-webgen/4.3"})
+            for p in (r.json().get("query", {}).get("pages", {}) or {}).values():
+                for ii in p.get("imageinfo", []):
+                    u = ii.get("thumburl") or ii.get("url") or ""
+                    if u.startswith("http") and not u.lower().endswith(".svg"):
+                        urls.append(u)
+        except Exception as exc:
+            print(f"[G.I.L. WEBGEN] commons failed: {exc}")
+    # dedupe, keep order
+    seen, out = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out[:n]
+
+
+def _download_image(url: str, dest: Path) -> bool:
+    """Download a photo; reject non-images and tiny files."""
+    import requests as _rq
+    try:
+        r = _rq.get(url, timeout=15, headers={"User-Agent": _UA_IMG})
+        if r.status_code != 200 or len(r.content) < 8_000:
+            return False
+        if "image" not in r.headers.get("Content-Type", "image"):
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(r.content)
+        return True
+    except Exception:
+        return False
+
+
 def _generate_site_images(description: str, img_dir: Path,
                           intent: str = "promo") -> dict[str, str]:
     """
@@ -229,11 +290,42 @@ def _generate_site_images(description: str, img_dir: Path,
             return filename, None
 
     result: dict[str, str] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        for fname, path in ex.map(_gen, _image_prompts(description, intent)):
-            if path:
-                result[fname] = path
-    print(f"[G.I.L. WEBGEN] Generated {len(result)} images")
+
+    # Informational topics get REAL photos of the actual subject (searched
+    # like Google Images via Openverse/Wikimedia) — an article about
+    # Newcastle United should show Newcastle United, not AI art.
+    slots = [fn for _, fn, _, _ in _image_prompts(description, intent)]
+    if intent == "info":
+        try:
+            import activity
+            aid = activity.start("image", f"Finding real photos of {description[:40]}")
+        except Exception:
+            aid = None
+        urls = _topic_photo_urls(description, n=len(slots) + 2)
+        ui = 0
+        for fname in slots:
+            while ui < len(urls):
+                if _download_image(urls[ui], img_dir / fname):
+                    result[fname] = f"./images/{fname}"
+                    ui += 1
+                    break
+                ui += 1
+        try:
+            import activity
+            if aid is not None:
+                activity.done(aid, f"{len(result)} real photos")
+        except Exception:
+            pass
+
+    remaining = [it for it in _image_prompts(description, intent)
+                 if it[1] not in result]
+    if remaining:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            for fname, path in ex.map(_gen, remaining):
+                if path:
+                    result[fname] = path
+    print(f"[G.I.L. WEBGEN] Prepared {len(result)} images "
+          f"({'real topic photos first' if intent == 'info' else 'AI generated'})")
     return result
 
 
@@ -397,13 +489,21 @@ _FALLBACK_IMGS = {
     "CARD_IMG_3": "https://picsum.photos/seed/card3/800/600",
 }
 
-def _inject_images(html: str, images: dict) -> str:
-    """Replace HERO_IMG / CARD_IMG_N tokens with real paths (or CDN fallback)."""
+def _inject_images(html: str, images: dict, topic_urls: list | None = None) -> str:
+    """Replace HERO_IMG / CARD_IMG_N tokens. Fallback order per slot:
+    generated/downloaded file → real topic photo URL → stock CDN (last resort)."""
+    extras = list(topic_urls or [])
+    def pick(fname: str, token: str) -> str:
+        if images.get(fname):
+            return images[fname]
+        if extras:
+            return extras.pop(0)
+        return _FALLBACK_IMGS[token]
     mapping = {
-        "HERO_IMG":   images.get("hero.jpg")   or _FALLBACK_IMGS["HERO_IMG"],
-        "CARD_IMG_1": images.get("photo1.jpg") or _FALLBACK_IMGS["CARD_IMG_1"],
-        "CARD_IMG_2": images.get("photo2.jpg") or _FALLBACK_IMGS["CARD_IMG_2"],
-        "CARD_IMG_3": images.get("photo3.jpg") or _FALLBACK_IMGS["CARD_IMG_3"],
+        "HERO_IMG":   pick("hero.jpg",   "HERO_IMG"),
+        "CARD_IMG_1": pick("photo1.jpg", "CARD_IMG_1"),
+        "CARD_IMG_2": pick("photo2.jpg", "CARD_IMG_2"),
+        "CARD_IMG_3": pick("photo3.jpg", "CARD_IMG_3"),
     }
     for token, path in mapping.items():
         html = html.replace(token, path)
@@ -425,6 +525,10 @@ def _fix_html(html: str) -> str:
 
     # 2. Swiper: disable loop mode to avoid the 'not enough slides' warning
     html = re.sub(r'\bloop\s*:\s*true\b', 'loop:false', html)
+
+    # 2b. Counter bug: gsap.from({v:0},{v:end}) animates end→0, so numbers
+    #     count DOWN to zero (St James' Park capacity → 0). .to() counts up.
+    html = html.replace("gsap.from({v:0}", "gsap.to({v:0}")
 
     # 3. Wrap user-written inline scripts in try-catch
     #    Skip CDN script tags (src=...) and the framework init blocks we
@@ -639,7 +743,13 @@ def _run_generation(description: str, out_folder: Path,
             pass
         html = _offline_site(description)
 
-    html = _inject_images(html, images)
+    topic_urls = []
+    if len(images) < 4:
+        try:
+            topic_urls = _topic_photo_urls(description, n=4)
+        except Exception:
+            pass
+    html = _inject_images(html, images, topic_urls)
     if images:
         print(f"[G.I.L. WEBGEN] Injected {len(images)} real images")
 
