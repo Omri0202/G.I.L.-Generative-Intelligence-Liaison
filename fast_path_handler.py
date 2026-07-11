@@ -1064,10 +1064,59 @@ def _undo_agent(text: str, lower: str, eng) -> bool:
     return True
 
 
+# Time-sensitive topics NEVER get answered from training memory — they go
+# straight to live web research (deterministic; the LLM has no say in it).
+_LIVE_SIGNALS = (
+    "transfer", "latest", " news", "score", "standings", "price of",
+    "stock", "crypto", "what happened", "update on", "currently",
+    "right now", "this week", "this season", "this year", "released",
+    "election", "who won", "did they win", "fixture", "injur",
+)
+_LIVE_EXCLUDE = ("website", "image", "picture", "photo", "open ", "play ",
+                 "volume", "remind", "file", "folder", "screenshot",
+                 "wallpaper", "3d")
+
+
+def _research_fast(text: str, lower: str, eng) -> bool:
+    """Force live research for time-sensitive questions — no stale answers."""
+    if not any(s in lower for s in _LIVE_SIGNALS):
+        return False
+    if any(w in lower for w in _LIVE_EXCLUDE):
+        return False
+    if not eng.creation_allowed():
+        return False
+    log.info("fast-path: live research for %r", text[:60])
+
+    def _run(q=text):
+        from ears import unmute
+        ack = "Checking the latest on that right now."
+        eng.window.set_state("speaking", said=ack)
+        eng._speak(ack)
+        eng._last_spoke_at[0] = time.time()
+        eng._last_said[0] = ack
+        try:
+            eng.window.chat_show_typing()
+        except Exception:
+            pass
+        import research as _rs
+        chat_md, spoken = _rs.run(q)
+        unmute()
+        eng.window.add_chat_message(chat_md, "gil")
+        eng.window.set_state("speaking", said=spoken)
+        eng._speak(spoken)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        eng._last_said[0] = spoken
+        eng.window.set_state("listening")
+
+    threading.Thread(target=_run, daemon=True, name="GIL-ResearchFast").start()
+    return True
+
+
 _HANDLERS = [
     _fix_confirm,        # pending error-fix yes/no — must win when armed
     _voice_toggle,
     _undo_agent,
+    _research_fast,      # live facts before the brain can answer from memory
     _dev_mode_toggle,    # check first — very specific phrases
     _recap_confirm,
     _whatsapp,
