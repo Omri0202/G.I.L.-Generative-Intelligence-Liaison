@@ -413,6 +413,8 @@ def dispatch(
             import research as _rs
             chat_md, spoken = _rs.run(q)
             unmute()
+            import time as _t
+            engine._research_topic = (q[:160], _t.time())   # follow-up context
             window.add_chat_message(chat_md, "gil")
             window.set_state("speaking", said=spoken)
             speak(spoken)

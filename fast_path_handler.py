@@ -1071,23 +1071,39 @@ _LIVE_SIGNALS = (
     "stock", "crypto", "what happened", "update on", "currently",
     "right now", "this week", "this season", "this year", "released",
     "election", "who won", "did they win", "fixture", "injur",
+    "signed", "signing", "signings", "sold", "loaned", "sacked", "hired",
 )
+_FOLLOWUP_WORDS = ("they", "them", "their", "he", "she", "it", "that",
+                   "those", "and what", "what about", "how about")
 _LIVE_EXCLUDE = ("website", "image", "picture", "photo", "open ", "play ",
                  "volume", "remind", "file", "folder", "screenshot",
                  "wallpaper", "3d")
 
 
 def _research_fast(text: str, lower: str, eng) -> bool:
-    """Force live research for time-sensitive questions — no stale answers."""
-    if not any(s in lower for s in _LIVE_SIGNALS):
-        return False
+    """Force live research for time-sensitive questions — no stale answers.
+    Also catches short follow-ups ("what players have they signed") by
+    carrying the previous research topic as context."""
     if any(w in lower for w in _LIVE_EXCLUDE):
         return False
     if not eng.creation_allowed():
         return False
-    log.info("fast-path: live research for %r", text[:60])
 
-    def _run(q=text):
+    signal = any(s in lower for s in _LIVE_SIGNALS)
+    query = text
+    # follow-up to a recent research answer: pronouns + short question
+    last_topic, last_at = getattr(eng, "_research_topic", (None, 0.0))
+    followup = (last_topic and time.time() - last_at < 240
+                and len(lower.split()) <= 10
+                and any(f" {w} " in f" {lower} " or lower.startswith(w + " ")
+                        for w in _FOLLOWUP_WORDS))
+    if followup:
+        query = f"{text} (regarding: {last_topic})"
+    elif not signal:
+        return False
+    log.info("fast-path: live research for %r", query[:80])
+
+    def _run(q=query):
         from ears import unmute
         ack = "Checking the latest on that right now."
         eng.window.set_state("speaking", said=ack)
@@ -1101,6 +1117,7 @@ def _research_fast(text: str, lower: str, eng) -> bool:
         import research as _rs
         chat_md, spoken = _rs.run(q)
         unmute()
+        eng._research_topic = (q[:160], time.time())   # follow-up context
         eng.window.add_chat_message(chat_md, "gil")
         eng.window.set_state("speaking", said=spoken)
         eng._speak(spoken)

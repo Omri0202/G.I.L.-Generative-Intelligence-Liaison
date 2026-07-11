@@ -512,6 +512,17 @@ class ConversationEngine:
             print(f"[G.I.L.] Suppressed greeting loop: {speech!r}")
             speech = ""
 
+        # NEVER-SILENT GUARANTEE: an empty brain reply must still produce an
+        # answer. Questions get routed to live research; fragments get a re-ask.
+        if not speech and not action and not extra_actions:
+            if len(text.split()) >= 3:
+                log.warning("empty brain reply — rerouting to research: %r", text[:60])
+                action = "web_research"
+                target = text
+                speech = "Let me look that up."
+            else:
+                speech = "Say that again?"
+
         # Reroute build→build_website if web words detected
         if action in ("build", "prompt_project") and (
             any(w in lower for w in self._WEBGEN_WORDS)
