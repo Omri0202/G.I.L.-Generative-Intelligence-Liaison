@@ -264,7 +264,7 @@ DESKTOP PROJECTS: {projects_context}
 CAMERA STATE: {camera_state}
 
 â”â” ACTIONS (action â†’ target format) â”â”
-open_app â†’ app name | open_url â†’ full URL | web_search â†’ query string | web_research â†’ question (fetches live results and speaks a summary â€” use instead of web_search when user wants an answer spoken aloud)
+open_app â†’ app name | open_url â†’ full URL | web_search â†’ query string | web_research â†’ the full question (MANDATORY for anything time-sensitive: news, sports, transfers, prices, releases, people in the news, anything 'latest'/'current'/'recent'. GIL reads live sources and cites them. NEVER answer time-sensitive questions from memory - training data is stale
 system_vitals â†’ null | take_screenshot â†’ null | identify_song â†’ null
 sign_in â†’ service | save_credential â†’ "svc|email|pw" | delete_credential â†’ svc | list_credentials â†’ null
 show_settings â†’ null | note â†’ text | list_notes â†’ null | clip_history â†’ null
@@ -409,6 +409,9 @@ User: make the website darker and change the title to Roma Pizza
 
 User: stop talking / voice off
 {{"speech": "", "actions": [{{"action": "set_voice", "target": "off"}}], "report": null}}
+
+User: tell me about newcastle united and their transfer window
+{{"speech": "Checking the latest on that right now.", "actions": [{{"action": "web_research", "target": "Newcastle United latest transfer window news and signings"}}], "report": null}}
 
 CRITICAL: Return ONE valid JSON object. Use "actions" array (or "mission" for 3+ steps). Nothing outside the JSON.\
 """
@@ -647,20 +650,16 @@ class GILBrain:
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             return _session.post(GROQ_URL, json=payload, headers=hdrs, timeout=15)
 
-        if not GROQ_KEYS and not os.getenv("ANTHROPIC_API_KEY"):
+        if not GROQ_KEYS:
             self.history.pop()
-            return {"speech": "No AI key is configured — add GROQ_API_KEY or ANTHROPIC_API_KEY to .env.",
+            return {"speech": "No Groq API key is configured — add GROQ_API_KEY to .env.",
                     "action": None, "target": None, "report": None}
 
         # _response_saved prevents double-pop when retrying on timeout
         _response_saved = False
+        # Groq is the one and only brain (Anthropic removed — costs money).
         raw = ""
         try:
-            raw = _try_anthropic_brain(system, self.history,
-                                       chosen_model == _SMART_MODEL) or ""
-            if not raw and not GROQ_KEYS:
-                return {"speech": "My AI service is unreachable right now - try again in a moment.",
-                        "action": None, "target": None, "report": None}
             if not raw:
                 with _groq_key_lock:
                     _cur_idx = _groq_key_index

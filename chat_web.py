@@ -257,12 +257,15 @@ class WebChat:
 
     def _rpc_toggle_voice(self):
         try:
-            from voice import voice_enabled, set_voice_enabled
+            from voice import voice_enabled, set_voice_enabled, stop_speaking
             new = not voice_enabled()
             set_voice_enabled(new)
+            if not new:
+                stop_speaking()   # cut off any sentence mid-air immediately
+            log.info("voice toggled %s via web chat", "on" if new else "off")
             self._push("gil.setVoice", new)
         except Exception:
-            pass
+            log.error("voice toggle failed", exc_info=True)
 
     # ── helpers ───────────────────────────────────────────────────────────
     @staticmethod

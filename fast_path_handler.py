@@ -1023,9 +1023,10 @@ _VOICE_ON  = ("voice on", "unmute yourself", "start talking", "speak again",
 
 def _voice_toggle(text: str, lower: str, eng) -> bool:
     """User decides whether GIL speaks at all — chat always keeps working."""
-    from voice import set_voice_enabled
+    from voice import set_voice_enabled, stop_speaking
     if any(p in lower for p in _VOICE_OFF):
         set_voice_enabled(False)
+        stop_speaking()   # silence anything already playing
         eng.window.add_chat_message(
             "Voice off — I'll answer here in the chat only. "
             "Say or type 'voice on' anytime.", "gil")

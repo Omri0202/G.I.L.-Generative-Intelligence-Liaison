@@ -54,25 +54,7 @@ def describe(question: str = "") -> str:
     except Exception:
         aid = None
 
-    # Claude vision first when available (better OCR + reasoning)
-    ant_key = os.getenv("ANTHROPIC_API_KEY", "")
-    result = None
-    if ant_key:
-        try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 500,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "image", "source": {"type": "base64",
-                           "media_type": "image/jpeg", "data": b64}},
-                          {"type": "text", "text": ask}]}]},
-                headers={"x-api-key": ant_key,
-                         "anthropic-version": "2023-06-01"},
-                timeout=30)
-            r.raise_for_status()
-            result = r.json()["content"][0]["text"].strip()
-        except Exception as exc:
-            log.warning("Claude vision failed: %s", exc)
+    result = None   # Groq vision only (Anthropic removed - paid)
 
     if result is None:
         keys = [k for k in (os.getenv("GROQ_API_KEY", ""),

@@ -1,5 +1,6 @@
 {
-    "ai_model": "llama-3.3-70b-versatile",
-    "clap_detect_on": true,
-    "tts_voice": "en-GB-RyanNeural"
-}
+  "ai_model": "llama-3.1-8b-instant",
+  "clap_detect_on": true,
+  "tts_voice": "en-GB-RyanNeural",
+  "chat_theme": "dark"
+}}

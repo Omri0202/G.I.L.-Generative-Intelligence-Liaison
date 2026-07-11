@@ -559,8 +559,12 @@ class ConversationEngine:
                 flat = _re.sub(r"[#*`>\-]", "", speech.replace("\n", " "))
                 sentences = _re.split(r"(?<=[.!?])\s+", flat.strip())
                 spoken = " ".join(sentences[:2])[:300]
+            chat_text = speech
+            _rep = response.get("report")
+            if _rep and isinstance(_rep, str) and _rep.strip() and _rep.strip() != speech.strip():
+                chat_text = speech + chr(10) + chr(10) + _rep.strip()
             window.set_state("speaking", said=spoken)
-            window.add_chat_message(speech, "gil")
+            window.add_chat_message(chat_text, "gil")
             delivered = speak(spoken)
             if delivered:
                 self._last_spoke_at[0] = time.time()

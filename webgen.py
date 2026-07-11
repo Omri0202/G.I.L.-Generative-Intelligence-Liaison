@@ -674,13 +674,11 @@ def _generate_html(description: str, images: dict | None = None,
     if intent == "info":
         user_prompt += "\n" + _INFO_OVERRIDE
 
-    if ant_key:
-        html = _generate_claude(user_prompt, ant_key)
-    else:
-        keys = _groq_keys()
-        if not keys:
-            return "ERROR: No API key — add GROQ_API_KEY to .env"
-        html = _generate_groq(user_prompt, keys)
+    # Groq only (Anthropic removed - paid)
+    keys = _groq_keys()
+    if not keys:
+        return "ERROR: No API key — add GROQ_API_KEY to .env"
+    html = _generate_groq(user_prompt, keys)
 
     if html.startswith("ERROR:"):
         return html
@@ -904,9 +902,7 @@ def _spawn_subpages(description: str, folder: Path, index_html: str,
                     f"Images: only the CARD_IMG_1 / CARD_IMG_2 / CARD_IMG_3 placeholders."
                     + (_INFO_OVERRIDE if intent == "info" else "")
                 )
-                key = _anthropic_key()
-                html = (_generate_claude(prompt, key) if key
-                        else _generate_groq(prompt, _groq_keys()))
+                html = _generate_groq(prompt, _groq_keys())
                 if html.startswith("ERROR:"):
                     raise RuntimeError(html[6:60])
                 for token, path in imgmap.items():

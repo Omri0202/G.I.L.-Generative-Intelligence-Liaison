@@ -178,6 +178,7 @@ button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
 .msg.gil .body span.w { opacity:0; animation:wfade .3s ease forwards; }
 @keyframes wfade { from { opacity:0; filter:blur(1.5px); }
                    to   { opacity:1; filter:none; } }
+.msg.gil .body .blockin { animation:rise .35s ease both; }
 
 /* ── Typing indicator ────────────────────────────────── */
 #typing { display:none; padding:2px 0 18px 37px; }
@@ -453,46 +454,79 @@ const gil = {
   },
 
   streamInto(el, text) {
-    // Claude-style streaming: words fade in one after another with a live
-    // caret, pacing eases so it reads like a person typing very fast.
-    const words = text.split(/(\s+)/);
-    let i = 0;
+    // Handwritten Claude-style streaming:
+    //  - the message flows in block by block (paragraphs, lists, code)
+    //  - inside a text block, words fade in one by one behind a live caret,
+    //    with human pacing: variable speed, breaths at commas, pauses at
+    //    sentence ends, a beat between paragraphs
+    //  - each block snaps to full markdown the moment it finishes, so
+    //    formatting appears progressively — not in one jump at the end
     el.innerHTML = "";
-    const caret = document.createElement("span");
-    caret.className = "caret";
-    el.appendChild(caret);
-    const step = () => {
-      let added = 0;
-      while (added < 2 && i < words.length) {
-        const w = words[i++];
-        if (!w) continue;
-        if (w.trim()) {
-          const s = document.createElement("span");
-          s.className = "w";
-          s.textContent = w;
-          el.insertBefore(s, caret);
-          added++;
-        } else {
-          // whitespace — preserve line breaks while streaming
-          const parts = w.split("\n");
-          parts.forEach((p, idx) => {
-            if (idx > 0) el.insertBefore(document.createElement("br"), caret);
-            if (p) el.insertBefore(document.createTextNode(p), caret);
-          });
-        }
-      }
-      scrollDown();
-      if (i < words.length) {
-        // ease: quick through the middle, tiny pause at sentence ends
-        const last = words[i - 1] || "";
-        const pause = /[.!?:]$/.test(last.trim()) ? 120 : 26;
-        setTimeout(step, pause);
-      } else {
-        el.innerHTML = md(text);   // final pass: full markdown
+    const blocks = text.split(/\n{2,}/).filter(b => b.trim());
+    let bi = 0;
+
+    const nextBlock = () => {
+      if (bi >= blocks.length) { el.innerHTML = md(text); scrollDown(); return; }
+      const block = blocks[bi++];
+
+      // code blocks and lists appear as rendered units (like Claude)
+      if (/^```/.test(block.trim()) || /^[-•]|^\d+\. /m.test(block.trim())) {
+        const d = document.createElement("div");
+        d.className = "blockin";
+        d.innerHTML = md(block);
+        el.appendChild(d);
         scrollDown();
+        setTimeout(nextBlock, 220);
+        return;
       }
+
+      const p = document.createElement("p");
+      el.appendChild(p);
+      const caret = document.createElement("span");
+      caret.className = "caret";
+      p.appendChild(caret);
+      const words = block.split(/(\s+)/);
+      let i = 0;
+
+      const tick = () => {
+        let added = 0;
+        while (added < 2 && i < words.length) {
+          const w = words[i++];
+          if (!w) continue;
+          if (w.trim()) {
+            const s = document.createElement("span");
+            s.className = "w";
+            s.textContent = w;
+            p.insertBefore(s, caret);
+            added++;
+          } else {
+            const parts = w.split("\n");
+            parts.forEach((pp, idx) => {
+              if (idx > 0) p.insertBefore(document.createElement("br"), caret);
+              if (pp) p.insertBefore(document.createTextNode(pp), caret);
+            });
+          }
+        }
+        scrollDown();
+        if (i < words.length) {
+          const last = (words[i - 1] || "").trim();
+          let pause = 16 + Math.random() * 30;          // human jitter
+          if (/[.!?]$/.test(last)) pause = 150 + Math.random() * 80;
+          else if (/[,;:]$/.test(last)) pause = 70 + Math.random() * 40;
+          setTimeout(tick, pause);
+        } else {
+          // paragraph done — snap it to real markdown, breathe, continue
+          const rendered = md(block);
+          const wrap = document.createElement("div");
+          wrap.innerHTML = rendered;
+          p.replaceWith(...wrap.childNodes);
+          scrollDown();
+          setTimeout(nextBlock, 190);
+        }
+      };
+      tick();
     };
-    step();
+    nextBlock();
   },
 
   showTyping() { $("welcome").style.display="none"; $("typing").classList.add("on"); scrollDown(true); },

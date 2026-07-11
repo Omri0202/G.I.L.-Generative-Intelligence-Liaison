@@ -64,9 +64,8 @@ def edit(instruction: str) -> tuple[str, Path | None]:
         "Return the COMPLETE updated HTML document, starting with <!DOCTYPE html>. "
         "No markdown fences, no commentary.\n\nCURRENT HTML:\n" + html
     )
-    from webgen import _generate_claude, _generate_groq, _anthropic_key, _groq_keys, _fix_html
-    key = _anthropic_key()
-    out = _generate_claude(prompt, key) if key else _generate_groq(prompt, _groq_keys())
+    from webgen import _generate_groq, _groq_keys, _fix_html
+    out = _generate_groq(prompt, _groq_keys())
     if out.startswith("ERROR:"):
         if aid is not None:
             try:

@@ -1,12 +1,49 @@
 {
   "gestures": {
-    "thumbs_up":   {"type": "builtin", "action": "volume_up",   "label": "Vol Up"},
-    "thumbs_down": {"type": "builtin", "action": "volume_down", "label": "Vol Down"},
-    "peace":       {"type": "builtin", "action": "screenshot",  "label": "Screenshot"},
-    "fist":        {"type": "builtin", "action": "mute_toggle", "label": "Mute"},
-    "open_hand":   {"type": "builtin", "action": "announce",    "label": "Announce"},
-    "rock_on":     {"type": "builtin", "action": "dnd_toggle",  "label": "DND Mode"},
-    "three_up":    {"type": "builtin", "action": "next_track",  "label": "Next Track"},
-    "call_me":     {"type": "builtin", "action": "prev_track",  "label": "Prev Track"}
+    "thumbs_up": {
+      "type": "builtin",
+      "action": "volume_up",
+      "label": "Vol Up (+10%"
+    },
+    "thumbs_down": {
+      "type": "builtin",
+      "action": "volume_down",
+      "label": "Vol Down (-1"
+    },
+    "peace": {
+      "type": "builtin",
+      "action": "screenshot",
+      "label": "Screenshot"
+    },
+    "fist": {
+      "type": "builtin",
+      "action": "mute_toggle",
+      "label": "Mute / Unmut"
+    },
+    "open_hand": {
+      "type": "open_url",
+      "target": "https://mail.google.com/mail/u/0/#inbox",
+      "label": "https://mail"
+    },
+    "rock_on": {
+      "type": "builtin",
+      "action": "dnd_toggle",
+      "label": "DND Toggle"
+    },
+    "three_up": {
+      "type": "builtin",
+      "action": "next_track",
+      "label": "Next Track"
+    },
+    "call_me": {
+      "type": "open_app",
+      "target": "whatsapp",
+      "label": "whatsapp"
+    },
+    "index_point": {
+      "type": "builtin",
+      "action": "announce",
+      "label": "Announce Mod"
+    }
   }
 }
