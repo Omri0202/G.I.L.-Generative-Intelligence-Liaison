@@ -133,6 +133,19 @@ def _try_anthropic_brain(system: str, history: list, complex_q: bool):
         return None
 
 
+def _extract_action_vocab(system_prompt: str) -> str:
+    """Pull the 'ACTIONS' vocabulary block out of the system prompt so the
+    autonomous planner offers exactly the same actions the brain knows."""
+    m = re.search(r"ACTIONS \(action.*?\n(.*?)\n\S*?EXAMPLES",
+                  system_prompt, re.DOTALL)
+    block = m.group(1) if m else ""
+    # keep it compact
+    return block[:1800] if block else (
+        "open_app, open_url, web_search, web_research, run_command, "
+        "run_tests, code_task, fix_error, build_website, generate_image, "
+        "read_file, list_directory, find_file, git_status, git_commit")
+
+
 def _recall_past(user_input: str) -> str:
     """Semantic-ish recall: search past chat history for the query's key words
     and surface the most relevant older exchanges to the brain."""
@@ -297,6 +310,7 @@ set_voice -> on|off (user controls whether G.I.L. speaks aloud; chat always work
 edit_website -> change instruction (edits the most recently generated website)
 publish_website -> null (publishes the latest generated site to the public web)
 analyze_screen -> question about what is visually on screen right now
+autonomous_task -> a full multi-step GOAL to complete on your own (GIL loops: plan a step, do it, check the result, plan the next - until the whole goal is genuinely finished, no check-ins needed). Use this for any task that needs several steps or ongoing work toward an outcome ('research X and build me a report', 'fix all the failing tests', 'set up and verify the project'). Prefer this over a single mission when the path isn't fully known up front.
 code_task -> coding/debugging task description (G.I.L. works like a coding agent: reads files, edits code, runs terminal commands - asking approval before every change)
 
 DEV TOOLS (coding/development requests only):
@@ -412,6 +426,9 @@ User: stop talking / voice off
 
 User: tell me about newcastle united and their transfer window
 {{"speech": "Checking the latest on that right now.", "actions": [{{"action": "web_research", "target": "Newcastle United latest transfer window news and signings"}}], "report": null}}
+
+User: research the top 3 note-taking apps and build me a comparison website
+{{"speech": "On it - I'll research them and build the site, and tell you when it's done.", "actions": [{{"action": "autonomous_task", "target": "Research the top 3 note-taking apps with current features and pricing, then build a comparison website from the findings"}}], "report": null}}
 
 CRITICAL: Return ONE valid JSON object. Use "actions" array (or "mission" for 3+ steps). Nothing outside the JSON.\
 """
@@ -806,6 +823,63 @@ class GILBrain:
         if not result.get("speech", "").strip():
             return None
         return result
+
+    def plan_next_step(self, goal: str, history: list) -> dict:
+        """
+        Autonomous loop planner. Given the overall goal and everything done
+        so far, decide the SINGLE next action — or declare the goal complete.
+        Returns:
+          {"complete": true,  "summary": "..."}                  when done
+          {"complete": false, "action": "...", "target": "...",
+           "reason": "short present-tense reason"}               otherwise
+        Grounded in real step results; the 70B model keeps it on-task.
+        """
+        done_block = "\n".join(
+            f"{i}. {h['action']}({h.get('target','')[:50]}) -> "
+            f"{str(h.get('result',''))[:180]}"
+            for i, h in enumerate(history, 1)) or "(nothing done yet)"
+
+        actions_ref = _extract_action_vocab(_SYSTEM)
+        sys = (
+            "You are G.I.L. running an AUTONOMOUS task loop. Work toward the "
+            "GOAL one step at a time until it is genuinely, fully complete. "
+            "After each step you see its real result.\n\n"
+            "Return ONE JSON object, nothing else:\n"
+            '- To continue: {"complete": false, "action": "<name>", '
+            '"target": "<arg>", "reason": "<short reason the user sees>"}\n'
+            '- When the goal is fully achieved: {"complete": true, '
+            '"summary": "<what was accomplished>"}\n\n'
+            "Rules:\n"
+            "- Pick the smallest useful next action. Don't repeat a step that "
+            "already succeeded.\n"
+            "- If a step failed, adapt — try a different approach, don't loop.\n"
+            "- Be honest: only say complete when the GOAL is actually met.\n"
+            "- Use only these actions:\n" + actions_ref)
+        usr = f"GOAL: {goal}\n\nSTEPS DONE SO FAR:\n{done_block}\n\nNext step?"
+
+        payload = {"model": _SMART_MODEL,
+                   "messages": [{"role": "system", "content": sys},
+                                {"role": "user", "content": usr}],
+                   "temperature": 0.2, "max_tokens": 300}
+        for model in (_SMART_MODEL, "llama-3.1-8b-instant"):
+            payload["model"] = model
+            for key in GROQ_KEYS:
+                try:
+                    r = _session.post(GROQ_URL, json=payload,
+                                      headers={"Authorization": f"Bearer {key}"},
+                                      timeout=25)
+                    if r.status_code == 429:
+                        continue
+                    r.raise_for_status()
+                    raw = r.json()["choices"][0]["message"]["content"]
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    if m:
+                        return json.loads(m.group(0))
+                except Exception as exc:
+                    log.debug("plan_next_step attempt failed: %s", exc)
+        # Unreachable → stop cleanly rather than spin
+        return {"complete": True,
+                "summary": "I couldn't reach my planner, so I stopped here."}
 
     def summarize_results(self, title: str, results: list) -> str:
         """

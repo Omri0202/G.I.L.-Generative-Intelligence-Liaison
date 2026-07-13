@@ -185,7 +185,7 @@ HIDDEN = [
     "webgen", "eyes", "face_id", "gestures", "visualizer", "gil_icons",
     "meeting_detector", "watcher", "activity", "missions", "web_editor",
     "error_fixer", "code_agent", "web_iterate", "screen_vision",
-    "spellchecker", "chat_web", "error_watch",
+    "spellchecker", "chat_web", "research", "autonomous", "file_access", "error_watch",
     "file_access",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",

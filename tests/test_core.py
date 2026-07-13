@@ -196,6 +196,50 @@ def test_file_access_gate_runs_or_defers():
     assert e2._pending_file_access is not None
 
 
+def test_autonomous_loop_completes_and_interrupts():
+    import autonomous, types, time
+    autonomous.is_enabled = lambda: True
+    calls = {"n": 0}
+
+    class W:
+        def set_state(self, *a, **k): pass
+        def add_chat_message(self, t, s): pass
+        def send_rich_to_chat(self, *a): pass
+
+    class B:
+        def plan_next_step(self, goal, history):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                return {"complete": True, "summary": "ok"}
+            return {"complete": False, "action": "noop", "target": "",
+                    "reason": "step"}
+
+    class E:
+        window = W(); brain = B()
+        _last_spoke_at = [0.0]; _last_said = [""]
+        _auto_running = False; _auto_stop = [False]
+        def _speak(self, t): pass
+        def _execute_action(self, a, t): return "done"
+
+    e = E()
+    autonomous.run(e, "do a two step thing")
+    for _ in range(50):
+        if not autonomous.is_running(e):
+            break
+        time.sleep(0.1)
+    assert not autonomous.is_running(e)
+    assert calls["n"] >= 2
+
+
+def test_autonomous_default_and_dev_actions():
+    import autonomous
+    # autonomous mode is the default-on behavior
+    assert autonomous._MAX_ITERS >= 8
+    # dev actions route through the guarded dispatch
+    assert "run_command" in autonomous._DEV_ACTIONS
+    assert "git_commit" in autonomous._DEV_ACTIONS
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(

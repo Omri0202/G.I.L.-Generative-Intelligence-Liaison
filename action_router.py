@@ -406,6 +406,16 @@ def dispatch(
         threading.Thread(target=_webgen, daemon=True, name="GIL-WebGen").start()
         return True
 
+    # ── Autonomous task loop (plan → act → observe → repeat until done) ──────
+    elif action == "autonomous_task":
+        if not engine.creation_allowed():
+            log.info("autonomous_task suppressed — not addressed")
+            window.set_state("listening")
+            return True
+        import autonomous
+        autonomous.run(engine, target or text)
+        return True
+
     # ── Live web research with sources (never answer stale facts) ────────────
     elif action == "web_research":
         def _research(q=target or text):

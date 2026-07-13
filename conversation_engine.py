@@ -107,6 +107,10 @@ class ConversationEngine:
         self._last_groq_call_at = 0.0    # rate-limit guard for Groq calls
         self._utterance_addressed = True  # did the current input actually address GIL?
 
+        # Autonomous loop state
+        self._auto_running = False
+        self._auto_stop    = [False]
+
         # speak() function — set in start()
         self._speak = None
 
@@ -504,6 +508,22 @@ class ConversationEngine:
                 window.add_chat_message(speech, "gil")
                 self._speak(speech)
                 self._last_spoke_at[0] = time.time()
+            # Autonomous by default: run the mission's goal as an adaptive
+            # loop (plan→act→observe→re-plan) so GIL adjusts to real results
+            # instead of blindly executing a fixed list. Falls back to the
+            # classic fixed-step mission if the user turned autonomy off.
+            try:
+                import autonomous
+                if autonomous.is_enabled():
+                    goal = mission.get("title", "")
+                    steps_desc = "; ".join(
+                        s.get("label") or s.get("action", "")
+                        for s in mission["steps"])
+                    autonomous.run(self, f"{text}".strip() or
+                                   f"{goal}: {steps_desc}")
+                    return
+            except Exception:
+                log.debug("autonomous dispatch failed, using mission", exc_info=True)
             from missions import run_mission
             run_mission(mission, self)   # owns unmute + set_state("listening")
             return

@@ -1129,8 +1129,44 @@ def _research_fast(text: str, lower: str, eng) -> bool:
     return True
 
 
+def _auto_control(text: str, lower: str, eng) -> bool:
+    """Stop a running autonomous loop, or toggle autonomous mode on/off."""
+    import autonomous
+    words = lower.replace(".", "").split()
+    if autonomous.is_running(eng) and any(
+            w in words for w in ("stop", "abort", "cancel", "halt", "enough")):
+        autonomous.stop(eng)
+        msg = "Stopping."
+        eng.window.add_chat_message(msg, "gil")
+        eng.window.set_state("speaking", said=msg)
+        eng._speak(msg)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        return True
+    if any(p in lower for p in ("autonomous off", "manual mode",
+                                "turn off autonomous", "disable autonomous",
+                                "ask me before", "stop working on your own")):
+        autonomous.set_enabled(False)
+        eng.window.add_chat_message(
+            "Autonomous mode off — I'll do one step at a time and check with you.",
+            "gil")
+        eng.window.set_state("listening")
+        return True
+    if any(p in lower for p in ("autonomous on", "autonomous mode",
+                                "enable autonomous", "work on your own",
+                                "full auto")):
+        autonomous.set_enabled(True)
+        msg = "Autonomous mode on — give me a goal and I'll run it to completion."
+        eng.window.add_chat_message(msg, "gil")
+        eng.window.set_state("speaking", said=msg)
+        eng._speak(msg)
+        eng._last_spoke_at[0] = time.time() - 1.5
+        return True
+    return False
+
+
 _HANDLERS = [
     _fix_confirm,        # pending error-fix yes/no — must win when armed
+    _auto_control,       # stop / toggle the autonomous loop
     _voice_toggle,
     _undo_agent,
     _research_fast,      # live facts before the brain can answer from memory
