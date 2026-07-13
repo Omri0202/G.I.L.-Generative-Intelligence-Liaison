@@ -406,6 +406,16 @@ def _split_target(target: str) -> tuple[str, str]:
     return parts[0], (parts[1] if len(parts) > 1 else "")
 
 
+# Characters that let one command chain into another under a shell / cmd.
+# A real app name, path, or URL never needs these, so their presence in a
+# launch target means someone tried to smuggle a second command through.
+_SHELL_META = ("&", "|", ";", "`", "$(", ">", "<", "\n", "\r", "%")
+
+
+def _has_shell_meta(s: str) -> bool:
+    return any(m in s for m in _SHELL_META)
+
+
 # ── App launcher ──────────────────────────────────────────────────────────────
 
 def open_app(target: str) -> str:
@@ -428,6 +438,10 @@ def open_app(target: str) -> str:
     if key in WEB_FALLBACKS:
         webbrowser.open(WEB_FALLBACKS[key])
         return f"Opened {target} in browser."
+
+    if _has_shell_meta(target):
+        print(f"[G.I.L. ACTIONS] Refused launch with shell metacharacters: {target}")
+        return f"Could not find {target}."
 
     try:
         subprocess.Popen(target, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -456,6 +470,12 @@ def open_url(target: str) -> str:
     except Exception as exc2:
         print(f"[G.I.L. ACTIONS] os.startfile failed ({exc2}), trying subprocess...")
     try:
+        # `&`/`%` are legal in URLs (query strings, encoding) so we can't use the
+        # app-name guard here — but these characters never appear in a valid URL
+        # and would let `cmd /c start` chain a second command, so refuse them.
+        if any(c in target for c in ("|", "<", ">", "`", "^", "\n", "\r")):
+            print(f"[G.I.L. ACTIONS] Refused URL with unsafe characters: {target}")
+            return f"Failed to open {target}"
         subprocess.Popen(["cmd", "/c", "start", "", target], creationflags=subprocess.CREATE_NO_WINDOW)
         return f"Opened {target}"
     except Exception as exc3:

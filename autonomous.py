@@ -130,6 +130,18 @@ def run(engine, goal: str) -> None:
     if not goal:
         return
 
+    # One loop at a time. Two concurrent loops would share _auto_stop /
+    # _auto_running on the engine, so the first to finish would clear the
+    # "running" flag out from under the other and a "stop" would miss it.
+    if is_running(engine):
+        try:
+            engine.window.add_chat_message(
+                "I'm already working on something autonomous — say \"stop\" "
+                "first if you want me to switch.", "gil")
+        except Exception:
+            pass
+        return
+
     engine._auto_stop = [False]
     engine._auto_running = True
 

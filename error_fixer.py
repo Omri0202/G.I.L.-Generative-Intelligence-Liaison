@@ -28,10 +28,14 @@ log = _get_log("fixer")
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Never run these even with permission — too destructive for an assistant.
+# Enforced at the command choke points (dev_runner.run, code_agent, error_fixer)
+# so the on-by-default autonomous loop can never wipe data.
 _BLOCKED = (
-    "format ", "rm -rf /", "rm -rf ~", "rmdir /s c:", "del /f /s /q c:",
-    "reg delete hklm", "diskpart", "cipher /w", "mkfs", "dd if=",
-    "shutdown", "bcdedit", "vssadmin delete", "takeown /f c:",
+    "format ", "rm -rf /", "rm -fr /", "rm -rf ~", "rm -rf *",
+    "rmdir /s c:", "rd /s /q c:", "rmdir /s /q c:", "del /f /s /q c:",
+    "del /s /q c:", "reg delete hklm", "diskpart", "cipher /w", "mkfs",
+    "dd if=", "of=/dev/", ":(){", "shutdown", "bcdedit", "vssadmin delete",
+    "takeown /f c:",
 )
 
 _ANALYZE_SYSTEM = """\

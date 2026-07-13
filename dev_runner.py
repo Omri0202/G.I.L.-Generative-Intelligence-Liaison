@@ -16,8 +16,22 @@ def run(command: str, cwd: str | None = None, timeout: int = 90) -> dict:
     """
     Execute a shell command.
     Returns {command, stdout, stderr, returncode, duration, success}.
+
+    This is the single choke point for every `run_command` action — the brain
+    dispatch AND the autonomous loop both land here — so the destructive-command
+    blocklist is enforced here, not just in the code agent. A blocked command is
+    refused before any subprocess is spawned.
     """
     start = time.time()
+    try:
+        from error_fixer import is_blocked
+        if is_blocked(command):
+            log.warning("refused destructive command: %s", command)
+            return {"command": command, "stdout": "",
+                    "stderr": "Refused: command blocked as too destructive.",
+                    "returncode": -1, "duration": 0, "success": False}
+    except Exception:
+        pass
     try:
         r = subprocess.run(
             command, shell=True, cwd=cwd,

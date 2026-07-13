@@ -240,6 +240,44 @@ def test_autonomous_default_and_dev_actions():
     assert "git_commit" in autonomous._DEV_ACTIONS
 
 
+def test_dev_runner_refuses_destructive_commands():
+    """The run_command choke point (used by dispatch AND the autonomous loop)
+    must refuse blocklisted commands before spawning any subprocess."""
+    import dev_runner, error_fixer
+    # blocklist covers the catastrophic patterns
+    for bad in ("rm -rf *", "rm -rf /", "diskpart", "shutdown /s",
+                "del /f /s /q c:\\", "format c:"):
+        assert error_fixer.is_blocked(bad), bad
+    # and legitimate dev commands are never blocked
+    for good in ("npm test", "git push", "pytest -v", "python -m pip install x"):
+        assert not error_fixer.is_blocked(good), good
+    # run() refuses without spawning, and non-blocked commands still execute
+    refused = dev_runner.run("rm -rf *")
+    assert refused["success"] is False and "Refused" in refused["stderr"]
+    ok = dev_runner.run("echo gil_ok")
+    assert ok["success"] and "gil_ok" in ok["stdout"]
+
+
+def test_autonomous_refuses_second_concurrent_loop():
+    """A second autonomous.run() while one is active must not start a rival
+    loop that would clobber the shared _auto_running / _auto_stop state."""
+    import autonomous
+
+    class W:
+        def __init__(self): self.msgs = []
+        def add_chat_message(self, t, s): self.msgs.append(t)
+        def set_state(self, *a, **k): pass
+
+    class E:
+        window = W()
+        _auto_running = True          # pretend a loop is already going
+        _auto_stop = [False]
+
+    e = E()
+    autonomous.run(e, "another goal")
+    assert e.window.msgs and "already working" in e.window.msgs[0].lower()
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(
