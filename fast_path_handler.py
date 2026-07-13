@@ -1080,13 +1080,86 @@ _LIVE_EXCLUDE = ("website", "image", "picture", "photo", "open ", "play ",
                  "wallpaper", "3d")
 
 
+# The user is TELLING GIL something, not asking him to look it up.
+_TELL_PREFIXES = (
+    "remember that", "remember ", "note that", "keep in mind", "for the record",
+    "just so you know", "fyi", "i want you to know", "don't forget",
+    "make a note", "take note", "save this", "my name is", "i live in",
+    "i work", "i'm working", "im working", "i am working", "my ", "our ",
+    "we have", "i have", "i will", "i'll ", "we're", "i'm going", "im going",
+    "there's a", "the meeting", "the plan is", "reminder",
+)
+_QUESTION_WORDS = (
+    "what", "who", "when", "where", "why", "how", "which", "whose",
+    "is ", "are ", "was ", "were ", "do ", "does ", "did ", "can ", "could ",
+    "should ", "will ", "would ", "tell me", "look up", "search", "find out",
+    "do you know", "any news", "what's the", "whats the", "give me the latest",
+)
+
+
+def _looks_like_question(text: str, lower: str) -> bool:
+    """True if the user is ASKING for information (search), False if they're
+    STATING information (tell/remember). Deterministic, no LLM call."""
+    t = lower.strip()
+    if t.endswith("?"):
+        return True
+    if any(t.startswith(p) for p in _TELL_PREFIXES):
+        return False
+    if any(t.startswith(q) or f" {q}" in f" {t}"[:24] for q in _QUESTION_WORDS):
+        return True
+    # default: a bare declarative sentence with no question marker is a statement
+    return False
+
+
+def _remember_fact(text: str, lower: str, eng) -> bool:
+    """When the user explicitly tells GIL to remember a fact, store it —
+    don't search the web for it."""
+    tell = any(lower.strip().startswith(p) for p in
+               ("remember", "note that", "keep in mind", "for the record",
+                "just so you know", "fyi", "don't forget", "make a note",
+                "take note", "save this"))
+    if not tell:
+        return False
+    if not eng.creation_allowed():
+        return False
+    # strip the lead-in so we store the actual fact
+    fact = text
+    for p in ("remember that ", "remember ", "note that ", "keep in mind that ",
+              "keep in mind ", "for the record ", "just so you know ", "fyi ",
+              "don't forget that ", "don't forget ", "make a note that ",
+              "make a note ", "take note that ", "take note ", "save this "):
+        if lower.startswith(p):
+            fact = text[len(p):]
+            break
+    try:
+        from memory import remember
+        remember(fact.strip(), mem_type="fact", source="user", importance=7)
+    except Exception:
+        pass
+    msg = "Got it — I'll remember that."
+    eng.window.add_chat_message(msg, "gil")
+    eng.window.set_state("speaking", said=msg)
+    eng._speak(msg)
+    eng._last_spoke_at[0] = time.time() - 1.5
+    eng._last_said[0] = msg
+    eng.window.set_state("listening")
+    log.info("stored user fact instead of searching: %r", fact[:60])
+    return True
+
+
 def _research_fast(text: str, lower: str, eng) -> bool:
     """Force live research for time-sensitive questions — no stale answers.
     Also catches short follow-ups ("what players have they signed") by
-    carrying the previous research topic as context."""
+    carrying the previous research topic as context.
+    Crucially: only fires for QUESTIONS. When the user is TELLING GIL info
+    (a statement), this returns False so GIL acknowledges/remembers instead
+    of fruitlessly searching the web for something the user just told him."""
     if any(w in lower for w in _LIVE_EXCLUDE):
         return False
     if not eng.creation_allowed():
+        return False
+    # Statements are not search queries — let them fall through to the brain.
+    if not _looks_like_question(text, lower):
         return False
 
     signal = any(s in lower for s in _LIVE_SIGNALS)
@@ -1169,6 +1242,7 @@ _HANDLERS = [
     _auto_control,       # stop / toggle the autonomous loop
     _voice_toggle,
     _undo_agent,
+    _remember_fact,      # "remember that…" → store, never search
     _research_fast,      # live facts before the brain can answer from memory
     _dev_mode_toggle,    # check first — very specific phrases
     _recap_confirm,

@@ -242,6 +242,80 @@ class WebChat:
         else:
             self._push("gil.setSessions", self._rpc_sessions())
 
+    def _rpc_command(self, name="", arg=""):
+        """Slash commands from the web UI mapped to real GIL capabilities."""
+        name = (name or "").lower().strip()
+        arg = (arg or "").strip()
+        eng = getattr(self._gil_window, "_engine", None)
+
+        if name == "help":
+            self.add_message(
+                "**Commands**\n"
+                "- `/goal <task>` — I work on it autonomously until it's done\n"
+                "- `/research <question>` — live web answer with sources\n"
+                "- `/website <description>` — build a multi-page site\n"
+                "- `/image <description>` — generate an image\n"
+                "- `/code <task>` — write or fix code (I ask before each change)\n"
+                "- `/remember <fact>` — save something for me to recall (no search)\n"
+                "- `/stop` — stop what I'm doing · `/voice` — toggle voice · "
+                "`/clear` — new chat", "gil")
+            return
+
+        if name == "stop":
+            try:
+                import autonomous
+                if eng and autonomous.is_running(eng):
+                    autonomous.stop(eng)
+            except Exception:
+                pass
+            try:
+                from voice import stop_speaking
+                stop_speaking()
+            except Exception:
+                pass
+            self.add_message("Stopped.", "gil")
+            return
+
+        if name == "remember":
+            if not arg:
+                return
+            try:
+                from memory import remember
+                remember(arg, mem_type="fact", source="user", importance=7)
+            except Exception:
+                pass
+            self.add_message(f"Got it — I'll remember that: {arg}", "gil")
+            return
+
+        # goal / research / website / image / code → expand to a natural
+        # request and route through the normal send path (brain + fast-paths),
+        # which already knows how to dispatch each one.
+        prefix = {
+            "goal":     "",   # handled specially below
+            "research": "Look this up and answer with sources: ",
+            "website":  "Build a website for ",
+            "image":    "Generate an image of ",
+            "code":     "",
+        }
+        if name == "goal":
+            if eng and arg:
+                try:
+                    import autonomous
+                    autonomous.run(eng, arg)
+                    return
+                except Exception:
+                    pass
+            self._rpc_send(f"Complete this goal step by step: {arg}")
+            return
+        if name == "code":
+            self._rpc_send(f"Write or fix code for this: {arg}")
+            return
+        if name in prefix:
+            self._rpc_send(prefix[name] + arg)
+            return
+        # unknown → treat as plain message
+        self._rpc_send(f"/{name} {arg}".strip())
+
     def _rpc_open_path(self, p=""):
         try:
             import os

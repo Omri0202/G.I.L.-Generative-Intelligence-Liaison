@@ -196,6 +196,7 @@ class ConversationEngine:
         _reminders.restore_pending()
 
         # ── Expose chat callback, history trim, and floating button ─────────────
+        self.window._engine               = self   # slash commands reach autonomous/stop
         self.window._chat_send_fn         = self._process_chat
         self.window._trim_history_fn      = self.trim_last_exchange
         self.window._trim_history_to_fn   = self.trim_history_to_count

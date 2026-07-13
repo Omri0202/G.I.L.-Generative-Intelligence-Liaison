@@ -309,6 +309,18 @@ def test_wake_word_gate_and_pending_prompt():
     assert s._has_pending_prompt() is True            # fix pending → yes/no allowed
 
 
+def test_statement_vs_question_classifier():
+    import fast_path_handler as fph
+    Q = fph._looks_like_question
+    for t in ["what did they sign?", "who won", "tell me about the game",
+              "is there news on the merger", "how tall is everest"]:
+        assert Q(t, t.lower()), t
+    for t in ["remember that my meeting is at 5", "my name is omri",
+              "the plan is to ship friday", "fyi the port changed to 8080",
+              "i have a dentist appointment tomorrow"]:
+        assert not Q(t, t.lower()), t
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(
