@@ -278,6 +278,37 @@ def test_autonomous_refuses_second_concurrent_loop():
     assert e.window.msgs and "already working" in e.window.msgs[0].lower()
 
 
+def test_config_recovers_from_corruption(tmp_path, monkeypatch):
+    import gil_config, json
+    from pathlib import Path
+    bad = tmp_path / "gil_config.json"
+    bad.write_text('{\n "chat_theme": "dark"\n}}\n', encoding="utf-8")  # extra brace
+    monkeypatch.setattr(gil_config, "_PATH", bad)
+    data = gil_config.load()
+    assert data.get("chat_theme") == "dark"
+    json.loads(bad.read_text())          # file was rewritten clean (no raise)
+
+
+def test_wake_word_gate_and_pending_prompt():
+    import conversation_engine as ce
+    from wake_phrase import contains_wake_phrase
+    # only addressed speech passes the wake gate
+    assert contains_wake_phrase("gil what is the weather")
+    assert not contains_wake_phrase("i was chatting about the weather")
+
+    class Stub:
+        _auto_running = False
+        _pending_recap = [{}]; _pending_recap_g = [{}]
+        _has_pending_prompt = ce.ConversationEngine._has_pending_prompt
+    s = Stub()
+    assert s._has_pending_prompt() is False          # nothing pending → wake word required
+    s._auto_running = True
+    assert s._has_pending_prompt() is True           # loop running → "stop" allowed
+    s._auto_running = False
+    s._pending_fix = {"task": "x"}
+    assert s._has_pending_prompt() is True            # fix pending → yes/no allowed
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(

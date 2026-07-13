@@ -260,8 +260,20 @@ class ConversationEngine:
     # ── Wake prompt ───────────────────────────────────────────────────────────
 
     def _speak_wake_prompt(self) -> None:
+        # When muted, GIL stays completely silent — no beep, no prompt.
+        try:
+            from voice import voice_enabled
+            if not voice_enabled():
+                self.window.set_state("listening")
+                return
+        except Exception:
+            pass
+
         def _go():
-            winsound.Beep(1100, 180)
+            try:
+                winsound.Beep(1100, 180)
+            except Exception:
+                pass
             time.sleep(0.15)
             phrase = "What are we working on today?"
             self._last_said[0]     = phrase
@@ -732,6 +744,18 @@ class ConversationEngine:
                 self.window.set_state("listening")
             return
 
+        # ── MASTER WAKE-WORD GATE ──────────────────────────────────────────────
+        # From here down, every branch makes GIL ACT or TALK. Per the strict
+        # policy, none of it runs unless the user addressed GIL by name — or
+        # GIL is actively awaiting a direct reply. (Stop/pause/interrupt
+        # commands above are intentionally exempt so GIL can always be
+        # silenced without the wake word.) This is the single point that keeps
+        # ambient conversation, feature-trigger phrases, and follow-ups from
+        # ever waking GIL on their own.
+        if not contains_wake_phrase(lower) and not self._has_pending_prompt():
+            log.debug("not addressed by wake word — ignored: %r", text[:60])
+            return
+
         # 3D shape visualizer
         try:
             from viewer3d import detect_shape
@@ -829,39 +853,36 @@ class ConversationEngine:
                 self._speak_wake_prompt()
             return
 
-        # Active conversation window
-        if self.conv.active:
-            addressed = is_addressed(lower)
-            if addressed:
-                self._last_addressed_at[0] = time.time()
+        # ── STRICT WAKE-WORD GATE ──────────────────────────────────────────────
+        # Voice input is IGNORED unless it names GIL (handled by the wake-phrase
+        # branch above). The only un-addressed speech accepted is a direct
+        # answer to a prompt GIL is ACTIVELY awaiting right now — a yes/no on a
+        # pending fix/approval/recap, or "stop" while an autonomous loop runs.
+        # There is no time-based "stay active" window anymore, so ambient
+        # conversation and follow-ups never trigger GIL without the wake word.
+        if self._has_pending_prompt():
+            log.info("answering pending prompt (no wake word needed): %r", text[:50])
+            threading.Thread(target=self._process, args=(text, False),
+                             daemon=True, name="GIL-Process").start()
+        else:
+            log.debug("no wake word, no pending prompt — ignored: %r", text[:50])
 
-            now        = time.time()
-            time_since = now - self._last_addressed_at[0]
-
-            # Dynamic attention window:
-            # - 15 s if GIL just asked a question (expects a follow-up answer)
-            # - 8 s otherwise (tight window prevents ambient speech processing)
-            window    = self.QUESTION_SECS if self._last_was_question else self.ATTENTION_SECS
-            in_window = time_since < window
-
-            if addressed or in_window:
-                # Filter 1 — ambient speech detection
-                # If the user didn't name GIL and it sounds like background conversation, drop it
-                if in_window and not addressed and self._is_ambient_speech(lower):
-                    log.debug("ambient speech filtered: %r", text[:50])
-                    return
-
-                # Filter 2 — Groq rate limit guard
-                # If another Groq call was made very recently and this utterance
-                # didn't name GIL directly, drop it to avoid flooding the API
-                if not addressed and (now - self._last_groq_call_at) < self.GROQ_MIN_GAP:
-                    log.debug("groq rate-limit guard: dropped %r", text[:40])
-                    return
-
-                threading.Thread(target=self._process, args=(text, addressed),
-                                 daemon=True, name="GIL-Process").start()
-            else:
-                log.debug("outside attention window — ignored: %r", text[:50])
+    def _has_pending_prompt(self) -> bool:
+        """True only when GIL is actively waiting on the user's direct reply,
+        so a short 'yes'/'no'/'stop' counts as addressing him even without the
+        wake word. Everything else requires the wake word."""
+        try:
+            if getattr(self, "_auto_running", False):
+                return True
+            if getattr(self, "_pending_fix", None):
+                return True
+            if getattr(self, "_agent_gate", None):
+                return True
+            if (self._pending_recap[0] or self._pending_recap_g[0]):
+                return True
+        except Exception:
+            pass
+        return False
 
     # ── Manual activate ───────────────────────────────────────────────────────
 

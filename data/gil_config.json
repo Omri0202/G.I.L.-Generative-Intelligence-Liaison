@@ -2,5 +2,7 @@
   "ai_model": "llama-3.1-8b-instant",
   "clap_detect_on": true,
   "tts_voice": "en-GB-RyanNeural",
-  "chat_theme": "dark"
-}}
+  "chat_theme": "dark",
+  "voice_enabled": true,
+  "autonomous_mode": true
+}

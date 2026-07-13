@@ -60,27 +60,29 @@ def _clean(text: str) -> str:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def voice_enabled() -> bool:
-    """User-controlled master switch: when off, GIL is text-only (chat still works)."""
+    """User-controlled master switch: when off, GIL is text-only (chat still works).
+    Reads through the corruption-tolerant config helper so a bad config file
+    can never silently leave GIL unmuted."""
     try:
-        import json
-        from pathlib import Path
-        cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")
-                         .read_text(encoding="utf-8"))
-        return bool(cfg.get("voice_enabled", True))
+        from gil_config import get
+        return bool(get("voice_enabled", True))
     except Exception:
         return True
 
 
 def set_voice_enabled(on: bool) -> None:
     try:
-        import json
-        from pathlib import Path
-        p = Path(__file__).parent / "data" / "gil_config.json"
-        cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-        cfg["voice_enabled"] = bool(on)
-        p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        from gil_config import set as _cfg_set
+        _cfg_set("voice_enabled", bool(on))
     except Exception:
         log.error("could not save voice setting", exc_info=True)
+    # Muting must silence GIL immediately in EVERY situation — cut off any
+    # sentence already playing, no matter which path started it.
+    if not on:
+        try:
+            stop_speaking()
+        except Exception:
+            pass
 
 
 def speak(text: str) -> bool:
