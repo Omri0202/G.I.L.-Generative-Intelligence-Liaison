@@ -321,6 +321,44 @@ def test_statement_vs_question_classifier():
         assert not Q(t, t.lower()), t
 
 
+def test_research_detects_non_answer(monkeypatch):
+    import research
+    # heuristic: the classic "material doesn't mention X" is a non-answer
+    assert not research._answers_question(
+        "what did newcastle sign",
+        "The provided web material does not mention Newcastle United.")
+    # a real specific answer with no fail-phrase and a YES grade passes
+    monkeypatch.setattr(research, "_groq", lambda *a, **k: "YES")
+    assert research._answers_question(
+        "what did newcastle sign",
+        "Newcastle signed Zion Suzuki and are chasing Marmoush.")
+
+
+def test_research_loop_retries_until_answered(monkeypatch):
+    import research
+    calls = {"gather": 0, "synth": 0}
+    def fake_gather(q, want=5):
+        calls["gather"] += 1
+        return ([f"[Source: S — http://x/{calls['gather']}]\nbody"],
+                [{"title": "S", "url": f"http://x/{calls['gather']}"}])
+    # round 1 non-answer, round 2 real answer
+    answers = ["The material does not mention it.",
+               "Newcastle signed Zion Suzuki on July 13, 2026."]
+    def fake_synth(question, corpus):
+        return answers[min(calls["synth"], len(answers)-1)] , calls.__setitem__("synth", calls["synth"]+1)
+    def fake_synth2(question, corpus):
+        a = answers[min(calls["synth"], len(answers)-1)]
+        calls["synth"] += 1
+        return a
+    monkeypatch.setattr(research, "_gather", fake_gather)
+    monkeypatch.setattr(research, "_synthesize", fake_synth2)
+    monkeypatch.setattr(research, "_refine_query", lambda q, a, r: q + " refined")
+    monkeypatch.setattr(research, "_groq", lambda *a, **k: "short")
+    md, spoken = research.run("what did newcastle sign", max_rounds=3)
+    assert calls["synth"] >= 2, "did not retry after non-answer"
+    assert "Suzuki" in md and "Sources:" in md
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(

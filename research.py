@@ -137,90 +137,170 @@ def _groq(messages: list, max_tokens: int = 1400) -> str | None:
     return None
 
 
-def run(question: str) -> tuple[str, str]:
-    """Full research pipeline. Returns (chat_markdown, spoken_summary)."""
-    try:
-        import activity
-        aid = activity.start("search", f"Researching: {question[:60]}")
-    except Exception:
-        aid = None
+_FAIL_PHRASES = (
+    "does not mention", "doesn't mention", "not mentioned", "no mention",
+    "does not specifically", "doesn't specifically", "no information",
+    "not provide", "does not provide", "doesn't provide", "unclear what",
+    "could not find", "couldn't find", "no specific", "not available in",
+    "not found in", "material does not", "material doesn't",
+    "provided material", "provided web material", "provided sources",
+)
 
-    results = _search(question)
-    if not results:
-        msg = ("I couldn't reach the web to research that right now — "
-               "so I won't guess. Try again in a moment.")
-        if aid is not None:
-            import activity
-            activity.fail(aid, "no search results")
-        return msg, msg
 
-    # Read the top pages (each one visibly, like Claude does)
+def _gather(query: str, want: int = 5) -> tuple[list, list]:
+    """Search + read. Returns (corpus_blocks, used_sources). Falls back to the
+    result snippet when a page URL is unreadable (Google News redirect stubs),
+    so RSS descriptions still contribute real facts."""
+    results = _search(query, n=want + 2)
     corpus, used = [], []
-    for res in results[:3]:
+    for res in results[:want]:
         try:
             import activity
             rid = activity.start("web", f"Reading {res['url'][:70]}")
         except Exception:
             rid = None
         body = _fetch_text(res["url"])
+        if not body and res.get("snippet"):
+            body = res["snippet"]        # RSS/description fallback
         if body:
             corpus.append(f"[Source: {res['title']} — {res['url']}]\n{body}")
             used.append(res)
             if rid is not None:
                 activity.done(rid, f"{len(body)} chars")
-        else:
-            if rid is not None:
-                activity.fail(rid, "unreadable")
-    # snippets from remaining results as light corroboration
-    for res in results[3:]:
-        if res["snippet"]:
-            corpus.append(f"[Source: {res['title']} — {res['url']}]\n{res['snippet']}")
-            used.append(res)
+        elif rid is not None:
+            activity.fail(rid, "unreadable")
+    return corpus, used
 
+
+def _synthesize(question: str, corpus: list) -> str | None:
     today = datetime.now().strftime("%B %d, %Y")
-    answer = _groq([
+    return _groq([
         {"role": "system", "content":
-         f"You are G.I.L., a research assistant. Today is {today}. Write a "
-         "thorough, well-structured markdown answer to the user's question "
-         "using ONLY the web material provided — never your training memory. "
-         "Rules:\n"
-         "- Full paragraphs + bullet points where useful; concrete names, "
-         "numbers and dates from the material.\n"
-         "- If sources conflict or the material doesn't fully answer, say so "
-         "plainly.\n"
-         "- Do NOT invent facts absent from the material.\n"
-         "- Do NOT include a sources section — it is appended separately.\n"
-         "- End with one short takeaway line."},
+         f"You are G.I.L., a research assistant. Today is {today}. Answer the "
+         "user's question DIRECTLY using ONLY the web material provided — never "
+         "training memory. Lead with the direct answer, then supporting detail "
+         "with concrete names, numbers and dates. If the material genuinely "
+         "lacks the answer, say exactly what's missing. Do NOT invent facts. "
+         "Do NOT add a sources section (appended separately). End with a one-line takeaway."},
         {"role": "user", "content":
          f"QUESTION: {question}\n\nWEB MATERIAL:\n\n" + "\n\n---\n\n".join(corpus)[:14000]},
     ])
 
-    if not answer:
-        msg = "The web search worked but my summarizer is rate-limited — ask me again in a minute."
-        if aid is not None:
+
+def _answers_question(question: str, answer: str) -> bool:
+    """Does the answer actually answer the question? Heuristic first (catches
+    the 'the material doesn't mention X' non-answers), then a cheap LLM check."""
+    low = answer.lower()
+    if any(p in low for p in _FAIL_PHRASES):
+        return False
+    verdict = _groq([
+        {"role": "system", "content":
+         "You are a strict grader. Does the ANSWER directly and substantively "
+         "answer the QUESTION with real specifics (not 'I couldn't find it', "
+         "not about a different subject)? Reply with exactly YES or NO."},
+        {"role": "user", "content": f"QUESTION: {question}\n\nANSWER: {answer[:1500]}"},
+    ], max_tokens=4)
+    return bool(verdict) and verdict.strip().upper().startswith("YES")
+
+
+def _refine_query(question: str, prev_answer: str, round_i: int) -> str:
+    """Sharpen the search when the last round didn't answer the question."""
+    q = _groq([
+        {"role": "system", "content":
+         "The previous web search did not answer the user's question. Write a "
+         "BETTER, more specific web search query (just the query text, no "
+         "quotes, no explanation) that will surface the exact answer. Keep the "
+         "key entity/subject front and center."},
+        {"role": "user", "content":
+         f"QUESTION: {question}\nWHY IT FAILED: {prev_answer[:400]}"},
+    ], max_tokens=40)
+    if q and 3 <= len(q.strip()) <= 160:
+        return q.strip().strip('"')
+    # heuristic fallback: force the subject + concrete terms
+    extra = ["", "latest news", "official announcement confirmed"][min(round_i, 2)]
+    return f"{question} {extra}".strip()
+
+
+def run(question: str, max_rounds: int = 3) -> tuple[str, str]:
+    """Research until the question is actually answered. Each round searches,
+    reads sources, synthesizes, then VERIFIES the answer answers the question;
+    if not, it refines the query and researches again (up to max_rounds)."""
+    try:
+        import activity
+        aid = activity.start("search", f"Researching: {question[:60]}")
+    except Exception:
+        aid = None
+
+    query = question
+    all_used: list = []
+    best_answer = None
+
+    for rnd in range(1, max_rounds + 1):
+        try:
             import activity
-            activity.fail(aid, "summarizer unavailable")
+            activity.instant("brain",
+                             f"Research round {rnd}: {query[:50]}" if rnd > 1
+                             else f"Searching: {query[:55]}")
+        except Exception:
+            pass
+
+        corpus, used = _gather(query)
+        all_used += used
+        if not corpus:
+            query = _refine_query(question, "no sources were readable", rnd)
+            continue
+
+        answer = _synthesize(question, corpus)
+        if not answer:
+            break
+        best_answer = answer
+
+        if _answers_question(question, answer):
+            try:
+                import activity
+                if aid is not None:
+                    activity.done(aid, f"answered in {rnd} round(s)")
+            except Exception:
+                pass
+            break
+        # not answered → refine and go again
+        if rnd < max_rounds:
+            log.info("round %d didn't answer — refining query", rnd)
+            query = _refine_query(question, answer, rnd)
+    else:
+        if aid is not None:
+            try:
+                import activity
+                activity.done(aid, "reached round limit")
+            except Exception:
+                pass
+
+    if not best_answer:
+        msg = ("I searched but couldn't get readable results just now — "
+               "try again in a moment.")
+        if aid is not None:
+            try:
+                import activity
+                activity.fail(aid, "no answer")
+            except Exception:
+                pass
         return msg, msg
 
     # De-duplicated sources the user can check
     seen, src_lines = set(), []
-    for res in used:
+    for res in all_used:
         if res["url"] in seen:
             continue
         seen.add(res["url"])
         src_lines.append(f"- [{res['title'] or res['url'][:60]}]({res['url']})")
-        if len(src_lines) >= 5:
+        if len(src_lines) >= 6:
             break
-    chat_md = answer + "\n\n**Sources:**\n" + "\n".join(src_lines)
+    chat_md = best_answer + "\n\n**Sources:**\n" + "\n".join(src_lines)
 
     spoken = _groq([
         {"role": "system", "content":
-         "Compress this into 2 short spoken sentences — the key finding only. "
-         "No markdown."},
-        {"role": "user", "content": answer[:2000]},
-    ], max_tokens=90) or answer.split("\n")[0][:220]
+         "Compress this into 2 short spoken sentences — the key finding only. No markdown."},
+        {"role": "user", "content": best_answer[:2000]},
+    ], max_tokens=90) or best_answer.split("\n")[0][:220]
 
-    if aid is not None:
-        import activity
-        activity.done(aid, f"{len(src_lines)} sources")
     return chat_md, spoken
