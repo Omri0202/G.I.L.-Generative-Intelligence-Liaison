@@ -170,6 +170,24 @@ button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
   border-radius:8px; transition:background .15s, color .15s; }
 .actions button:hover { background:var(--hover); color:var(--accent); }
 
+/* approval card — clickable Approve / Reject (Claude-style) */
+.approval { margin:0 0 22px 37px; max-width:640px; background:var(--input);
+  border:1px solid var(--accent); border-radius:15px; overflow:hidden;
+  animation:rise .3s ease both; box-shadow:0 2px 16px var(--shadow); }
+.approval .atext { padding:14px 16px 10px; font-size:14px; }
+.approval .atext pre { background:var(--code-bg); border:1px solid var(--border);
+  border-radius:10px; padding:10px 13px; margin:8px 0; overflow-x:auto; font-size:12.5px; }
+.approval .abtns { display:flex; gap:10px; padding:0 16px 14px; }
+.approval button { flex:1; padding:10px; border-radius:10px; font-size:13.5px;
+  font-weight:700; transition:filter .15s, transform .1s; }
+.approval .yes { background:var(--accent); color:var(--btn-txt); }
+.approval .no  { background:var(--hover); color:var(--txt); border:1px solid var(--border); }
+.approval button:hover { filter:brightness(1.1); }
+.approval button:active { transform:scale(.97); }
+.approval.done .abtns { display:none; }
+.approval .chose { padding:0 16px 14px; font-size:12.5px; color:var(--muted); display:none; }
+.approval.done .chose { display:block; }
+
 /* streaming caret + word-fade (Claude-style typing feel) */
 .caret { display:inline-block; width:8px; height:16px; background:var(--accent);
   vertical-align:-2px; border-radius:2px; margin-left:2px;
@@ -544,12 +562,23 @@ const gil = {
   },
 
   showTyping() { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); scrollDown(true); },
-  hideTyping() { $("typing").classList.remove("on"); this.stopTimer(); },
+  hideTyping() { $("typing").classList.remove("on"); this.scheduleStop(); },
 
-  /* ---- live work timer (Claude-style "working 12s") ---- */
-  _timerStart: 0, _timerId: null,
+  /* ---- live work timer (Claude-style "working 12s") ----
+     Runs continuously from the first sign of work until GIL is truly idle —
+     an intermediate "Checking…" message no longer stops it while research or
+     an activity card is still running. "Busy" = typing dots on OR any
+     activity step running OR an approval pending. A grace period bridges the
+     gaps between an ack message, the research starting, and the final answer. */
+  _timerStart: 0, _timerId: null, _stopT: null,
+  busy() {
+    return $("typing").classList.contains("on")
+        || (this.running && this.running.size > 0)
+        || !!this._approvalOpen;
+  },
   startTimer() {
-    if (this._timerId) return;              // already running
+    if (this._stopT) { clearTimeout(this._stopT); this._stopT = null; }
+    if (this._timerId) return;              // already running — keep the clock
     this._timerStart = Date.now();
     const tick = () => {
       const s = (Date.now() - this._timerStart) / 1000;
@@ -559,7 +588,18 @@ const gil = {
     tick();
     this._timerId = setInterval(tick, 250);
   },
+  scheduleStop() {
+    // Only stop once GIL has been idle for a grace window — never mid-task.
+    if (this._stopT) clearTimeout(this._stopT);
+    this._stopT = setTimeout(() => {
+      this._stopT = null;
+      if (this.busy()) { this.scheduleStop(); return; }   // still working → keep going
+      this.stopTimer();
+    }, 2500);
+  },
+  resetTimer() { this.stopTimer(); },
   stopTimer() {
+    if (this._stopT) { clearTimeout(this._stopT); this._stopT = null; }
     if (this._timerId) { clearInterval(this._timerId); this._timerId = null; }
     $("worktimer").textContent = "";
   },
@@ -633,6 +673,33 @@ const gil = {
     rib.className = "ribbon " + (anyFail ? "fail" : "done");
     const card = this.actCard;
     setTimeout(() => { if (this.actCard === card && !this.running.size) this.actCard = null; }, 4000);
+    this.scheduleStop();   // activity finished → let the timer wind down (if idle)
+  },
+
+  /* ---- approval card (click Approve / Reject, no typing yes/no) ---- */
+  approval(c) {
+    this.hideTyping();
+    this._approvalOpen = true;          // keeps the work timer running
+    this.startTimer();
+    const d = document.createElement("div");
+    d.className = "approval";
+    d.innerHTML =
+      `<div class="atext">${md(c.text || "Approve this action?")}</div>` +
+      `<div class="abtns"><button class="yes">✓ Approve</button>` +
+      `<button class="no">✕ Reject</button></div>` +
+      `<div class="chose"></div>`;
+    const done = (ok) => {
+      this._approvalOpen = false;
+      d.classList.add("done");
+      d.querySelector(".chose").textContent = ok ? "✓ Approved" : "✕ Rejected";
+      api("approve", c.kind || "agent", ok);
+      if (ok) this.showTyping();        // work resumes
+      else this.scheduleStop();
+    };
+    d.querySelector(".yes").onclick = () => done(true);
+    d.querySelector(".no").onclick  = () => done(false);
+    $("msgs").insertBefore(d, $("typing"));
+    scrollDown(true);
   },
 
   /* ---- rich cards ---- */
@@ -717,6 +784,7 @@ const gil = {
     // Slash command? route it instead of sending as a plain message.
     if (t[0] === "/") { this.runCommand(t); return; }
     $("inp").value = ""; this.grow();
+    this.resetTimer();                 // new turn → fresh clock
     this.addMessage({sender: "user", text: t});
     this.showTyping();
     api("send", t);

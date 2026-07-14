@@ -528,7 +528,6 @@ def dispatch(
                 return
             _act.done(aid, analysis.get("diagnosis", "")[:120])
             report = error_fixer.format_report(analysis)
-            window.add_chat_message(report, "gil")
             # Always offer hands-on fixing — the coding agent investigates,
             # edits code and runs commands itself, asking approval per change.
             engine._pending_fix = {
@@ -537,6 +536,12 @@ def dispatch(
                          + (f"Screen context:\n{scr[:800]}" if scr else "")),
                 "commands": analysis.get("commands") or [],
             }
+            # Clickable Fix it / Skip buttons in the web chat; text otherwise.
+            if hasattr(window, "request_approval"):
+                window.request_approval(report + "\n\nWant me to fix it?",
+                                        kind="fix")
+            else:
+                window.add_chat_message(report, "gil")
             spoken = (analysis.get("diagnosis", "Found it.")
                       + " I can fix this myself — want me to?")
             unmute()

@@ -268,19 +268,27 @@ def _t_write_file(args: dict) -> str:
 # ── Approval gate ─────────────────────────────────────────────────────────────
 
 def _ask_approval(eng, description: str) -> bool:
-    """Post the proposed change in chat and block until the user says yes/no
-    (fast_path_handler._fix_confirm routes the answer here)."""
+    """Post the proposed change and block until the user decides. In the web
+    chat this renders clickable Approve/Reject buttons (Claude-style); the
+    voice/text "yes"/"no" path (fast_path_handler._fix_confirm) still works
+    and resolves the same gate."""
     gate = {"event": threading.Event(), "approved": False}
     eng._agent_gate = gate
-    eng.window.add_chat_message(
-        "**Approval needed** — I want to run this:\n\n" + description +
-        "\n\nSay **yes** to approve or **no** to skip.", "gil")
+    win = eng.window
+    # Clickable buttons when the web UI is available; text prompt otherwise.
+    if hasattr(win, "request_approval"):
+        win.request_approval("**Approval needed** — I want to run this:\n\n"
+                             + description, kind="agent")
+    else:
+        win.add_chat_message(
+            "**Approval needed** — I want to run this:\n\n" + description +
+            "\n\nSay **yes** to approve or **no** to skip.", "gil")
     try:
-        spoken = "I need your approval for the next step — check the chat and say yes or no."
-        eng.window.set_state("speaking", said=spoken)
+        spoken = "I need your approval for the next step — approve or skip it in the chat."
+        win.set_state("speaking", said=spoken)
         eng._speak(spoken)
         eng._last_spoke_at[0] = time.time() - 1.5
-        eng.window.set_state("listening")
+        win.set_state("listening")
     except Exception:
         pass
     gate["event"].wait(_APPROVAL_TIMEOUT)

@@ -316,6 +316,43 @@ class WebChat:
         # unknown → treat as plain message
         self._rpc_send(f"/{name} {arg}".strip())
 
+    def _rpc_approve(self, kind="", approved=False):
+        """User clicked Approve/Reject on an approval card."""
+        eng = getattr(self._gil_window, "_engine", None)
+        approved = bool(approved)
+        if kind == "fix":
+            pending = getattr(eng, "_pending_fix", None) if eng else None
+            eng and setattr(eng, "_pending_fix", None)
+            if approved and pending:
+                try:
+                    import code_agent
+                    if isinstance(pending, dict):
+                        code_agent.run_async(eng, pending.get("task", ""),
+                                             pending.get("commands") or None)
+                    else:
+                        code_agent.run_async(eng, "Apply this fix and verify it works.",
+                                             list(pending))
+                    self.add_message("On it — I'll ask before each change.", "gil")
+                except Exception:
+                    pass
+            elif not approved:
+                self.add_message("Skipped.", "gil")
+            return
+        # code-agent per-change gate
+        gate = getattr(eng, "_agent_gate", None) if eng else None
+        if gate:
+            gate["approved"] = approved
+            try:
+                gate["event"].set()
+            except Exception:
+                pass
+        if not approved:
+            self.add_message("Skipped that change.", "gil")
+
+    def request_approval(self, text: str, kind: str = "agent") -> None:
+        """Push an approval request with clickable buttons to the web UI."""
+        self._push("gil.approval", {"text": text, "kind": kind})
+
     def _rpc_open_path(self, p=""):
         try:
             import os
