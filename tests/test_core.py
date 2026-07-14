@@ -359,6 +359,22 @@ def test_research_loop_retries_until_answered(monkeypatch):
     assert "Suzuki" in md and "Sources:" in md
 
 
+def test_payload_budget_trims_to_fit():
+    # the brain caps request size so Groq never returns 413 Payload Too Large
+    MAX = 90000
+    def chars(p): return sum(len(m.get("content", "")) for m in p["messages"])
+    msgs = [{"role": "system", "content": "S" * 5000}]
+    for i in range(20):
+        msgs.append({"role": "user" if i % 2 == 0 else "assistant",
+                     "content": "X" * 8000})
+    payload = {"messages": msgs}
+    while chars(payload) > MAX and len(payload["messages"]) > 2:
+        payload["messages"].pop(1)
+    assert chars(payload) <= MAX
+    assert payload["messages"][0]["content"].startswith("S")   # system preserved
+    assert len(payload["messages"]) >= 2                        # newest turns kept
+
+
 def test_system_prompt_formats():
     import gil_brain
     s = gil_brain._SYSTEM.format(

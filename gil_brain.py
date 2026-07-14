@@ -615,6 +615,19 @@ class GILBrain:
             extra_blocks.append(session_context)
         extra_str = ("\n\n" + "\n\n".join(extra_blocks)) if extra_blocks else ""
 
+        # Cap each dynamic context block so the request can never blow past
+        # Groq's payload limit (the 413 "Payload Too Large" bug). These are
+        # background context, not the user's words, so truncation is safe.
+        def _cap(s, n):
+            s = s or ""
+            return s if len(s) <= n else s[:n] + " …[trimmed]"
+        memory_context   = _cap(memory_context, 3000)
+        screen_context   = _cap(screen_context, 2000)
+        projects_context = _cap(projects_context, 1500)
+        cred_block       = _cap(cred_block, 1500)
+        project_block    = _cap(project_block, 2500)
+        extra_str        = _cap(extra_str, 2500)
+
         system = _SYSTEM.format(
             username=self.username,
             datetime=now.strftime("%A, %B %d %Y  %I:%M %p"),
@@ -658,12 +671,28 @@ class GILBrain:
         chosen_model = _pick_model(user_input, _sub)
         if chosen_model != GROQ_MODEL:
             log.info("smart routing -> %s", chosen_model)
+
+        # Any single stored history turn that ballooned (a huge pasted error,
+        # research dump, etc.) is truncated so it can't inflate the request.
+        for _m in self.history:
+            if isinstance(_m.get("content"), str) and len(_m["content"]) > 4000:
+                _m["content"] = _m["content"][:4000] + " …[trimmed]"
+
         payload = {
             "model":       chosen_model,
             "messages":    [{"role": "system", "content": system}] + self.history,
             "temperature": 0.30,
             "max_tokens":  2000 if mode == "chat" else 900,
         }
+        # Hard budget: if the whole request is still too big, drop the oldest
+        # history turns until it fits (keeps the system prompt + newest turns).
+        _MAX_CHARS = 90000
+        def _payload_chars(p):
+            return sum(len(m.get("content", "")) for m in p["messages"])
+        while _payload_chars(payload) > _MAX_CHARS and len(payload["messages"]) > 2:
+            payload["messages"].pop(1)   # oldest non-system message
+            log.warning("trimming history to fit payload budget")
+
         def _try_groq(key: str):
             hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             return _session.post(GROQ_URL, json=payload, headers=hdrs, timeout=15)
@@ -682,6 +711,24 @@ class GILBrain:
                 with _groq_key_lock:
                     _cur_idx = _groq_key_index
                 resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
+
+                # Payload too large: shrink hard and retry (don't resend the
+                # same oversized body — that's what made 413 fatal before).
+                _shrink = 0
+                while resp.status_code == 413 and _shrink < 3:
+                    _shrink += 1
+                    if len(payload["messages"]) > 2:
+                        # keep system + only the newest 1-2 turns
+                        payload["messages"] = ([payload["messages"][0]]
+                                               + payload["messages"][-2:])
+                    # and truncate what remains
+                    for _m in payload["messages"]:
+                        if len(_m.get("content", "")) > 6000:
+                            _m["content"] = _m["content"][:6000] + " …[trimmed]"
+                    payload["messages"][0]["content"] = \
+                        payload["messages"][0]["content"][:12000]
+                    log.warning("413 payload too large — shrink attempt %d", _shrink)
+                    resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
 
                 if resp.status_code == 429:
                     with _groq_key_lock:
