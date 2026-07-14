@@ -253,6 +253,7 @@ class WebChat:
                 "**Commands**\n"
                 "- `/goal <task>` — I work on it autonomously until it's done\n"
                 "- `/research <question>` — live web answer with sources\n"
+                "- `/study <exam>` — full prep: study guide, practice test, exercises\n"
                 "- `/website <description>` — build a multi-page site\n"
                 "- `/image <description>` — generate an image\n"
                 "- `/code <task>` — write or fix code (I ask before each change)\n"
@@ -309,6 +310,20 @@ class WebChat:
             return
         if name == "code":
             self._rpc_send(f"Write or fix code for this: {arg}")
+            return
+        if name == "study":
+            eng = getattr(self._gil_window, "_engine", None)
+            if eng:
+                try:
+                    import action_router
+                    threading.Thread(
+                        target=action_router.dispatch,
+                        args=("study_prep", arg, "", arg, arg.lower(), [], eng),
+                        daemon=True, name="GIL-StudyCmd").start()
+                    return
+                except Exception:
+                    pass
+            self._rpc_send(f"Prepare me for this exam: {arg}")
             return
         if name in prefix:
             self._rpc_send(prefix[name] + arg)

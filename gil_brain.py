@@ -310,6 +310,7 @@ set_voice -> on|off (user controls whether G.I.L. speaks aloud; chat always work
 edit_website -> change instruction (edits the most recently generated website)
 publish_website -> null (publishes the latest generated site to the public web)
 analyze_screen -> question about what is visually on screen right now
+study_prep -> an exam or test to prepare the user for (format: 'exam name | what I already know'). G.I.L. researches what the exam covers and generates a detailed study guide, a practice test, and learning exercises. Use for 'prepare me for X', 'help me study for the Y test', 'make me practice questions for Z'.
 autonomous_task -> a full multi-step GOAL to complete on your own (GIL loops: plan a step, do it, check the result, plan the next - until the whole goal is genuinely finished, no check-ins needed). Use this for any task that needs several steps or ongoing work toward an outcome ('research X and build me a report', 'fix all the failing tests', 'set up and verify the project'). Prefer this over a single mission when the path isn't fully known up front.
 code_task -> coding/debugging task description (G.I.L. works like a coding agent: reads files, edits code, runs terminal commands - asking approval before every change)
 

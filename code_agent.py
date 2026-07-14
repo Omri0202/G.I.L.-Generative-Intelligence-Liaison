@@ -298,6 +298,32 @@ def _ask_approval(eng, description: str) -> bool:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
+def _known_locations() -> str:
+    """Real paths the agent should use instead of guessing where things live."""
+    gil_root = str(Path(__file__).parent)
+    lines = [
+        f"- G.I.L.'s own project (\"the gil project\", \"this project\", "
+        f"\"your code\"): {gil_root}",
+        f"- Current working directory: {os.getcwd()}",
+    ]
+    try:
+        home = Path.home()
+        for name in ("Desktop", "Documents", "Downloads"):
+            p = home / name
+            if p.is_dir():
+                lines.append(f"- {name}: {p}")
+        # desktop project folders (with a .git or common project markers)
+        desk = home / "Desktop"
+        if desk.is_dir():
+            projs = [d.name for d in desk.iterdir()
+                     if d.is_dir() and (d / ".git").exists()][:8]
+            if projs:
+                lines.append("- Desktop project folders: " + ", ".join(projs))
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     """Execute the agent loop (call from a worker thread)."""
     import activity
@@ -306,7 +332,10 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     window = eng.window
     messages = [{"role": "system", "content": _SYSTEM.replace("{steps}", str(_MAX_STEPS))},
                 {"role": "user", "content":
-                 f"TASK:\n{task[:2500]}" +
+                 f"TASK:\n{task[:2500]}\n\n"
+                 f"KNOWN LOCATIONS (use these — do NOT guess paths):\n"
+                 f"{_known_locations()}\n\n"
+                 f"Start by listing/reading the relevant known location above." +
                  (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +
                   "\n".join(hints) if hints else "")}]
 

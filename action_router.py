@@ -416,6 +416,26 @@ def dispatch(
         autonomous.run(engine, target or text)
         return True
 
+    # ── Exam / study preparation ──────────────────────────────────────────────
+    elif action == "study_prep":
+        def _study(spec=target or text):
+            from ears import unmute
+            import study_coach
+            # spec may be "exam | background"; split gently
+            exam, _, bg = spec.partition("|")
+            summary, path = study_coach.prepare(exam.strip(), bg.strip())
+            unmute()
+            window.add_chat_message(summary, "gil")
+            spoken = ("Your study pack is ready — guide, practice test and "
+                      "exercises are in the chat" +
+                      (" and saved to your Documents." if path else "."))
+            window.set_state("speaking", said=spoken); speak(spoken)
+            last_spoke_at[0] = __import__("time").time() - 1.5
+            last_said[0] = spoken
+            window.set_state("listening")
+        threading.Thread(target=_study, daemon=True, name="GIL-Study").start()
+        return True
+
     # ── Live web research with sources (never answer stale facts) ────────────
     elif action == "web_research":
         def _research(q=target or text):
