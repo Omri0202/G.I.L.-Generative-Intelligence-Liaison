@@ -108,6 +108,9 @@ def collect_datas() -> list[tuple[str, str]]:
 
     # G.I.L. 4.0 web chat: UI file + pywebview runtime pieces
     datas.append((str(ROOT / "web_chat"), "web_chat"))
+    # Interactive study-course template
+    if (ROOT / "study_app").exists():
+        datas.append((str(ROOT / "study_app"), "study_app"))
     try:
         import webview
         wv = Path(webview.__file__).parent
