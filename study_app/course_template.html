@@ -4,296 +4,290 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>G.I.L. Study</title>
 <style>
+/* ═══════ hand-drawn, colourful, fun study app ═══════ */
 :root{
-  --bg:#15161B; --side:#191A21; --surf:#1C1E26; --card:#20222C; --hover:#262935;
-  --border:#282B36; --txt:#E9EAF2; --muted:#787D91; --dim:#9BA0B4;
-  --accent:#58C4DD; --accent2:#A78BFA; --ok:#4ADE80; --fail:#F87171;
-  --gold:#FBBF24; --btn:#0A1014;
+  --paper:#FFF7EC; --paper2:#FFEFD9; --ink:#3B3730; --ink2:#6B6459;
+  --line:#2B2824;
+  --c1:#58CC63; --c2:#4AB6E8; --c3:#A66BE0; --c4:#FF9A3D; --c5:#FF6FA5; --c6:#22C7B8;
+  --gold:#FFC93C; --ok:#58CC63; --fail:#FF5C6C;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
-body{font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
-  background:var(--bg);color:var(--txt);min-height:100vh;}
-::-webkit-scrollbar{width:9px;}::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px;}
+body{
+  font-family:"Baloo 2","Segoe UI",system-ui,sans-serif;
+  background:var(--paper);
+  background-image:radial-gradient(circle at 20% 10%,rgba(74,182,232,.06),transparent 40%),
+    radial-gradient(circle at 80% 30%,rgba(166,107,224,.06),transparent 40%),
+    radial-gradient(circle at 50% 90%,rgba(88,204,99,.06),transparent 45%);
+  color:var(--ink);min-height:100vh;}
+body[dir="rtl"]{direction:rtl;}
+::-webkit-scrollbar{width:10px;}::-webkit-scrollbar-thumb{background:#E4D8C4;border-radius:6px;}
 button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
+h1,h2,h3,.fun{font-family:"Baloo 2","Comic Sans MS","Segoe UI",cursive;}
+
+/* the hand-drawn border trick — irregular corners + wobbly ink outline */
+.hd{border:3px solid var(--line);
+  border-radius:255px 18px 225px 18px/18px 225px 18px 255px;}
+.hd2{border:3px solid var(--line);
+  border-radius:18px 225px 18px 255px/225px 18px 255px 18px;}
+
+/* chunky pressable button (Duolingo signature) */
+.chunk{position:relative;border:3px solid var(--line);border-radius:16px;
+  padding:12px 24px;font-weight:800;font-size:15px;color:#fff;
+  box-shadow:0 5px 0 0 rgba(0,0,0,.28);transition:transform .06s,box-shadow .06s;
+  transform:translateY(0);}
+.chunk:active{transform:translateY(5px);box-shadow:0 0 0 0 rgba(0,0,0,.28);}
+.chunk.g{background:var(--c1);} .chunk.b{background:var(--c2);}
+.chunk.p{background:var(--c3);} .chunk.o{background:var(--c4);}
+.chunk.grey{background:#E9DFCE;color:var(--ink);}
+.chunk:disabled{opacity:.5;cursor:default;box-shadow:0 5px 0 0 rgba(0,0,0,.15);}
 
 /* top bar */
-header{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:16px;
-  padding:14px 24px;background:var(--side);border-bottom:1px solid var(--border);}
-header .gem{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;
-  justify-content:center;color:var(--accent);font-size:15px;border:1px solid var(--accent);
-  background:linear-gradient(135deg,rgba(88,196,221,.14),rgba(167,139,250,.14));}
-header .title{font-weight:800;font-size:16px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.stat{display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;}
-.stat.xp{color:var(--gold);} .stat.streak{color:var(--accent2);} .stat.done{color:var(--ok);}
+header{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:14px;
+  padding:12px 22px;background:var(--paper2);border-bottom:3px solid var(--line);}
+header .mascot{width:44px;height:44px;flex-shrink:0;animation:bob 2.4s ease-in-out infinite;}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-3deg);}50%{transform:translateY(-4px) rotate(3deg);}}
+header .title{font-weight:800;font-size:17px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pill{display:flex;align-items:center;gap:6px;font-weight:800;font-size:14px;
+  padding:6px 12px;border-radius:14px;border:3px solid var(--line);background:#fff;}
+.pill.xp{color:#E8940A;} .pill.streak{color:var(--c3);} .pill.done{color:var(--c1);}
 
-/* course intro */
-.intro{max-width:720px;margin:22px auto 6px;padding:0 20px;}
-.intro h1{font-size:24px;margin-bottom:6px;}
-.intro p{color:var(--muted);font-size:14px;line-height:1.6;}
-.bar{height:10px;background:var(--surf);border-radius:6px;margin:16px 0 6px;overflow:hidden;}
-.bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
-  border-radius:6px;transition:width .5s ease;}
-.barlabel{font-size:12px;color:var(--dim);}
+/* intro */
+.intro{max-width:640px;margin:20px auto 4px;padding:0 20px;text-align:center;}
+.intro h1{font-size:26px;margin-bottom:4px;line-height:1.15;}
+.intro p{color:var(--ink2);font-size:15px;}
+.bar{height:16px;background:#fff;border:3px solid var(--line);border-radius:12px;
+  margin:16px auto 4px;overflow:hidden;max-width:420px;}
+.bar > i{display:block;height:100%;
+  background:repeating-linear-gradient(45deg,var(--c1),var(--c1) 10px,#4bbd56 10px,#4bbd56 20px);
+  border-radius:9px;transition:width .6s cubic-bezier(.2,.9,.3,1);}
+.barlabel{font-size:13px;color:var(--ink2);font-weight:700;}
 
-/* learning path */
-.path{max-width:720px;margin:10px auto 60px;padding:0 20px;}
-.unit{margin-top:30px;}
-.unit .uhead{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
-.unit .ubadge{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
-  color:var(--accent);}
-.unit h2{font-size:18px;}
-.unit .udesc{color:var(--muted);font-size:13px;margin-bottom:14px;}
-.levels{display:flex;flex-direction:column;align-items:center;gap:6px;}
-.node{position:relative;display:flex;flex-direction:column;align-items:center;}
-.node .dot{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;
-  justify-content:center;font-size:22px;font-weight:800;transition:transform .12s;
-  border:3px solid var(--border);background:var(--surf);color:var(--muted);}
-.node.avail .dot{border-color:var(--accent);color:var(--accent);
-  box-shadow:0 0 0 4px rgba(88,196,221,.12);cursor:pointer;}
-.node.avail .dot:hover{transform:scale(1.06);}
-.node.done .dot{border-color:var(--ok);background:rgba(74,222,128,.14);color:var(--ok);cursor:pointer;}
-.node .ltitle{font-size:12.5px;color:var(--dim);margin:4px 0 2px;max-width:180px;text-align:center;}
-.node .connector{width:3px;height:22px;background:var(--border);}
-.node.done .connector{background:var(--ok);}
-.node .lock{position:absolute;top:20px;font-size:16px;opacity:.5;}
+/* winding path */
+.path{max-width:640px;margin:8px auto 70px;padding:0 20px;}
+.unit{margin-top:34px;}
+.unit .banner{display:inline-block;padding:8px 18px;color:#fff;font-weight:800;font-size:16px;
+  margin-bottom:4px;transform:rotate(-1.4deg);}
+.unit .udesc{color:var(--ink2);font-size:13.5px;margin:4px 2px 16px;font-weight:600;}
+.levels{display:flex;flex-direction:column;align-items:center;gap:2px;}
+.node{display:flex;flex-direction:column;align-items:center;position:relative;
+  transition:transform .1s;}
+.node.off{transform:translateX(-72px);} .node.off2{transform:translateX(72px);}
+body[dir="rtl"] .node.off{transform:translateX(72px);}
+body[dir="rtl"] .node.off2{transform:translateX(-72px);}
+.node .dot{width:72px;height:72px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:26px;font-weight:900;color:#fff;
+  border:4px solid var(--line);box-shadow:0 6px 0 0 rgba(0,0,0,.25);
+  transition:transform .08s,box-shadow .08s;}
+.node.avail .dot,.node.done .dot{cursor:pointer;}
+.node.avail .dot:active,.node.done .dot:active{transform:translateY(5px);box-shadow:0 1px 0 0 rgba(0,0,0,.25);}
+.node.locked .dot{background:#E9DFCE!important;color:#B9AC95;box-shadow:0 6px 0 0 rgba(0,0,0,.12);}
+.node.avail .dot{animation:pulse 1.8s ease-in-out infinite;}
+@keyframes pulse{0%,100%{box-shadow:0 6px 0 0 rgba(0,0,0,.25),0 0 0 0 rgba(255,201,60,.5);}
+  50%{box-shadow:0 6px 0 0 rgba(0,0,0,.25),0 0 0 10px rgba(255,201,60,0);}}
+.node .ltitle{font-size:12.5px;color:var(--ink2);margin:5px 0 2px;max-width:190px;
+  text-align:center;font-weight:700;}
+.node .link{width:5px;height:26px;background:repeating-linear-gradient(var(--line),var(--line) 5px,transparent 5px,transparent 11px);margin:2px 0;}
+.node .crown{position:absolute;top:-14px;font-size:20px;}
 
-/* lesson modal */
-.overlay{position:fixed;inset:0;background:rgba(6,8,14,.72);backdrop-filter:blur(4px);
-  display:none;align-items:center;justify-content:center;z-index:100;padding:16px;}
+/* lesson overlay */
+.overlay{position:fixed;inset:0;background:rgba(59,55,48,.55);backdrop-filter:blur(3px);
+  display:none;align-items:center;justify-content:center;z-index:100;padding:14px;}
 .overlay.on{display:flex;animation:fade .2s ease;}
 @keyframes fade{from{opacity:0}to{opacity:1}}
-.lesson{width:100%;max-width:640px;background:var(--bg);border:1px solid var(--border);
-  border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6);
+.lesson{width:100%;max-width:600px;background:var(--paper);border:4px solid var(--line);
+  border-radius:24px;overflow:hidden;box-shadow:0 14px 0 0 rgba(0,0,0,.25);
   display:flex;flex-direction:column;max-height:92vh;}
-.lesson .lhead{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid var(--border);}
-.lesson .close{font-size:20px;color:var(--muted);}
-.lesson .progress{flex:1;height:12px;background:var(--surf);border-radius:6px;overflow:hidden;}
-.lesson .progress > i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .3s;}
-.lesson .hearts{color:var(--fail);font-size:15px;letter-spacing:2px;}
-.qbody{padding:26px 24px;overflow-y:auto;flex:1;}
-.qbody .qkind{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:8px;}
-.qbody .qtext{font-size:19px;font-weight:600;line-height:1.5;margin-bottom:20px;white-space:pre-wrap;}
-.qbody pre{background:var(--card);border:1px solid var(--border);border-radius:10px;
-  padding:12px 14px;overflow-x:auto;font-family:"Cascadia Code",Consolas,monospace;
-  font-size:13px;margin:12px 0;}
-.opts{display:flex;flex-direction:column;gap:10px;}
-.opt{text-align:left;padding:14px 16px;border-radius:12px;background:var(--card);
-  border:2px solid var(--border);font-size:15px;transition:border-color .12s,background .12s;}
-.opt:hover{border-color:var(--accent);}
-.opt.sel{border-color:var(--accent);background:rgba(88,196,221,.1);}
-.opt.right{border-color:var(--ok);background:rgba(74,222,128,.14);}
-.opt.wrong{border-color:var(--fail);background:rgba(248,113,113,.14);}
-.opt.dim{opacity:.5;}
-input.answer{width:100%;padding:14px 16px;border-radius:12px;background:var(--card);
-  border:2px solid var(--border);color:var(--txt);font-size:16px;outline:none;}
-input.answer:focus{border-color:var(--accent);}
-.feedback{margin-top:16px;padding:14px 16px;border-radius:12px;font-size:14px;line-height:1.6;display:none;}
-.feedback.on{display:block;animation:fade .2s;}
-.feedback.good{background:rgba(74,222,128,.12);border:1px solid var(--ok);}
-.feedback.bad{background:rgba(248,113,113,.12);border:1px solid var(--fail);}
-.feedback b{color:var(--txt);}
-.lfoot{padding:16px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;}
-.btn{padding:12px 26px;border-radius:12px;font-weight:800;font-size:14px;transition:filter .12s,transform .1s;}
-.btn:active{transform:scale(.97);}
-.btn.primary{background:var(--accent);color:var(--btn);}
-.btn.primary:disabled{opacity:.4;cursor:default;}
-.btn.ghost{background:var(--hover);color:var(--txt);}
-.btn:hover:not(:disabled){filter:brightness(1.1);}
+.lhead{display:flex;align-items:center;gap:14px;padding:16px 20px;}
+.close{font-size:22px;color:var(--ink2);font-weight:900;}
+.hpbar{flex:1;height:16px;background:#fff;border:3px solid var(--line);border-radius:12px;overflow:hidden;}
+.hpbar > i{display:block;height:100%;background:var(--c2);border-radius:9px;transition:width .3s;}
+.hearts{color:var(--fail);font-size:17px;letter-spacing:1px;}
+.qbody{padding:8px 24px 20px;overflow-y:auto;flex:1;}
+.qkind{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--c2);margin-bottom:10px;}
+.qtext{font-size:20px;font-weight:700;line-height:1.5;margin-bottom:22px;white-space:pre-wrap;}
+.qtext code{background:#fff;border:2px solid var(--line);border-radius:7px;padding:1px 6px;font-size:.85em;}
+.qbody pre{background:#2B2824;color:#F5EEDD;border-radius:12px;padding:12px 14px;overflow-x:auto;
+  font-family:"Cascadia Code",Consolas,monospace;font-size:13px;margin:12px 0;direction:ltr;text-align:left;}
+.opts{display:flex;flex-direction:column;gap:12px;}
+.opt{text-align:start;padding:15px 18px;background:#fff;border:3px solid var(--line);
+  border-radius:16px;font-size:16px;font-weight:600;box-shadow:0 4px 0 0 rgba(0,0,0,.15);
+  transition:transform .06s,box-shadow .06s,background .12s;}
+.opt:active{transform:translateY(4px);box-shadow:0 0 0 0 rgba(0,0,0,.15);}
+.opt.sel{background:#EAF6FF;border-color:var(--c2);}
+.opt.right{background:#E7FBEA;border-color:var(--ok);}
+.opt.wrong{background:#FFECEE;border-color:var(--fail);}
+.opt.dim{opacity:.45;}
+input.answer{width:100%;padding:15px 18px;border:3px solid var(--line);border-radius:16px;
+  background:#fff;color:var(--ink);font-size:17px;font-weight:600;outline:none;
+  box-shadow:0 4px 0 0 rgba(0,0,0,.12);}
+input.answer:focus{border-color:var(--c2);}
+.feedback{margin-top:16px;padding:14px 16px;border-radius:16px;font-size:15px;
+  line-height:1.55;font-weight:600;display:none;}
+.feedback.on{display:block;animation:pop .25s cubic-bezier(.2,1.4,.4,1);}
+@keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+.feedback.good{background:#E7FBEA;border:3px solid var(--ok);color:#1E7A2C;}
+.feedback.bad{background:#FFECEE;border:3px solid var(--fail);color:#B32330;}
+.lfoot{padding:16px 20px;display:flex;justify-content:flex-end;gap:10px;}
 
-/* level complete */
-.done-card{text-align:center;padding:36px 24px;}
-.done-card .big{font-size:52px;margin-bottom:8px;}
-.done-card h3{font-size:22px;margin-bottom:6px;}
-.done-card p{color:var(--muted);}
-.done-card .xpwin{color:var(--gold);font-weight:800;font-size:18px;margin-top:14px;}
+/* celebration */
+.done-card{text-align:center;padding:34px 24px;}
+.done-card .big{font-size:56px;margin-bottom:6px;animation:pop .4s cubic-bezier(.2,1.6,.4,1);}
+.done-card h3{font-size:24px;margin-bottom:6px;}
+.done-card p{color:var(--ink2);font-weight:600;}
+.done-card .xpwin{color:#E8940A;font-weight:900;font-size:20px;margin-top:14px;}
+.confetti{position:fixed;top:-10px;width:11px;height:16px;z-index:200;pointer-events:none;border-radius:2px;}
 </style></head>
 <body>
 <header>
-  <div class="gem">◈</div>
+  <svg class="mascot" viewBox="0 0 48 48" fill="none" stroke="#2B2824" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 22 Q24 4 38 22 Q40 40 24 42 Q8 40 10 22Z" fill="#58C4DD"/>
+    <circle cx="19" cy="24" r="3" fill="#2B2824" stroke="none"/>
+    <circle cx="29" cy="24" r="3" fill="#2B2824" stroke="none"/>
+    <path d="M19 31 Q24 34 29 31"/>
+    <path d="M24 12 L24 6" /><circle cx="24" cy="5" r="1.6" fill="#2B2824" stroke="none"/>
+  </svg>
   <div class="title" id="courseTitle">Study Course</div>
-  <div class="stat streak" title="Levels streak"><span>✦</span><span id="streakN">0</span></div>
-  <div class="stat xp" title="Experience"><span>★</span><span id="xpN">0</span> XP</div>
-  <div class="stat done" title="Levels completed"><span>✓</span><span id="doneN">0</span>/<span id="totalN">0</span></div>
+  <div class="pill streak" title="Streak"><span>🔥</span><span id="streakN">0</span></div>
+  <div class="pill xp" title="XP"><span>⭐</span><span id="xpN">0</span></div>
+  <div class="pill done" title="Done"><span>✅</span><span id="doneN">0</span>/<span id="totalN">0</span></div>
 </header>
 
 <div class="intro">
   <h1 id="introTitle"></h1>
   <p id="introSub"></p>
   <div class="bar"><i id="overallBar" style="width:0%"></i></div>
-  <div class="barlabel" id="overallLabel">0% complete</div>
+  <div class="barlabel" id="overallLabel">0%</div>
 </div>
 
 <div class="path" id="path"></div>
-
 <div class="overlay" id="overlay"><div class="lesson" id="lesson"></div></div>
 
 <script>
 "use strict";
-/* course data injected by G.I.L. */
-const COURSE = /*__COURSE__*/ {"title":"Study Course","subtitle":"","units":[]} /*__END__*/;
+const COURSE = /*__COURSE__*/ {"title":"Study Course","subtitle":"","lang":"en","units":[]} /*__END__*/;
+const UC = ["var(--c1)","var(--c2)","var(--c3)","var(--c4)","var(--c5)","var(--c6)"];
+const CHUNK = ["g","b","p","o","g","b"];
 
 const $ = id => document.getElementById(id);
 const esc = s => (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+if(COURSE.lang==="he") document.body.setAttribute("dir","rtl");
 const KEY = "gilstudy_" + (COURSE.title||"course").replace(/\W+/g,"_").slice(0,40);
 
-/* flatten levels for indexing + progress */
-let LEVELS = [];
-COURSE.units.forEach((u,ui)=>u.levels.forEach((l,li)=>LEVELS.push({u:ui,l:li,ref:l,title:l.title})));
-
+let LEVELS=[]; COURSE.units.forEach((u,ui)=>u.levels.forEach((l,li)=>LEVELS.push({u:ui,ref:l})));
 let state = load();
-function load(){ try{return JSON.parse(localStorage.getItem(KEY))||{done:{},xp:0}}catch(e){return {done:{},xp:0}} }
-function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
-function completedCount(){ return Object.keys(state.done).length; }
-function isDone(i){ return !!state.done[i]; }
-function isAvail(i){ return i===0 || isDone(i-1) || isDone(i); }
+function load(){try{return JSON.parse(localStorage.getItem(KEY))||{done:{},xp:0,streak:0}}catch(e){return{done:{},xp:0,streak:0}}}
+function save(){localStorage.setItem(KEY,JSON.stringify(state));}
+function completed(){return Object.keys(state.done).length;}
+function isDone(i){return !!state.done[i];}
+function isAvail(i){return i===0||isDone(i-1)||isDone(i);}
 
-/* render code blocks inside question text (```...```) */
-function qhtml(t){
-  t = esc(t);
-  t = t.replace(/```([\s\S]*?)```/g, (m,c)=>"<pre>"+c.trim()+"</pre>");
-  t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
-  return t;
-}
+function qhtml(t){t=esc(t);t=t.replace(/```([\s\S]*?)```/g,(m,c)=>"<pre>"+c.trim()+"</pre>");
+  return t.replace(/`([^`]+)`/g,"<code>$1</code>");}
 
 function renderPath(){
-  $("courseTitle").textContent = COURSE.title || "Study Course";
-  $("introTitle").textContent = COURSE.title || "Study Course";
-  $("introSub").textContent = COURSE.subtitle || "";
-  $("totalN").textContent = LEVELS.length;
-  $("doneN").textContent = completedCount();
-  $("xpN").textContent = state.xp||0;
-  $("streakN").textContent = state.streak||0;
-  const pct = LEVELS.length ? Math.round(completedCount()/LEVELS.length*100) : 0;
-  $("overallBar").style.width = pct+"%";
-  $("overallLabel").textContent = pct+"% complete";
-
-  const path = $("path"); path.innerHTML="";
-  let gi = 0;
+  $("courseTitle").textContent=COURSE.title||"Study Course";
+  $("introTitle").textContent=COURSE.title||"Study Course";
+  $("introSub").textContent=COURSE.subtitle||"";
+  $("totalN").textContent=LEVELS.length; $("doneN").textContent=completed();
+  $("xpN").textContent=state.xp||0; $("streakN").textContent=state.streak||0;
+  const pct=LEVELS.length?Math.round(completed()/LEVELS.length*100):0;
+  $("overallBar").style.width=pct+"%"; $("overallLabel").textContent=pct+"% "+(COURSE.lang==="he"?"הושלם":"complete");
+  const path=$("path"); path.innerHTML=""; let gi=0;
   COURSE.units.forEach((u,ui)=>{
-    const unit = document.createElement("div"); unit.className="unit";
-    unit.innerHTML = `<div class="uhead"><span class="ubadge">Unit ${ui+1}</span><h2>${esc(u.title||"")}</h2></div>`+
+    const col=UC[ui%UC.length];
+    const unit=document.createElement("div"); unit.className="unit";
+    unit.innerHTML=`<div class="banner hd" style="background:${col}">${esc(u.title||"")}</div>`+
       (u.desc?`<div class="udesc">${esc(u.desc)}</div>`:"")+`<div class="levels"></div>`;
-    const levels = unit.querySelector(".levels");
+    const levels=unit.querySelector(".levels");
     u.levels.forEach((l,li)=>{
-      const idx = gi++;
-      const done = isDone(idx), avail = isAvail(idx);
-      const node = document.createElement("div"); node.className="node "+(done?"done":(avail?"avail":"locked"));
-      node.innerHTML =
-        `<div class="dot">${done?"✓":(avail?(li+1):"")}</div>`+
-        (!avail&&!done?`<div class="lock">🔒</div>`:"")+
+      const idx=gi++, done=isDone(idx), avail=isAvail(idx);
+      const off=li%3===1?"off":(li%3===2?"off2":"");
+      const node=document.createElement("div");
+      node.className="node "+off+" "+(done?"done":(avail?"avail":"locked"));
+      node.innerHTML=(done?`<div class="crown">👑</div>`:"")+
+        `<div class="dot" style="background:${col}">${done?"★":(avail?"▶":"🔒")}</div>`+
         `<div class="ltitle">${esc(l.title||("Level "+(li+1)))}</div>`+
-        (li<u.levels.length-1?`<div class="connector"></div>`:"");
-      if(done||avail) node.querySelector(".dot").onclick = ()=>openLesson(idx);
+        (li<u.levels.length-1?`<div class="link"></div>`:"");
+      if(done||avail) node.querySelector(".dot").onclick=()=>openLesson(idx);
       levels.appendChild(node);
     });
     path.appendChild(unit);
   });
 }
 
-/* ── lesson engine ── */
-let cur = null;
+let cur=null;
 function openLesson(idx){
-  const lv = LEVELS[idx];
-  const qs = (lv.ref.questions||[]).filter(q=>q&&q.q);
-  if(!qs.length){ alert("This level has no questions yet."); return; }
-  cur = {idx, qs, qi:0, correct:0, hearts:3, answered:false};
-  $("overlay").classList.add("on");
-  drawQuestion();
+  const qs=(LEVELS[idx].ref.questions||[]).filter(q=>q&&q.q);
+  if(!qs.length){alert("No questions here yet.");return;}
+  cur={idx,qs,qi:0,correct:0,hearts:3};
+  $("overlay").classList.add("on"); drawQ();
 }
-function closeLesson(){ $("overlay").classList.remove("on"); cur=null; }
+function closeLesson(){$("overlay").classList.remove("on");cur=null;}
 
-function drawQuestion(){
-  const c = cur, q = c.qs[c.qi];
-  const pct = Math.round(c.qi/c.qs.length*100);
-  const opts = q.options||[];
-  const isInput = q.type==="input" || !opts.length;
-  $("lesson").innerHTML =
+function drawQ(){
+  const c=cur,q=c.qs[c.qi],opts=q.options||[],isInput=q.type==="input"||!opts.length;
+  const pct=Math.round(c.qi/c.qs.length*100);
+  const he=COURSE.lang==="he";
+  $("lesson").innerHTML=
     `<div class="lhead"><button class="close" onclick="closeLesson()">✕</button>`+
-    `<div class="progress"><i style="width:${pct}%"></i></div>`+
-    `<div class="hearts">${"♥".repeat(c.hearts)}${"·".repeat(3-c.hearts)}</div></div>`+
-    `<div class="qbody"><div class="qkind">Question ${c.qi+1} of ${c.qs.length}</div>`+
+    `<div class="hpbar"><i style="width:${pct}%"></i></div>`+
+    `<div class="hearts">${"❤".repeat(c.hearts)}${"🖤".repeat(3-c.hearts)}</div></div>`+
+    `<div class="qbody"><div class="qkind">${he?"שאלה":"Question"} ${c.qi+1}/${c.qs.length}</div>`+
     `<div class="qtext">${qhtml(q.q)}</div>`+
-    (isInput
-      ? `<input class="answer" id="ans" placeholder="Type your answer…" autocomplete="off">`
-      : `<div class="opts" id="opts">`+opts.map((o,i)=>`<button class="opt" data-i="${i}">${qhtml(o)}</button>`).join("")+`</div>`)+
+    (isInput?`<input class="answer" id="ans" placeholder="${he?"הקלד תשובה…":"Type your answer…"}" autocomplete="off">`
+      :`<div class="opts" id="opts">`+opts.map((o,i)=>`<button class="opt" data-i="${i}">${qhtml(o)}</button>`).join("")+`</div>`)+
     `<div class="feedback" id="fb"></div></div>`+
-    `<div class="lfoot"><button class="btn primary" id="check" disabled>Check</button></div>`;
-
-  let sel = null;
-  if(isInput){
-    const inp = $("ans");
-    inp.oninput = ()=>{ $("check").disabled = !inp.value.trim(); };
-    inp.onkeydown = e=>{ if(e.key==="Enter" && inp.value.trim()) doCheck(inp.value.trim()); };
-    setTimeout(()=>inp.focus(),50);
-    $("check").onclick = ()=>doCheck(inp.value.trim());
-  } else {
-    $("opts").querySelectorAll(".opt").forEach(b=>b.onclick=()=>{
-      $("opts").querySelectorAll(".opt").forEach(x=>x.classList.remove("sel"));
-      b.classList.add("sel"); sel = +b.dataset.i; $("check").disabled=false;
-    });
-    $("check").onclick = ()=>doCheck(sel);
-  }
+    `<div class="lfoot"><button class="chunk g" id="check" disabled>${he?"בדוק":"Check"}</button></div>`;
+  let sel=null;
+  if(isInput){const inp=$("ans");
+    inp.oninput=()=>$("check").disabled=!inp.value.trim();
+    inp.onkeydown=e=>{if(e.key==="Enter"&&inp.value.trim())doCheck(inp.value.trim());};
+    setTimeout(()=>inp.focus(),50); $("check").onclick=()=>doCheck(inp.value.trim());
+  }else{$("opts").querySelectorAll(".opt").forEach(b=>b.onclick=()=>{
+    $("opts").querySelectorAll(".opt").forEach(x=>x.classList.remove("sel"));
+    b.classList.add("sel");sel=+b.dataset.i;$("check").disabled=false;});
+    $("check").onclick=()=>doCheck(sel);}
 }
 
 function doCheck(given){
-  const c = cur, q = c.qs[c.qi];
-  const opts = q.options||[];
-  const isInput = q.type==="input" || !opts.length;
+  const c=cur,q=c.qs[c.qi],opts=q.options||[],isInput=q.type==="input"||!opts.length,he=COURSE.lang==="he";
   let ok;
-  if(isInput){
-    const norm = s=>String(s).trim().toLowerCase().replace(/\s+/g," ");
-    ok = norm(given)===norm(q.answer) ||
-         (Array.isArray(q.answer)&&q.answer.some(a=>norm(a)===norm(given)));
-  } else {
-    ok = given===q.answer;
-    const nodes = $("opts").querySelectorAll(".opt");
-    nodes.forEach((n,i)=>{ n.style.pointerEvents="none";
-      if(i===q.answer) n.classList.add("right");
-      else if(i===given) n.classList.add("wrong");
-      else n.classList.add("dim"); });
-  }
-  const fb = $("fb");
-  fb.className = "feedback on "+(ok?"good":"bad");
-  fb.innerHTML = (ok?"<b>✓ Correct!</b> ":"<b>✕ Not quite.</b> ")+
-    (q.explain?esc(q.explain):(ok?"":"The answer was: <b>"+esc(isInput?q.answer:opts[q.answer])+"</b>"));
-  if(ok) c.correct++; else c.hearts=Math.max(0,c.hearts-1);
-
-  const btn = $("check");
-  btn.disabled=false;
-  btn.textContent = (c.qi < c.qs.length-1) ? "Continue" : "Finish";
-  btn.onclick = ()=>{
-    if(c.hearts<=0){ finishLevel(false); return; }
-    c.qi++;
-    if(c.qi>=c.qs.length) finishLevel(true);
-    else drawQuestion();
-  };
+  if(isInput){const n=s=>String(s).trim().toLowerCase().replace(/\s+/g," ");
+    ok=n(given)===n(q.answer)||(Array.isArray(q.answer)&&q.answer.some(a=>n(a)===n(given)));
+  }else{ok=given===q.answer;
+    $("opts").querySelectorAll(".opt").forEach((n,i)=>{n.style.pointerEvents="none";
+      if(i===q.answer)n.classList.add("right");else if(i===given)n.classList.add("wrong");else n.classList.add("dim");});}
+  const fb=$("fb"); fb.className="feedback on "+(ok?"good":"bad");
+  fb.innerHTML=(ok?(he?"<b>✓ נכון!</b> ":"<b>✓ Correct!</b> "):(he?"<b>✕ לא בדיוק.</b> ":"<b>✕ Not quite.</b> "))+
+    (q.explain?esc(q.explain):(ok?"":(he?"התשובה: ":"Answer: ")+"<b>"+esc(isInput?q.answer:opts[q.answer])+"</b>"));
+  if(ok)c.correct++;else c.hearts=Math.max(0,c.hearts-1);
+  const btn=$("check"); btn.disabled=false;
+  btn.textContent=(c.qi<c.qs.length-1)?(he?"המשך":"Continue"):(he?"סיום":"Finish");
+  btn.className="chunk "+(ok?"g":"o");
+  btn.onclick=()=>{if(c.hearts<=0){finish(false);return;}c.qi++;if(c.qi>=c.qs.length)finish(true);else drawQ();};
 }
 
-function finishLevel(passed){
-  const c = cur;
-  const score = Math.round(c.correct/c.qs.length*100);
-  const won = passed && score>=60;
-  if(won && !isDone(c.idx)){
-    state.done[c.idx]=true;
-    const gained = 10 + c.correct*5;
-    state.xp = (state.xp||0)+gained;
-    state.streak = (state.streak||0)+1;
-    save();
-  } else if(!won){
-    state.streak = 0; save();
-  }
-  $("lesson").innerHTML = `<div class="done-card">`+
-    `<div class="big">${won?"🎉":"💪"}</div>`+
-    `<h3>${won?"Level complete!":"Almost there"}</h3>`+
-    `<p>You got ${c.correct} of ${c.qs.length} right (${score}%).`+
-    `${won?"":" You need 60% to pass — give it another go."}</p>`+
+function confetti(){for(let i=0;i<70;i++){const d=document.createElement("div");d.className="confetti";
+  d.style.left=Math.random()*100+"vw";d.style.background=UC[i%UC.length].replace("var(--c","#").replace(")","")||"#58CC63";
+  const cols=["#58CC63","#4AB6E8","#A66BE0","#FF9A3D","#FF6FA5","#FFC93C"];d.style.background=cols[i%cols.length];
+  d.style.transform="rotate("+Math.random()*360+"deg)";document.body.appendChild(d);
+  const fall=800+Math.random()*900;d.animate([{top:"-10px",opacity:1},{top:"100vh",opacity:.9}],{duration:fall,easing:"ease-in"});
+  setTimeout(()=>d.remove(),fall);}}
+
+function finish(passed){
+  const c=cur,score=Math.round(c.correct/c.qs.length*100),won=passed&&score>=60,he=COURSE.lang==="he";
+  if(won&&!isDone(c.idx)){state.done[c.idx]=true;state.xp=(state.xp||0)+10+c.correct*5;state.streak=(state.streak||0)+1;save();confetti();}
+  else if(!won){state.streak=0;save();}
+  $("lesson").innerHTML=`<div class="done-card"><div class="big">${won?"🎉":"💪"}</div>`+
+    `<h3>${won?(he?"עברת את השלב!":"Level complete!"):(he?"כמעט שם":"Almost!")}</h3>`+
+    `<p>${he?`ענית נכון על ${c.correct} מתוך ${c.qs.length} (${score}%).`:`You got ${c.correct} of ${c.qs.length} right (${score}%).`}`+
+    `${won?"":(he?" צריך 60% כדי לעבור.":" You need 60% to pass.")}</p>`+
     (won?`<div class="xpwin">+${10+c.correct*5} XP</div>`:"")+
-    `<div class="lfoot" style="justify-content:center;margin-top:22px;border:none;">`+
-    (won?"":`<button class="btn ghost" onclick="openLesson(${c.idx})">Retry</button>`)+
-    `<button class="btn primary" onclick="closeLesson();renderPath()">${won?"Continue":"Back to path"}</button>`+
+    `<div class="lfoot" style="justify-content:center;margin-top:22px;">`+
+    (won?"":`<button class="chunk grey" onclick="openLesson(${c.idx})">${he?"שוב":"Retry"}</button>`)+
+    `<button class="chunk g" onclick="closeLesson();renderPath()">${won?(he?"המשך":"Continue"):(he?"חזרה":"Back")}</button>`+
     `</div></div>`;
 }
-
 renderPath();
 </script>
 </body></html>

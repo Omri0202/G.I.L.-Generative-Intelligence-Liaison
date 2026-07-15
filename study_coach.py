@@ -87,37 +87,49 @@ _COMMON = ("You are G.I.L., an expert exam coach building a Duolingo-style "
            "real questions, real worked answers. Never vague.")
 
 
-def _build_outline(exam: str, bg: str, scope: str) -> dict | None:
+def _lang_rule(language: str) -> str:
+    if language == "Hebrew":
+        return ("\nכל התוכן — כותרות, שאלות, אפשרויות והסברים — חייב להיות "
+                "בעברית. מונחים טכניים באנגלית מותרים (למשל TCP, Big O, malloc).\n"
+                "IMPORTANT: write ALL content in Hebrew. JSON keys stay in English.")
+    return ""
+
+
+def _build_outline(exam: str, bg: str, scope: str, language: str = "English") -> dict | None:
     return _groq_json([
-        {"role": "system", "content": _COMMON},
+        {"role": "system", "content": _COMMON + _lang_rule(language)},
         {"role": "user", "content":
          f"EXAM: {exam}\nLEARNER ALREADY KNOWS: {bg}\n"
-         + (f"RESEARCHED SCOPE:\n{scope}\n" if scope else "")
+         + (f"OFFICIAL SYLLABUS (base the whole course on THIS material — cover "
+            f"exactly these topics, nothing generic):\n{scope}\n" if scope else "")
          + "Design the course outline as JSON:\n"
          '{"title": "...", "subtitle": "one motivating line", '
          '"units": [{"title": "...", "desc": "one line"}]}\n'
-         "4–6 units, ordered from the learner's current level up to exam level. "
-         "Each unit = a coherent theme. JSON only."}],
+         "4–6 units, ordered from the learner's current level up to exam level, "
+         "each unit a coherent theme drawn from the syllabus topics. JSON only."}],
         max_tokens=700)
 
 
-def _build_unit_levels(exam: str, bg: str, unit: dict, scope: str) -> list:
+def _build_unit_levels(exam: str, bg: str, unit: dict, scope: str,
+                       language: str = "English") -> list:
     data = _groq_json([
-        {"role": "system", "content": _COMMON},
+        {"role": "system", "content": _COMMON + _lang_rule(language)},
         {"role": "user", "content":
          f"EXAM: {exam}\nLEARNER KNOWS: {bg}\n"
          f"UNIT: {unit.get('title')} — {unit.get('desc','')}\n"
-         + (f"CONTEXT:\n{scope[:1500]}\n" if scope else "")
+         + (f"SYLLABUS CONTEXT (draw the questions from this real material):\n"
+            f"{scope[:2200]}\n" if scope else "")
          + "Create the levels for THIS unit as JSON:\n"
          '{"levels": [{"title": "...", "questions": ['
          '{"q": "question text (use ``` for code)", "type": "mc", '
          '"options": ["a","b","c","d"], "answer": 0, "explain": "why"}, '
          '{"q": "...", "type": "input", "answer": "42", "explain": "..."}]}]}\n'
          "3–4 levels, each with 5–6 questions, difficulty rising within and "
-         "across levels. Mix multiple-choice (\"mc\", answer = index of correct "
-         "option) and short \"input\" questions. Include real problem-solving "
-         "and, where relevant, small code/logic questions. Every question needs "
-         "a correct answer and a one-sentence explanation. JSON only."}],
+         "across levels. Questions must test THIS unit's real syllabus topics. "
+         "Mix multiple-choice (\"mc\", answer = index of correct option) and "
+         "short \"input\" questions. Include real problem-solving and, where "
+         "relevant, small code/logic questions. Every question needs a correct "
+         "answer and a one-sentence explanation. JSON only."}],
         max_tokens=3200)
     levels = (data or {}).get("levels") or []
     # sanitize
@@ -159,12 +171,25 @@ def build_course(exam: str, background: str = "") -> tuple[str, "Path | None"]:
     except Exception:
         pass
 
-    aid = _act("search", f"Researching what the {exam[:36]} covers")
-    scope = _research_scope(exam)
-    _act_done(aid, "scope gathered" if scope else "using general knowledge")
+    # Built-in official syllabus takes precedence over web research — the
+    # course is grounded in the REAL exam material and its language.
+    language = "English"
+    try:
+        import study_syllabus
+        hit = study_syllabus.match(exam)
+    except Exception:
+        hit = None
+    if hit:
+        syl_title, language, scope = hit
+        aid = _act("note", f"Using the official syllabus: {syl_title[:34]}")
+        _act_done(aid)
+    else:
+        aid = _act("search", f"Researching what the {exam[:36]} covers")
+        scope = _research_scope(exam)
+        _act_done(aid, "scope gathered" if scope else "using general knowledge")
 
     aid = _act("brain", "Designing the course structure")
-    outline = _build_outline(exam, bg, scope)
+    outline = _build_outline(exam, bg, scope, language)
     _act_done(aid)
     if not outline or not outline.get("units"):
         return ("I couldn't design the course right now (my models are busy) — "
@@ -173,10 +198,11 @@ def build_course(exam: str, background: str = "") -> tuple[str, "Path | None"]:
     course = {"title": outline.get("title") or f"{exam} — Study Course",
               "subtitle": outline.get("subtitle") or f"Tailored for: {bg}",
               "units": []}
+    course["lang"] = "he" if language == "Hebrew" else "en"
     units = outline["units"][:6]
     for i, u in enumerate(units, 1):
         aid = _act("note", f"Building unit {i}/{len(units)}: {u.get('title','')[:30]}")
-        levels = _build_unit_levels(exam, bg, u, scope)
+        levels = _build_unit_levels(exam, bg, u, scope, language)
         _act_done(aid, f"{len(levels)} levels")
         if levels:
             course["units"].append({"title": u.get("title", f"Unit {i}"),
