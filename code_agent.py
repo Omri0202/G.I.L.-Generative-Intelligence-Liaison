@@ -62,12 +62,23 @@ edit_file  {"path": "...", "old": "...", "new": "..."}  replace EXACT text (must
 write_file {"path": "...", "content": "..."}            create or overwrite a file
 done       {"summary": "...", "success": true/false}    finish the task
 
+METHOD (how a good engineer works):
+1. UNDERSTAND — use the toolkit: run tests/py_compile, search for the pattern,
+   read the actual code. Confirm every claim against real code, never a guess.
+2. If the task only asks you to LOOK / FIND / REVIEW / DIAGNOSE, STOP after
+   understanding: report a findings list with `done`. Do NOT change anything.
+3. If asked to CHANGE, make the smallest correct edit, then VERIFY it (pytest /
+   py_compile) and read the result before you finish.
+
 RULES:
 - INVESTIGATE first: read the exact code (read_file/search) before editing.
   Never edit a file you have not read this session.
 - Smallest change that actually fixes the problem. Match the existing style.
 - Every edit MUST change real behaviour. NEVER propose cosmetic or no-op edits
   (e.g. adding an unused `except X as e`, re-quoting, or reformatting only).
+- `old` in an edit MUST include enough surrounding lines to be BOTH unique and
+  self-explanatory — never match a bare value like `false`, `0`, `True` or `}`;
+  include the key/line it belongs to (e.g. `"voice_enabled": false`).
 - Your edits are AUTO-CHECKED before they apply: the proposed file is syntax-
   checked (py_compile / JSON parse / bracket balance) and rejected if it would
   break, and auto-reverted if a landed change breaks the file. So get it right —
@@ -575,6 +586,92 @@ def _known_locations() -> str:
     return "\n".join(lines)
 
 
+# ── Investigator's toolkit — the "basic commands" GIL adapts per task ───────────
+# Concrete first moves in GIL's own tool vocabulary, so a smaller model still
+# knows HOW to look before it touches anything. GIL adapts the patterns to the
+# real subject of the task.
+_PLAYBOOK = {
+    "bugs": [
+        'run {"command":"python -m pytest -q"}  — do the tests already fail? read the failures first',
+        'run {"command":"python -m py_compile <file>"}  — syntax / import-time errors',
+        r'search {"pattern":"except\s*:|except Exception:\s*$"}  — bare / silent excepts',
+        r'search {"pattern":"except[^\n]*:\s*\n\s*pass"}  — swallowed exceptions',
+        r'search {"pattern":"==\s*None|!=\s*None"}  — should be `is` / `is not None`',
+        r'search {"pattern":"def \w+\([^)]*=\s*(\[\]|\{\})"}  — mutable default argument',
+        r'search {"pattern":"TODO|FIXME|HACK|XXX|BUG"}  — known-unfinished / risky spots',
+    ],
+    "error": [
+        'search the EXACT error text / exception name, then read the file around each hit',
+        'run {"command":"git log --oneline -15"}  and  git diff  — what changed recently',
+        'run {"command":"python -m py_compile <file>"}  — confirm it imports/compiles',
+        'reproduce it: run the smallest command that triggers it, then read the traceback',
+    ],
+    "refactor": [
+        r'search {"pattern":"def \w+"}  — map the functions before touching them',
+        'read the WHOLE file first; keep behaviour identical; change the smallest slice',
+        'run {"command":"python -m pytest -q"} before AND after — the result must not change',
+    ],
+    "perf": [
+        r'search {"pattern":"for .* in .*:\s*\n\s*for "}  — nested loops (hot spots)',
+        'measure before optimising; change only speed, never behaviour',
+        'run {"command":"python -m pytest -q"} after — behaviour must be identical',
+    ],
+    "tests": [
+        'run {"command":"python -m pytest -q"}  — see the current state',
+        r'search {"pattern":"def test_"}  — mirror the existing test style',
+        'write tests that FAIL first, then confirm they pass after the fix',
+    ],
+}
+_PLAYBOOK_KEYS = (
+    ("error",    ("traceback", "exception", "stack trace", "error", "crash", "throws")),
+    ("perf",     ("slow", "perf", "optimi", "speed", "faster", "lag")),
+    ("tests",    ("test", "coverage", "pytest")),
+    ("refactor", ("refactor", "clean up", "cleanup", "simplif", "tidy", "readab")),
+    ("bugs",     ("bug", "wrong", "broken", "issue", "problem", "fix")),
+)
+
+
+def _task_mode(task: str) -> str:
+    """'investigate' → report findings and change nothing; 'change' → edit (with
+    approval). Looking/finding/reviewing without an action verb is read-only."""
+    t = task.lower()
+    look = ("look for", "look at", "look into", "find ", "what bug", "any bug",
+            "are there", "review", "audit", "check for", "diagnose", "investigate",
+            "what's wrong", "whats wrong", "analyse", "analyze", "report",
+            "list the", "explore", "examine", "understand", "tell me", "show me",
+            "how does", "what does", "what is", "whats in", "what's in")
+    do = ("fix", "change", "add ", "implement", "refactor", "update", "make ",
+          "create", "write", "rename", "remove", "delete", "enable", "disable",
+          "set ", "install", "build ", "improve", "upgrade", "polish", "redesign")
+    if any(w in t for w in look) and not any(w in t for w in do):
+        return "investigate"
+    return "change"
+
+
+def _playbook_block(task: str) -> str:
+    """Build the toolkit + working-mode text injected into the agent's context."""
+    t = task.lower()
+    key = "bugs"
+    for k, words in _PLAYBOOK_KEYS:
+        if any(w in t for w in words):
+            key = k
+            break
+    moves = "\n".join("  • " + m for m in _PLAYBOOK[key])
+    block = ("INVESTIGATOR'S TOOLKIT — proven first moves for this task (adapt the "
+             "patterns to the ACTUAL subject; these are read-only and free):\n" + moves +
+             "\nAlways OPEN and read the code before claiming anything — never trust a "
+             "filename or a single search hit on its own.")
+    if _task_mode(task) == "investigate":
+        block += ("\n\nMODE — INVESTIGATE ONLY: do NOT edit or write any files. Use "
+                  "read-only tools, then finish with `done` whose summary is a findings "
+                  "LIST — for each item: file:line, why it's a problem, and the fix you'd "
+                  "suggest. Change code only if the user explicitly asks you to fix it.")
+    else:
+        block += ("\n\nMODE — CHANGE: after investigating, make the smallest correct "
+                  "change, then VERIFY with pytest/py_compile before `done`.")
+    return block
+
+
 def _lang_for(path: str) -> str:
     ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path else ""
     return {".py": "python", ".js": "javascript", ".ts": "typescript",
@@ -626,11 +723,13 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                  f"TASK:\n{task[:2500]}\n\n"
                  f"KNOWN LOCATIONS (use these — do NOT guess paths):\n"
                  f"{_known_locations()}\n\n"
-                 f"Start by listing/reading the relevant known location above." +
+                 f"{_playbook_block(task)}\n\n"
+                 f"Start with the toolkit above on the relevant known location." +
                  (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +
                   "\n".join(hints) if hints else "")}]
 
     code_mode = bool(getattr(eng, "_code_mode", False))
+    task_mode = _task_mode(task)      # 'investigate' (report only) vs 'change'
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
     activity.set_group("Coding agent")
     edits_made, verified = 0, False
@@ -685,6 +784,16 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             # GIL syntax-checks the proposed result and rejects no-op/broken
             # edits himself, re-planning instead of asking you to approve junk.
             if tool in ("edit_file", "write_file"):
+                # investigation tasks are READ-ONLY — never change files while the
+                # user only asked to look/find/review (help, don't damage).
+                if task_mode == "investigate":
+                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                    messages.append({"role": "user", "content":
+                        "RESULT:\nThis is an INVESTIGATE-only task — do NOT edit files. "
+                        "Keep gathering evidence with read-only tools, then finish with "
+                        "`done` and report your findings as a list (file:line, the "
+                        "problem, the suggested fix)."})
+                    continue
                 reject = _precheck_change(tool, args)
                 if reject:
                     _p = Path(str(args.get("path", ""))).name or "the file"
