@@ -3918,6 +3918,13 @@ class GILWindow(ctk.CTk):
         if callable(fn):
             fn(block)
 
+    def set_working(self, on: bool) -> None:
+        """Raise/lower the persistent working spinner + timer in the web chat."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "set_working", None)
+        if callable(fn):
+            fn(on)
+
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
             self._float_btn = _FloatingChatButton(self, self._open_chat_window)

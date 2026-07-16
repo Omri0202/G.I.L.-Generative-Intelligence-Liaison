@@ -428,6 +428,10 @@ class WebChat:
         """Push a Claude-Code-style tool-call block to the terminal UI."""
         self._push("gil.toolBlock", block)
 
+    def set_working(self, on: bool) -> None:
+        """Pin the working spinner + timer for a whole coding-agent run."""
+        self._push("gil.setWorking", bool(on))
+
     def _rpc_open_path(self, p=""):
         try:
             import os

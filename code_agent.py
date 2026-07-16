@@ -803,6 +803,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     code_mode = bool(getattr(eng, "_code_mode", False))
     task_mode = _task_mode(task)      # 'investigate' (report only) vs 'change'
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
+    if hasattr(window, "set_working"):
+        window.set_working(True)      # pin the spinner + "working Ns" for the whole run
     activity.set_group("Coding agent")
     edits_made, verified = 0, False
     bad_replies = 0
@@ -868,12 +870,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     continue
                 reject = _precheck_change(tool, args)
                 if reject:
-                    _p = Path(str(args.get("path", ""))).name or "the file"
-                    activity.instant("code", "Rejected my own edit", reject[:90],
+                    # Silent — the user never sees a change that failed a check.
+                    activity.instant("code", "Self-check re-plan", reject[:90],
                                      status="fail")
-                    window.add_chat_message(
-                        f"I caught a problem with my own edit to `{_p}` — {reject}. "
-                        "Re-planning instead of applying it.", "gil")
                     messages.append({"role": "assistant", "content": json.dumps(action)})
                     messages.append({"role": "user", "content":
                         f"RESULT:\nSELF-CHECK REJECTED your {tool}: {reject}. "
@@ -882,28 +881,21 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     continue
 
             # ---- Reviewer agent: an independent, fresh-context second opinion ----
-            # A separate agent reads the file + the proposed change and judges it.
-            # A confident "reject" makes GIL re-plan; a "warn" is surfaced to you.
-            review_note = ""
+            # Runs BEFORE the user is asked. If the change isn't a clean "approve",
+            # GIL re-plans SILENTLY — the user only ever sees a change that passed
+            # every automated check (the user has no way to judge code themselves).
             if tool in ("edit_file", "write_file"):
-                rid = activity.start("brain", "Reviewer checking the change")
+                rid = activity.start("brain", "Reviewing the change")
                 verdict = _review_change(task, tool, args)
                 v, reason = verdict["verdict"], verdict["reason"]
                 activity.done(rid, f"{v}: {reason[:70]}")
-                if v == "reject":
-                    _p = Path(str(args.get("path", ""))).name or "the file"
-                    window.add_chat_message(
-                        f"My reviewer flagged this change to `{_p}` — {reason}. "
-                        "Re-planning instead of applying it.", "gil")
+                if v in ("reject", "warn"):
                     messages.append({"role": "assistant", "content": json.dumps(action)})
                     messages.append({"role": "user", "content":
-                        f"RESULT:\nREVIEWER REJECTED your {tool}: {reason}. Reconsider — "
-                        "re-read the code and propose a correct change, or move on."})
+                        f"RESULT:\nAUTOMATED REVIEW did not pass this {tool} ({v}): {reason}. "
+                        "Silently reconsider — re-read the code and propose a change that is "
+                        "clearly correct and complete, or move on. Do not repeat this change."})
                     continue
-                if v == "warn":
-                    review_note = f"\n\n**Reviewer — caution:** {reason}"
-                elif reason and "unavailable" not in reason:
-                    review_note = f"\n\n**Reviewer:** looks correct — {reason}"
 
             # ---- execute the tool ----
             needs_approval = False
@@ -930,7 +922,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             if needs_approval:
                 aid = activity.start("code", f"Waiting for approval: {why}")
                 approved = _ask_approval(
-                    eng, f"*{why}*" + (f"\n\n{desc}" if desc else "") + review_note,
+                    eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
                     diff=appr_diff, file=appr_file)
                 if not approved:
                     activity.fail(aid, "declined by user")
@@ -1003,6 +995,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         _a.clear_group()
         eng._agent_gate = None
         eng._agent_running = False
+        if hasattr(window, "set_working"):
+            window.set_working(False)   # spinner + timer stop only now, at the end
         try:
             from ears import unmute
             unmute()

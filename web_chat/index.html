@@ -242,6 +242,22 @@ body.codemode #typing::before{content:"/";color:var(--accent);font-family:var(--
   font-weight:700;font-size:14px;animation:cli 480ms steps(1,end) infinite;
   display:inline-block;width:12px;}
 @keyframes cli{0%{content:"/";}25%{content:"\2014";}50%{content:"\\";}75%{content:"|";}}
+
+/* ── Claude-style shimmer / gloss for loading text ──
+   A warm highlight sweeps left→right across the text itself (clipped to the
+   glyphs), base muted gray-cream with an amber-tinted light wave. */
+@keyframes shimmer{0%{background-position:210% 0;}100%{background-position:-110% 0;}}
+body.codemode #worktimer,
+body.codemode .msg.gil .body.shimmer{
+  background:linear-gradient(100deg,
+    #8A857B 36%, #EAD9BC 48%, #F2C98A 52%, #8A857B 64%);
+  background-size:220% 100%;
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;color:transparent;
+  animation:shimmer 1.7s linear infinite;
+}
+body.codemode .msg.gil .body.shimmer::before{  /* keep the amber status dot solid */
+  -webkit-text-fill-color:initial;background:var(--accent);}
 body.codemode #worktimer{font-family:var(--cmfont);}
 
 /* ── tool-call blocks — clean terminal cards with a thread guide ── */
@@ -642,6 +658,7 @@ const gil = {
   /* ---- messages ---- */
   addMessage(m) {
     $("welcome").style.display = "none";
+    this.clearShimmer();       // the previous "working…" line settles
     this.hideTyping();
     const wrap = document.createElement("div");
     if (m.sender === "user") {
@@ -660,6 +677,11 @@ const gil = {
       const body = wrap.querySelector(".body");
       if (m.stream === false) { body.innerHTML = md(m.text); scrollDown(); }
       else this.streamInto(body, m.text);
+      // in the terminal, an active narration line shimmers until the next step
+      if (this._working && document.body.classList.contains("codemode") &&
+          !/^\s*\*\*(Solved|Stopped)/.test(m.text || "")) {
+        body.classList.add("shimmer");
+      }
     }
     wrap.dataset.raw = m.text;
   },
@@ -741,7 +763,23 @@ const gil = {
   },
 
   showTyping() { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); scrollDown(true); },
-  hideTyping() { $("typing").classList.remove("on"); this.scheduleStop(); },
+  hideTyping() {
+    // While an agent is working, the spinner + timer stay pinned to the bottom
+    // even as narration/tool blocks stream in (each of those calls hideTyping).
+    if (!this._working) $("typing").classList.remove("on");
+    this.scheduleStop();
+  },
+  // sticky working state — Python raises it for the whole coding-agent run
+  _working: false,
+  setWorking(on) {
+    this._working = !!on;
+    if (on) { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); }
+    else { this.clearShimmer(); $("typing").classList.remove("on"); this.scheduleStop(); }
+  },
+  clearShimmer() {
+    document.querySelectorAll(".msg.gil .body.shimmer")
+      .forEach(e => e.classList.remove("shimmer"));
+  },
 
   /* ---- live work timer (Claude-style "working 12s") ----
      Runs continuously from the first sign of work until GIL is truly idle —
@@ -751,7 +789,8 @@ const gil = {
      gaps between an ack message, the research starting, and the final answer. */
   _timerStart: 0, _timerId: null, _stopT: null,
   busy() {
-    return $("typing").classList.contains("on")
+    return this._working
+        || $("typing").classList.contains("on")
         || (this.running && this.running.size > 0)
         || !!this._approvalOpen;
   },
@@ -911,6 +950,7 @@ const gil = {
     scrollDown();
   },
   toolBlock(b) {
+    this.clearShimmer();       // the narration that led to this tool settles
     this.hideTyping();
     const okc = b.ok ? "ok" : "fail";
     // action badge: label + colour-group (read=slate, write=green, run=indigo)
