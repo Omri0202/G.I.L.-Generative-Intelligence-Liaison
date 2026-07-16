@@ -247,14 +247,13 @@ body.codemode #typing::before{content:"/";color:var(--accent);font-family:var(--
    A warm highlight sweeps left→right across the text itself (clipped to the
    glyphs), base muted gray-cream with an amber-tinted light wave. */
 @keyframes shimmer{0%{background-position:210% 0;}100%{background-position:-110% 0;}}
-body.codemode #worktimer,
 body.codemode .msg.gil .body.shimmer{
   background:linear-gradient(100deg,
     #8A857B 36%, #EAD9BC 48%, #F2C98A 52%, #8A857B 64%);
   background-size:220% 100%;
   -webkit-background-clip:text;background-clip:text;
   -webkit-text-fill-color:transparent;color:transparent;
-  animation:shimmer 1.7s linear infinite;
+  animation:shimmer 2.6s linear infinite;
 }
 body.codemode .msg.gil .body.shimmer::before{  /* keep the amber status dot solid */
   -webkit-text-fill-color:initial;background:var(--accent);}
