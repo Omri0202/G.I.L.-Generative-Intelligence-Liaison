@@ -68,3 +68,23 @@ def test_precheck_change_flow():
     # good, meaningful, unique edit → allowed
     assert ca._precheck_change("edit_file",
         {"path": str(f), "old": "return x", "new": "return x + 1"}) is None
+
+
+# ── reviewer agent + model selection ──────────────────────────────────────────
+
+def test_json_parser_handles_verdicts_and_actions():
+    assert ca._extract_json('{"verdict":"reject","reason":"off task"}', "verdict")["verdict"] == "reject"
+    assert ca._extract_json('note: {"verdict":"warn","reason":"x"} end', "verdict")["verdict"] == "warn"
+    assert ca._extract_action('```json\n{"tool":"done","args":{}}\n```')["tool"] == "done"
+
+def test_reviewer_degrades_gracefully_without_keys(monkeypatch):
+    # no API keys → reviewer must not crash; it approves with an 'unavailable' note
+    monkeypatch.setattr(ca, "_keys", lambda: [])
+    out = ca._review_change("fix the bug", "edit_file",
+                            {"path": "x.py", "old": "a", "new": "b"})
+    assert out["verdict"] == "approve" and "unavailable" in out["reason"]
+
+def test_agent_models_defaults_to_safe_fallback():
+    models = ca._agent_models()
+    assert models[-1] == "llama-3.1-8b-instant"
+    assert "llama-3.3-70b-versatile" in models

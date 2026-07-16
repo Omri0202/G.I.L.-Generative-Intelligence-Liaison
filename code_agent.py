@@ -99,25 +99,47 @@ def _keys() -> list[str]:
                         os.getenv("GROQ_API_KEY_2", "")) if k]
 
 
-def _extract_action(raw: str) -> dict | None:
-    """Pull one JSON action object out of a model reply, tolerantly.
-    Handles ```json fences, leading prose, and multiple/!nested braces by
-    scanning for the first brace-balanced span that parses and has a 'tool'."""
+# The "smart" tier GIL reasons with. Change `agent_model` in data/gil_config.json
+# to try a stronger free Groq model WITHOUT a rebuild — e.g.
+#   "moonshotai/kimi-k2-instruct"   (strong at agentic coding)
+#   "openai/gpt-oss-120b"           (strong general reasoning)
+#   "qwen/qwen3-32b"                (solid, fast)
+# It's always tried FIRST and falls back to the proven Llama models on any error.
+_FALLBACK_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
+
+
+def _agent_models() -> tuple[str, ...]:
+    """Model try-order: the user's configured model first, then safe fallbacks."""
+    try:
+        cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")
+                         .read_text(encoding="utf-8"))
+        pick = str(cfg.get("agent_model", "")).strip()
+    except Exception:
+        pick = ""
+    order = ([pick] if pick else []) + list(_FALLBACK_MODELS)
+    seen, out = set(), []
+    for m in order:
+        if m and m not in seen:
+            seen.add(m); out.append(m)
+    return tuple(out)
+
+
+def _extract_json(raw: str, must_have: str = "tool") -> dict | None:
+    """Pull one JSON object out of a model reply, tolerantly. Handles ```json
+    fences, leading prose, and nested braces by scanning for the first brace-
+    balanced span that parses and contains `must_have`."""
     if not raw:
         return None
     txt = raw.strip()
-    # strip a ```json … ``` (or plain ```) fence if present
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", txt)
     if fence:
         txt = fence.group(1).strip()
-    # fast path: the whole thing is the object
     try:
         obj = json.loads(txt)
-        if isinstance(obj, dict) and "tool" in obj:
+        if isinstance(obj, dict) and must_have in obj:
             return obj
     except Exception:
         pass
-    # scan for balanced {...} spans and return the first that parses w/ a tool
     for start in (i for i, c in enumerate(txt) if c == "{"):
         depth, instr, esc = 0, False, False
         for j in range(start, len(txt)):
@@ -135,7 +157,7 @@ def _extract_action(raw: str) -> dict | None:
                 if depth == 0:
                     try:
                         obj = json.loads(txt[start:j + 1])
-                        if isinstance(obj, dict) and "tool" in obj:
+                        if isinstance(obj, dict) and must_have in obj:
                             return obj
                     except Exception:
                         pass
@@ -143,11 +165,14 @@ def _extract_action(raw: str) -> dict | None:
     return None
 
 
-def _llm(messages: list) -> dict | None:
-    payload = {"model": "llama-3.3-70b-versatile", "messages": messages,
-               "temperature": 0.2, "max_tokens": 1600,
-               "response_format": {"type": "json_object"}}
-    for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+def _llm_json(messages: list, must_have: str = "tool",
+              models: tuple[str, ...] | None = None,
+              temperature: float = 0.2) -> dict | None:
+    """One structured-JSON call to Groq with model + key fallback. Returns the
+    first reply that parses to a dict containing `must_have`, else None."""
+    payload = {"messages": messages, "temperature": temperature,
+               "max_tokens": 1600, "response_format": {"type": "json_object"}}
+    for model in (models or _agent_models()):
         payload["model"] = model
         for key in _keys():
             try:
@@ -157,7 +182,7 @@ def _llm(messages: list) -> dict | None:
                                   timeout=45)
                 if r.status_code == 429:
                     continue
-                # json_object mode can 400 on some models — retry without it
+                # json_object mode (or an unknown model) can 400 — retry plainly
                 if r.status_code == 400 and "response_format" in payload:
                     p2 = {k: v for k, v in payload.items() if k != "response_format"}
                     r = requests.post(_GROQ_URL, json=p2,
@@ -166,13 +191,21 @@ def _llm(messages: list) -> dict | None:
                                       timeout=45)
                 r.raise_for_status()
                 raw = r.json()["choices"][0]["message"]["content"]
-                act = _extract_action(raw)
-                if act:
-                    return act
-                log.debug("agent llm: no parseable action in reply: %.160s", raw)
+                obj = _extract_json(raw, must_have)
+                if obj:
+                    return obj
+                log.debug("agent llm: no '%s' in reply: %.160s", must_have, raw)
             except Exception as exc:
-                log.debug("agent llm attempt failed: %s", exc)
+                log.debug("agent llm attempt failed (%s): %s", model, exc)
     return None
+
+
+def _extract_action(raw: str) -> dict | None:
+    return _extract_json(raw, "tool")
+
+
+def _llm(messages: list) -> dict | None:
+    return _llm_json(messages, must_have="tool")
 
 
 def _is_free_command(cmd: str) -> bool:
@@ -477,6 +510,45 @@ def _verify_or_revert(path: str, ok_result: str) -> str:
         return (f"ERROR: reverted — the change broke {p.name} ({broke})."
                 + ("" if reverted else " (could not auto-restore — check backups)"))
     return ok_result
+
+
+# ── Reviewer agent — an independent second opinion before you approve ───────────
+
+_REVIEW_SYSTEM = """You are a strict, independent senior code reviewer. You are \
+shown the TASK, the CURRENT file, and a PROPOSED change to it. Judge ONLY whether \
+the change is correct, on-task, and safe. Reply with ONE JSON object, nothing else:
+{"verdict":"approve"|"warn"|"reject","reason":"<one short sentence>"}
+- approve: it correctly advances the task and is safe.
+- warn: it may work but has a real concern the user should see first.
+- reject: it is clearly wrong, off-task, or dangerous.
+Only choose "reject" when you are confident it is wrong. Keep the reason concrete."""
+
+
+def _review_change(task: str, tool: str, args: dict) -> dict:
+    """Second, fresh-context agent that critiques a proposed edit before the
+    user sees it. Returns {"verdict","reason"}; never blocks on its own errors."""
+    path = str(args.get("path", ""))
+    p = Path(path)
+    try:
+        current = p.read_text(encoding="utf-8", errors="replace") if p.exists() else "(new file)"
+    except Exception:
+        current = "(unreadable)"
+    if tool == "edit_file":
+        change = (f"EDIT {path}\n--- remove ---\n{str(args.get('old',''))[:900]}\n"
+                  f"--- insert ---\n{str(args.get('new',''))[:900]}")
+    else:
+        change = f"WRITE {path}\n--- new content ---\n{str(args.get('content',''))[:1400]}"
+    msgs = [{"role": "system", "content": _REVIEW_SYSTEM},
+            {"role": "user", "content":
+             f"TASK:\n{task[:900]}\n\nCURRENT FILE ({p.name}):\n{current[:4500]}\n\n"
+             f"PROPOSED CHANGE:\n{change}"}]
+    out = _llm_json(msgs, must_have="verdict", temperature=0.0)
+    if not out:
+        return {"verdict": "approve", "reason": "(reviewer unavailable)"}
+    v = str(out.get("verdict", "approve")).lower()
+    if v not in ("approve", "warn", "reject"):
+        v = "approve"
+    return {"verdict": v, "reason": str(out.get("reason", ""))[:200]}
 
 
 def _precheck_change(tool: str, args: dict) -> str | None:
@@ -809,6 +881,30 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                         "then propose a correct, meaningful edit — or move on."})
                     continue
 
+            # ---- Reviewer agent: an independent, fresh-context second opinion ----
+            # A separate agent reads the file + the proposed change and judges it.
+            # A confident "reject" makes GIL re-plan; a "warn" is surfaced to you.
+            review_note = ""
+            if tool in ("edit_file", "write_file"):
+                rid = activity.start("brain", "Reviewer checking the change")
+                verdict = _review_change(task, tool, args)
+                v, reason = verdict["verdict"], verdict["reason"]
+                activity.done(rid, f"{v}: {reason[:70]}")
+                if v == "reject":
+                    _p = Path(str(args.get("path", ""))).name or "the file"
+                    window.add_chat_message(
+                        f"My reviewer flagged this change to `{_p}` — {reason}. "
+                        "Re-planning instead of applying it.", "gil")
+                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                    messages.append({"role": "user", "content":
+                        f"RESULT:\nREVIEWER REJECTED your {tool}: {reason}. Reconsider — "
+                        "re-read the code and propose a correct change, or move on."})
+                    continue
+                if v == "warn":
+                    review_note = f"\n\n**Reviewer — caution:** {reason}"
+                elif reason and "unavailable" not in reason:
+                    review_note = f"\n\n**Reviewer:** looks correct — {reason}"
+
             # ---- execute the tool ----
             needs_approval = False
             desc, appr_diff, appr_file = "", None, None
@@ -833,8 +929,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
 
             if needs_approval:
                 aid = activity.start("code", f"Waiting for approval: {why}")
-                approved = _ask_approval(eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
-                                         diff=appr_diff, file=appr_file)
+                approved = _ask_approval(
+                    eng, f"*{why}*" + (f"\n\n{desc}" if desc else "") + review_note,
+                    diff=appr_diff, file=appr_file)
                 if not approved:
                     activity.fail(aid, "declined by user")
                     messages.append({"role": "assistant", "content": json.dumps(action)})
