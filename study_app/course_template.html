@@ -104,6 +104,22 @@ body[dir="rtl"] .node.off2{transform:translateX(-72px);}
 .hearts{color:var(--fail);font-size:17px;letter-spacing:1px;}
 .qbody{padding:8px 24px 20px;overflow-y:auto;flex:1;}
 .qkind{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--c2);margin-bottom:10px;}
+.learnbadge{font-weight:800;font-size:15px;color:var(--c3);}
+.teach{font-size:16.5px;line-height:1.7;font-weight:500;}
+.teach h3{font-size:18px;margin:14px 0 6px;} .teach h4{font-size:16px;margin:12px 0 4px;}
+.teach p{margin:0 0 12px;} .teach ul{margin:4px 0 12px;padding-inline-start:22px;}
+.teach li{margin-bottom:5px;} .teach b{color:var(--ink);font-weight:800;}
+.teach code{background:#fff;border:2px solid var(--line);border-radius:7px;padding:1px 6px;font-size:.85em;}
+.teach pre{background:#2B2824;color:#F5EEDD;border-radius:12px;padding:12px 14px;overflow-x:auto;
+  font-family:"Cascadia Code",Consolas,monospace;font-size:13px;margin:12px 0;direction:ltr;text-align:left;}
+/* multi-select checkbox affordance */
+.opt.multi{padding-inline-start:46px;position:relative;}
+.opt.multi::before{content:"";position:absolute;inset-inline-start:14px;top:50%;transform:translateY(-50%);
+  width:22px;height:22px;border:3px solid var(--line);border-radius:7px;background:#fff;}
+.opt.multi.sel::before{background:var(--c2);}
+.opt.multi.sel::after{content:"✓";position:absolute;inset-inline-start:19px;top:50%;transform:translateY(-50%);
+  color:#fff;font-weight:900;font-size:14px;}
+.opt.multi.right::before{background:var(--ok);} .opt.multi.wrong::before{background:var(--fail);}
 .qtext{font-size:20px;font-weight:700;line-height:1.5;margin-bottom:22px;white-space:pre-wrap;}
 .qtext code{background:#fff;border:2px solid var(--line);border-radius:7px;padding:1px 6px;font-size:.85em;}
 .qbody pre{background:#2B2824;color:#F5EEDD;border-radius:12px;padding:12px 14px;overflow-x:auto;
@@ -217,32 +233,64 @@ function renderPath(){
 
 let cur=null;
 function openLesson(idx){
-  const qs=(LEVELS[idx].ref.questions||[]).filter(q=>q&&q.q);
+  const lv=LEVELS[idx].ref;
+  const qs=(lv.questions||[]).filter(q=>q&&q.q);
   if(!qs.length){alert("No questions here yet.");return;}
-  cur={idx,qs,qi:0,correct:0,hearts:3};
-  $("overlay").classList.add("on"); drawQ();
+  cur={idx,qs,qi:0,correct:0,hearts:3,teach:lv.teach||""};
+  $("overlay").classList.add("on");
+  if(cur.teach) drawTeach(); else drawQ();   // teach the material FIRST
 }
 function closeLesson(){$("overlay").classList.remove("on");cur=null;}
 
+/* markdown-ish render for the teaching lesson */
+function mdmini(t){
+  t=esc(t);
+  t=t.replace(/```([\s\S]*?)```/g,(m,c)=>"<pre>"+c.trim()+"</pre>");
+  t=t.replace(/`([^`]+)`/g,"<code>$1</code>");
+  t=t.replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");
+  t=t.replace(/^### (.*)$/gm,"<h4>$1</h4>").replace(/^## (.*)$/gm,"<h3>$1</h3>");
+  t=t.replace(/((?:^[-*] .*\n?)+)/gm,m=>"<ul>"+m.trim().split(/\n/).map(l=>"<li>"+l.replace(/^[-*] /,"")+"</li>").join("")+"</ul>");
+  t=t.split(/\n{2,}/).map(p=>/^<(h\d|ul|pre)/.test(p.trim())?p:"<p>"+p.replace(/\n/g,"<br>")+"</p>").join("");
+  return t;
+}
+function drawTeach(){
+  const he=COURSE.lang==="he", lv=LEVELS[cur.idx].ref;
+  $("lesson").innerHTML=
+    `<div class="lhead"><button class="close" onclick="closeLesson()">✕</button>`+
+    `<div class="learnbadge">📘 ${he?"למד":"Learn"}</div></div>`+
+    `<div class="qbody"><div class="qkind" style="color:var(--c3)">${esc(lv.title||"")}</div>`+
+    `<div class="teach">${mdmini(cur.teach)}</div></div>`+
+    `<div class="lfoot"><button class="chunk p" onclick="drawQ()">${he?"תרגול ▶":"Start practice ▶"}</button></div>`;
+}
+
 function drawQ(){
-  const c=cur,q=c.qs[c.qi],opts=q.options||[],isInput=q.type==="input"||!opts.length;
+  const c=cur,q=c.qs[c.qi],opts=q.options||[];
+  const isMulti=q.type==="multi"&&opts.length;
+  const isInput=!isMulti&&(q.type==="input"||!opts.length);
   const pct=Math.round(c.qi/c.qs.length*100);
   const he=COURSE.lang==="he";
+  const kind=isMulti?(he?"בחר את כל הנכונות":"Select all that apply")
+    :(he?"שאלה":"Question")+" "+(c.qi+1)+"/"+c.qs.length;
   $("lesson").innerHTML=
     `<div class="lhead"><button class="close" onclick="closeLesson()">✕</button>`+
     `<div class="hpbar"><i style="width:${pct}%"></i></div>`+
     `<div class="hearts">${"❤".repeat(c.hearts)}${"🖤".repeat(3-c.hearts)}</div></div>`+
-    `<div class="qbody"><div class="qkind">${he?"שאלה":"Question"} ${c.qi+1}/${c.qs.length}</div>`+
+    `<div class="qbody"><div class="qkind">${kind}</div>`+
     `<div class="qtext">${qhtml(q.q)}</div>`+
     (isInput?`<input class="answer" id="ans" placeholder="${he?"הקלד תשובה…":"Type your answer…"}" autocomplete="off">`
-      :`<div class="opts" id="opts">`+opts.map((o,i)=>`<button class="opt" data-i="${i}">${qhtml(o)}</button>`).join("")+`</div>`)+
+      :`<div class="opts" id="opts">`+opts.map((o,i)=>`<button class="opt${isMulti?" multi":""}" data-i="${i}">${qhtml(o)}</button>`).join("")+`</div>`)+
     `<div class="feedback" id="fb"></div></div>`+
     `<div class="lfoot"><button class="chunk g" id="check" disabled>${he?"בדוק":"Check"}</button></div>`;
-  let sel=null;
+  let sel=null; const picked=new Set();
   if(isInput){const inp=$("ans");
     inp.oninput=()=>$("check").disabled=!inp.value.trim();
     inp.onkeydown=e=>{if(e.key==="Enter"&&inp.value.trim())doCheck(inp.value.trim());};
     setTimeout(()=>inp.focus(),50); $("check").onclick=()=>doCheck(inp.value.trim());
+  }else if(isMulti){$("opts").querySelectorAll(".opt").forEach(b=>b.onclick=()=>{
+    const i=+b.dataset.i; if(picked.has(i)){picked.delete(i);b.classList.remove("sel");}
+    else{picked.add(i);b.classList.add("sel");}
+    $("check").disabled=picked.size===0;});
+    $("check").onclick=()=>doCheck([...picked].sort((a,b)=>a-b));
   }else{$("opts").querySelectorAll(".opt").forEach(b=>b.onclick=()=>{
     $("opts").querySelectorAll(".opt").forEach(x=>x.classList.remove("sel"));
     b.classList.add("sel");sel=+b.dataset.i;$("check").disabled=false;});
@@ -250,16 +298,27 @@ function drawQ(){
 }
 
 function doCheck(given){
-  const c=cur,q=c.qs[c.qi],opts=q.options||[],isInput=q.type==="input"||!opts.length,he=COURSE.lang==="he";
-  let ok;
+  const c=cur,q=c.qs[c.qi],opts=q.options||[],he=COURSE.lang==="he";
+  const isMulti=q.type==="multi"&&opts.length;
+  const isInput=!isMulti&&(q.type==="input"||!opts.length);
+  let ok, answerText="";
   if(isInput){const n=s=>String(s).trim().toLowerCase().replace(/\s+/g," ");
     ok=n(given)===n(q.answer)||(Array.isArray(q.answer)&&q.answer.some(a=>n(a)===n(given)));
+    answerText=esc(Array.isArray(q.answer)?q.answer[0]:q.answer);
+  }else if(isMulti){
+    const want=(q.answer||[]).slice().sort((a,b)=>a-b), got=given.slice().sort((a,b)=>a-b);
+    ok=want.length===got.length&&want.every((v,i)=>v===got[i]);
+    $("opts").querySelectorAll(".opt").forEach((n,i)=>{n.style.pointerEvents="none";
+      const correct=want.includes(i), chosen=got.includes(i);
+      if(correct)n.classList.add("right"); else if(chosen)n.classList.add("wrong"); else n.classList.add("dim");});
+    answerText=want.map(i=>esc(opts[i])).join(", ");
   }else{ok=given===q.answer;
     $("opts").querySelectorAll(".opt").forEach((n,i)=>{n.style.pointerEvents="none";
-      if(i===q.answer)n.classList.add("right");else if(i===given)n.classList.add("wrong");else n.classList.add("dim");});}
+      if(i===q.answer)n.classList.add("right");else if(i===given)n.classList.add("wrong");else n.classList.add("dim");});
+    answerText=esc(opts[q.answer]);}
   const fb=$("fb"); fb.className="feedback on "+(ok?"good":"bad");
   fb.innerHTML=(ok?(he?"<b>✓ נכון!</b> ":"<b>✓ Correct!</b> "):(he?"<b>✕ לא בדיוק.</b> ":"<b>✕ Not quite.</b> "))+
-    (q.explain?esc(q.explain):(ok?"":(he?"התשובה: ":"Answer: ")+"<b>"+esc(isInput?q.answer:opts[q.answer])+"</b>"));
+    (q.explain?esc(q.explain):(ok?"":(he?"התשובה: ":"Answer: ")+"<b>"+answerText+"</b>"));
   if(ok)c.correct++;else c.hearts=Math.max(0,c.hearts-1);
   const btn=$("check"); btn.disabled=false;
   btn.textContent=(c.qi<c.qs.length-1)?(he?"המשך":"Continue"):(he?"סיום":"Finish");

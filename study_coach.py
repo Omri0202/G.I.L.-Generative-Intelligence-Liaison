@@ -120,26 +120,39 @@ def _build_unit_levels(exam: str, bg: str, unit: dict, scope: str,
          + (f"SYLLABUS CONTEXT (draw the questions from this real material):\n"
             f"{scope[:2200]}\n" if scope else "")
          + "Create the levels for THIS unit as JSON:\n"
-         '{"levels": [{"title": "...", "questions": ['
-         '{"q": "question text (use ``` for code)", "type": "mc", '
-         '"options": ["a","b","c","d"], "answer": 0, "explain": "why"}, '
-         '{"q": "...", "type": "input", "answer": "42", "explain": "..."}]}]}\n'
-         "3–4 levels, each with 5–6 questions, difficulty rising within and "
-         "across levels. Questions must test THIS unit's real syllabus topics. "
-         "Mix multiple-choice (\"mc\", answer = index of correct option) and "
-         "short \"input\" questions. Include real problem-solving and, where "
-         "relevant, small code/logic questions. Every question needs a correct "
+         '{"levels": [{"title": "...", "teach": "...", "questions": [ ... ]}]}\n'
+         "\"teach\" is a SHORT LESSON (markdown, 80–160 words) that TEACHES the "
+         "level's concept clearly BEFORE any question — explain the idea, give a "
+         "concrete example (use ``` for code/examples), and the key rule to "
+         "remember. The questions then test exactly what the lesson taught.\n"
+         "Each question is ONE of these three types — USE ALL THREE across the "
+         "unit for variety:\n"
+         '1) single choice: {"q":"...","type":"mc","options":["a","b","c","d"],"answer":0,"explain":"..."}\n'
+         '2) multiple correct: {"q":"Select all that apply: ...","type":"multi","options":["a","b","c","d"],"answer":[0,2],"explain":"..."}\n'
+         '3) typed answer: {"q":"...","type":"input","answer":"42","explain":"..."}\n'
+         "5–6 levels in this unit, each with a teach lesson and 5–6 questions, "
+         "difficulty rising within and across levels. Everything must reflect "
+         "THIS unit's real syllabus topics. Every question needs a correct "
          "answer and a one-sentence explanation. JSON only."}],
-        max_tokens=3200)
+        max_tokens=4000)
     levels = (data or {}).get("levels") or []
-    # sanitize
     clean = []
     for lv in levels:
         qs = []
         for q in (lv.get("questions") or []):
             if not q.get("q"):
                 continue
-            if q.get("type") == "input" or not q.get("options"):
+            t = q.get("type")
+            opts = q.get("options") or []
+            if t == "multi" and opts:
+                q["type"] = "multi"
+                ans = q.get("answer", [])
+                if not isinstance(ans, list):
+                    ans = [ans]
+                q["answer"] = sorted({int(a) for a in ans
+                                      if str(a).lstrip("-").isdigit()
+                                      and 0 <= int(a) < len(opts)}) or [0]
+            elif t == "input" or not opts:
                 q["type"] = "input"
                 q.setdefault("answer", "")
             else:
@@ -148,65 +161,114 @@ def _build_unit_levels(exam: str, bg: str, unit: dict, scope: str,
                     q["answer"] = int(q.get("answer", 0))
                 except Exception:
                     q["answer"] = 0
-                q["answer"] = max(0, min(q["answer"], len(q["options"]) - 1))
+                q["answer"] = max(0, min(q["answer"], len(opts) - 1))
             q.setdefault("explain", "")
             qs.append(q)
         if qs:
-            clean.append({"title": lv.get("title", "Level"), "questions": qs})
+            clean.append({"title": lv.get("title", "Level"),
+                          "teach": (lv.get("teach") or "").strip(),
+                          "questions": qs})
     return clean
 
 
+def _verify_scope(exam: str, base_scope: str) -> str:
+    """Research the exam live and merge findings so the material is current and
+    correct — even on top of a built-in syllabus."""
+    try:
+        import research
+        md, _ = research.run(f"{exam} — exact topics, syllabus and question "
+                             f"types a candidate must know; verify and add any "
+                             f"current details.")
+        if md and "couldn't" not in md.lower()[:60]:
+            return (base_scope + "\n\nVERIFIED / ADDITIONAL FROM RESEARCH:\n"
+                    + md[:1800]) if base_scope else md[:2500]
+    except Exception as exc:
+        log.debug("scope verify failed: %s", exc)
+    return base_scope
+
+
 def build_course(exam: str, background: str = "") -> tuple[str, "Path | None"]:
-    """Full interactive-course pipeline. Returns (chat_summary, saved_path)."""
+    """Full interactive-course pipeline (40+ levels, teach-then-test).
+    An empty/generic exam builds the full combined prep course from every
+    built-in syllabus. Returns (chat_summary, saved_path)."""
     exam = (exam or "").strip()
-    if not exam:
-        return ("Which exam should I build a course for? Tell me its name and "
-                "what you already know (e.g. `/study cyber exam | I know Java`).",
-                None)
     bg = background.strip() or "a motivated beginner"
 
+    # ── Study area: no specific exam → combined mega-course of all syllabi ──
+    generic = (not exam or exam.lower() in (
+        "all", "study", "מודיעין", "intelligence", "army", "צבא", "מבחנים",
+        "exams", "everything", "הכל"))
+    try:
+        import study_syllabus
+        segments = []
+        if generic:
+            for _k, title, lang, _trig, text in study_syllabus.SYLLABI:
+                segments.append((title, lang, text))
+        else:
+            hit = study_syllabus.match(exam)
+            if hit:
+                segments = [hit]
+    except Exception:
+        segments = []
+
+    label = exam or "Intelligence Prep — full study area"
     try:
         import activity
-        activity.set_group(f"Study course: {exam[:38]}")
+        activity.set_group(f"Study course: {label[:38]}")
     except Exception:
         pass
 
-    # Built-in official syllabus takes precedence over web research — the
-    # course is grounded in the REAL exam material and its language.
-    language = "English"
-    try:
-        import study_syllabus
-        hit = study_syllabus.match(exam)
-    except Exception:
-        hit = None
-    if hit:
-        syl_title, language, scope = hit
-        aid = _act("note", f"Using the official syllabus: {syl_title[:34]}")
-        _act_done(aid)
+    if segments:
+        # Build one large course; each syllabus segment contributes units.
+        language = segments[0][1]
+        course = {"title": ("מסלול הכנה למודיעין — כל המבחנים"
+                            if language == "Hebrew" and generic
+                            else (segments[0][0] if not generic else "Intelligence Prep")),
+                  "subtitle": ("קורס אינטראקטיבי מלא — מותאם לרקע: " + bg
+                               if language == "Hebrew"
+                               else "Full interactive course — tailored to: " + bg),
+                  "lang": "he" if language == "Hebrew" else "en", "units": []}
+        seg_i = 0
+        for seg_title, seg_lang, seg_scope in segments:
+            seg_i += 1
+            aid = _act("search", f"Verifying material: {seg_title[:30]}")
+            scope = _verify_scope(seg_title, seg_scope)
+            _act_done(aid)
+            aid = _act("brain", f"Designing: {seg_title[:30]}")
+            outline = _build_outline(seg_title, bg, scope, seg_lang)
+            _act_done(aid)
+            units = (outline or {}).get("units", [])[:4]
+            for u in units:
+                aid = _act("note", f"Teaching+quiz: {u.get('title','')[:28]}")
+                levels = _build_unit_levels(seg_title, bg, u, scope, seg_lang)
+                _act_done(aid, f"{len(levels)} levels")
+                if levels:
+                    course["units"].append({"title": u.get("title", "Unit"),
+                                            "desc": u.get("desc", ""),
+                                            "levels": levels})
+        outline = {"units": course["units"]}   # for the empty-check below
     else:
-        aid = _act("search", f"Researching what the {exam[:36]} covers")
-        scope = _research_scope(exam)
-        _act_done(aid, "scope gathered" if scope else "using general knowledge")
-
-    aid = _act("brain", "Designing the course structure")
-    outline = _build_outline(exam, bg, scope, language)
-    _act_done(aid)
-    if not outline or not outline.get("units"):
-        return ("I couldn't design the course right now (my models are busy) — "
-                "try again in a minute.", None)
-
-    course = {"title": outline.get("title") or f"{exam} — Study Course",
-              "subtitle": outline.get("subtitle") or f"Tailored for: {bg}",
-              "units": []}
-    course["lang"] = "he" if language == "Hebrew" else "en"
-    units = outline["units"][:6]
-    for i, u in enumerate(units, 1):
-        aid = _act("note", f"Building unit {i}/{len(units)}: {u.get('title','')[:30]}")
-        levels = _build_unit_levels(exam, bg, u, scope, language)
-        _act_done(aid, f"{len(levels)} levels")
-        if levels:
-            course["units"].append({"title": u.get("title", f"Unit {i}"),
-                                    "desc": u.get("desc", ""), "levels": levels})
+        # Unknown exam → research-driven single course.
+        language = "English"
+        aid = _act("search", f"Researching what the {exam[:34]} covers")
+        scope = _verify_scope(exam, _research_scope(exam))
+        _act_done(aid, "scope gathered")
+        aid = _act("brain", "Designing the course structure")
+        outline = _build_outline(exam, bg, scope, language)
+        _act_done(aid)
+        if not outline or not outline.get("units"):
+            return ("I couldn't design the course right now (my models are "
+                    "busy) — try again in a minute.", None)
+        course = {"title": outline.get("title") or f"{exam} — Study Course",
+                  "subtitle": outline.get("subtitle") or f"Tailored for: {bg}",
+                  "lang": "en", "units": []}
+        for i, u in enumerate(outline["units"][:8], 1):
+            aid = _act("note", f"Teaching+quiz {i}: {u.get('title','')[:26]}")
+            levels = _build_unit_levels(exam, bg, u, scope, language)
+            _act_done(aid, f"{len(levels)} levels")
+            if levels:
+                course["units"].append({"title": u.get("title", f"Unit {i}"),
+                                        "desc": u.get("desc", ""), "levels": levels})
 
     try:
         import activity
@@ -224,11 +286,15 @@ def build_course(exam: str, background: str = "") -> tuple[str, "Path | None"]:
     saved = None
     try:
         template = _TEMPLATE.read_text(encoding="utf-8")
+        # Use a function replacement — a plain string replacement would let
+        # re.sub interpret the JSON's \n / \t escapes as real control chars,
+        # corrupting the injected JavaScript.
+        _repl = ("/*__COURSE__*/ " + json.dumps(course, ensure_ascii=False)
+                 + " /*__END__*/")
         injected = re.sub(r"/\*__COURSE__\*/[\s\S]*?/\*__END__\*/",
-                          "/*__COURSE__*/ " + json.dumps(course, ensure_ascii=False)
-                          + " /*__END__*/", template, count=1)
+                          lambda _m: _repl, template, count=1)
         _OUT_DIR.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^a-z0-9]+", "_", exam.lower()).strip("_")[:40] or "course"
+        slug = re.sub(r"[^a-z0-9]+", "_", (exam or "study_area").lower()).strip("_")[:40] or "course"
         saved = _OUT_DIR / f"{slug}_course.html"
         saved.write_text(injected, encoding="utf-8")
         try:
@@ -244,11 +310,12 @@ def build_course(exam: str, background: str = "") -> tuple[str, "Path | None"]:
     unit_list = "\n".join(f"{i}. **{u['title']}** — {len(u['levels'])} levels"
                           for i, u in enumerate(course["units"], 1))
     summary = (f"Your interactive **{course['title']}** is ready and open in "
-               f"your browser — a Duolingo-style course with **{n_levels} levels** "
-               f"and **{n_q} questions**, tailored to: {bg}.\n\n"
-               f"Work through the path level by level — each has instant feedback, "
-               f"XP and streaks, and your progress saves automatically.\n\n"
-               f"**Units:**\n{unit_list}\n\n"
+               f"your browser — a Duolingo-style study area with **{n_levels} "
+               f"levels** and **{n_q} questions**, tailored to: {bg}.\n\n"
+               f"Each level **teaches the material first**, then tests you on it "
+               f"with a mix of question types (choose one, choose many, and typed "
+               f"answers). Instant feedback, XP, streaks, and progress save "
+               f"automatically.\n\n**Units:**\n{unit_list}\n\n"
                f"Ask me to add harder levels or a new topic anytime.")
     return summary, saved
 

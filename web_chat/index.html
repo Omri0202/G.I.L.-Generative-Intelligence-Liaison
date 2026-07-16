@@ -800,7 +800,7 @@ const gil = {
   COMMANDS: [
     {cmd: "/goal",     desc: "Give GIL a goal to complete autonomously", kind: "arg"},
     {cmd: "/research", desc: "Look something up live with sources",       kind: "arg"},
-    {cmd: "/study",    desc: "Prepare me for an exam (guide + test + drills)", kind: "arg"},
+    {cmd: "/study",    desc: "Open your interactive study area (exam prep courses)", kind: "arg"},
     {cmd: "/website",  desc: "Build a website for…",                      kind: "arg"},
     {cmd: "/image",    desc: "Generate an image of…",                     kind: "arg"},
     {cmd: "/code",     desc: "Have GIL write or fix code",                kind: "arg"},
@@ -852,9 +852,11 @@ const gil = {
       this.addMessage({sender: "user", text}); this.showTyping(); api("send", text);
       return;
     }
-    if (known.kind === "arg" && !arg) { $("inp").value = cmd + " "; this.grow(); return; }
+    // /study runs even with no argument — it opens the full study area.
+    if (known.kind === "arg" && !arg && cmd !== "/study") { $("inp").value = cmd + " "; this.grow(); return; }
     $("inp").value = ""; this.grow();
     if (arg) this.addMessage({sender: "user", text: cmd + " " + arg});
+    else if (cmd === "/study") this.addMessage({sender: "user", text: "/study"});
     if (cmd === "/clear") { api("new_chat"); return; }
     if (cmd === "/voice") { api("toggle_voice"); return; }
     if (cmd === "/stop")  { api("command", "stop", ""); return; }
