@@ -235,13 +235,24 @@ body.codemode #send{background:var(--accent);color:#1A1206;}
 body.codemode #hint{font-family:"Cascadia Code",Consolas,monospace;}
 body.codemode #hint .cmstat b{color:var(--accent);}
 
-/* ── CLI spinner while GIL is working (replaces bouncing dots) ── */
-body.codemode #typing{padding-left:42px;}
+/* ── running status icon: a rounded amber square inside a thin circle ──
+   Replaces the bouncing dots while GIL is actively working on a task. */
+body.codemode #typing{padding-left:20px;gap:9px;}
 body.codemode #typing i{display:none;}
-body.codemode #typing::before{content:"/";color:var(--accent);font-family:var(--cmfont);
-  font-weight:700;font-size:14px;animation:cli 480ms steps(1,end) infinite;
-  display:inline-block;width:12px;}
-@keyframes cli{0%{content:"/";}25%{content:"\2014";}50%{content:"\\";}75%{content:"|";}}
+.busy{display:none;}                       /* only shown in the terminal, while working */
+body.codemode #typing .busy{display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;border:1.5px solid var(--border);border-radius:50%;
+  flex-shrink:0;animation:busyPulse 1.4s ease-in-out infinite;}
+body.codemode #typing .busy::before{content:"";width:6px;height:6px;
+  border-radius:2px;background:var(--accent);}
+@keyframes busyPulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+/* the send button (the circle in the bottom-right) turns into the same busy
+   indicator while GIL is running — a pulsing amber square in a thin circle */
+body.codemode.working #send{background:transparent;border:1.6px solid var(--border);
+  color:transparent;position:relative;pointer-events:none;
+  animation:busyPulse 1.6s ease-in-out infinite;}
+body.codemode.working #send::before{content:"";position:absolute;inset:0;margin:auto;
+  width:8px;height:8px;border-radius:2px;background:var(--accent);}
 
 /* ── Claude-style shimmer / gloss for loading text ──
    A warm highlight sweeps left→right across the text itself (clipped to the
@@ -253,7 +264,7 @@ body.codemode .msg.gil .body.shimmer{
   background-size:220% 100%;
   -webkit-background-clip:text;background-clip:text;
   -webkit-text-fill-color:transparent;color:transparent;
-  animation:shimmer 2.6s linear infinite;
+  animation:shimmer 3.4s linear infinite;
 }
 body.codemode .msg.gil .body.shimmer::before{  /* keep the amber status dot solid */
   -webkit-text-fill-color:initial;background:var(--accent);}
@@ -505,7 +516,7 @@ body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--
         <div class="chips"><span>Voice</span><span>Websites</span><span>Code agent</span>
         <span>Images</span><span>Missions</span><span>Vision</span></div>
       </div>
-      <div id="typing"><i></i><i></i><i></i><span id="worktimer"></span></div>
+      <div id="typing"><span class="busy"></span><i></i><i></i><i></i><span id="worktimer"></span></div>
     </div></div>
     <div id="composer">
       <div id="slashmenu"></div>
@@ -772,6 +783,7 @@ const gil = {
   _working: false,
   setWorking(on) {
     this._working = !!on;
+    document.body.classList.toggle("working", !!on);   // drives the busy indicator
     if (on) { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); }
     else { this.clearShimmer(); $("typing").classList.remove("on"); this.scheduleStop(); }
   },
