@@ -207,6 +207,17 @@ class WebChat:
             return
         threading.Thread(target=self._persist, args=(text, "user"),
                          daemon=True).start()
+        eng = getattr(self._gil_window, "_engine", None)
+        # In /codemode every message goes straight to the coding agent — GIL
+        # works like Claude Code, editing files and running commands with
+        # per-change approval, rendered in the terminal.
+        if eng is not None and getattr(eng, "_code_mode", False):
+            try:
+                import code_agent
+                code_agent.run_async(eng, text)
+                return
+            except Exception:
+                pass
         fn = getattr(self._gil_window, "_chat_send_fn", None)
         if fn:
             threading.Thread(target=fn, args=(text,), daemon=True,
@@ -260,6 +271,30 @@ class WebChat:
                 "- `/remember <fact>` — save something for me to recall (no search)\n"
                 "- `/stop` — stop what I'm doing · `/voice` — toggle voice · "
                 "`/clear` — new chat", "gil")
+            return
+
+        if name in ("codemode", "code_mode", "dev"):
+            on = getattr(eng, "_code_mode", False) if eng else False
+            new = not on if not arg else (arg.lower() not in ("off", "exit", "stop"))
+            if eng is not None:
+                eng._code_mode = new
+            self._push("gil.setCodeMode", new)
+            if new:
+                self.add_message(
+                    "**Code mode on** — I'm now a coding agent. Everything you "
+                    "type is a dev task: I read files, edit code and run "
+                    "commands, asking approval before each change. Type "
+                    "`/chat` or `/codemode off` to leave.", "gil")
+                if arg and arg.lower() not in ("on",):
+                    self._rpc_send(arg)   # a task was passed inline
+            else:
+                self.add_message("Back to normal chat.", "gil")
+            return
+        if name in ("chat", "normal"):
+            if eng is not None:
+                eng._code_mode = False
+            self._push("gil.setCodeMode", False)
+            self.add_message("Back to normal chat.", "gil")
             return
 
         if name == "stop":
@@ -367,6 +402,10 @@ class WebChat:
     def request_approval(self, text: str, kind: str = "agent") -> None:
         """Push an approval request with clickable buttons to the web UI."""
         self._push("gil.approval", {"text": text, "kind": kind})
+
+    def tool_block(self, block: dict) -> None:
+        """Push a Claude-Code-style tool-call block to the terminal UI."""
+        self._push("gil.toolBlock", block)
 
     def _rpc_open_path(self, p=""):
         try:

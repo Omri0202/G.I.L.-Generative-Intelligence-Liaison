@@ -170,6 +170,38 @@ button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
   border-radius:8px; transition:background .15s, color .15s; }
 .actions button:hover { background:var(--hover); color:var(--accent); }
 
+/* ═══════ /codemode — developer terminal (Claude-Code style) ═══════ */
+body.codemode{--page:#0E1017;--side:#0B0D13;--surf:#12151E;--input:#12151E;
+  --border:#20242F;--hover:#1A1E29;--txt:#C9D1E4;--muted:#5C6373;}
+body.codemode #hint{font-family:"Cascadia Code",Consolas,monospace;}
+body.codemode #courseTitle,body.codemode #title{font-family:"Cascadia Code",Consolas,monospace;}
+.tool{margin:0 0 14px 37px;max-width:760px;background:var(--surf);
+  border:1px solid var(--border);border-radius:12px;overflow:hidden;
+  font-family:"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  animation:rise .25s ease both;box-shadow:0 2px 12px var(--shadow);}
+.tool .thead{display:flex;align-items:center;gap:9px;padding:9px 14px;
+  font-size:13px;cursor:pointer;user-select:none;border-bottom:1px solid transparent;}
+.tool.open .thead{border-bottom-color:var(--border);}
+.tool .tdot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.tool .tdot.ok{background:#3DDC84;} .tool .tdot.fail{background:#FF5C6C;}
+.tool .tname{font-weight:700;color:#7FB0FF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tool .tkind{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;}
+.tool .tarrow{margin-inline-start:auto;color:var(--muted);font-size:11px;transition:transform .15s;}
+.tool.open .tarrow{transform:rotate(90deg);}
+.tool .tbody{display:none;padding:10px 14px;overflow-x:auto;font-size:12.5px;line-height:1.6;
+  background:#0B0D13;white-space:pre;}
+.tool.open .tbody{display:block;}
+.tool .tnote{padding:6px 14px;font-size:11.5px;color:var(--muted);}
+/* diff lines */
+.diff .dl{white-space:pre;padding:0 6px;border-radius:3px;}
+.diff .add{background:rgba(61,220,132,.14);color:#8CE7B0;}
+.diff .del{background:rgba(255,92,108,.14);color:#FF9AA5;}
+.diff .hdr{color:var(--muted);}
+/* syntax highlight tokens */
+.hl-kw{color:#C792EA;} .hl-str{color:#C3E88D;} .hl-num{color:#F78C6C;}
+.hl-com{color:#5C6373;font-style:italic;} .hl-fn{color:#82AAFF;}
+.hl-op{color:#89DDFF;} .hl-punc{color:#8892A6;}
+
 /* approval card — clickable Approve / Reject (Claude-style) */
 .approval { margin:0 0 22px 37px; max-width:640px; background:var(--input);
   border:1px solid var(--accent); border-radius:15px; overflow:hidden;
@@ -377,6 +409,38 @@ function scrollDown(force) {
   const sc = $("scroll");
   if (force || sc.scrollTop + sc.clientHeight > sc.scrollHeight - 320)
     sc.scrollTop = sc.scrollHeight;
+}
+
+/* ═══════════ syntax highlighter (compact, self-contained) ═══════════ */
+const HL_KW = new Set(("def class return if elif else for while import from as with "+
+  "try except finally raise yield lambda pass break continue in is not and or None "+
+  "True False self async await global nonlocal assert del function const let var new "+
+  "typeof instanceof this null undefined true false export default extends super "+
+  "switch case do throw void fn mut pub struct enum impl trait match use mod crate "+
+  "move ref func package type interface map range go defer chan select public private "+
+  "protected static final abstract int float double bool boolean char string str vec")
+  .split(" "));
+function hl(code, lang){
+  const re=/(\/\*[\s\S]*?\*\/|\/\/.*|#.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b(0x[0-9a-fA-F]+|\d+\.?\d*)\b|([A-Za-z_$][\w$]*)/g;
+  let out="", last=0, m;
+  while((m=re.exec(code))){
+    out+=esc(code.slice(last,m.index)); last=re.lastIndex;
+    if(m[1]) out+='<span class="hl-com">'+esc(m[1])+'</span>';
+    else if(m[2]) out+='<span class="hl-str">'+esc(m[2])+'</span>';
+    else if(m[3]) out+='<span class="hl-num">'+esc(m[3])+'</span>';
+    else{const w=m[4];
+      if(HL_KW.has(w)) out+='<span class="hl-kw">'+esc(w)+'</span>';
+      else if(code[re.lastIndex]==="(") out+='<span class="hl-fn">'+esc(w)+'</span>';
+      else out+=esc(w);}
+  }
+  return out+esc(code.slice(last));
+}
+function renderDiff(oldT, newT){
+  const o = (oldT||"").split("\n"), n = (newT||"").split("\n");
+  let h = "";
+  o.forEach(l => h += '<div class="dl del">- '+esc(l)+'</div>');
+  n.forEach(l => h += '<div class="dl add">+ '+esc(l)+'</div>');
+  return h;
 }
 
 /* ═══════════ markdown (tiny, safe) ═══════════ */
@@ -702,6 +766,34 @@ const gil = {
     scrollDown(true);
   },
 
+  /* ---- /codemode: developer terminal ---- */
+  setCodeMode(on) {
+    document.body.classList.toggle("codemode", !!on);
+    $("inp").placeholder = on
+      ? "Describe a coding task — GIL edits & runs with approval  ·  /chat to leave"
+      : "Message G.I.L.  —  Enter sends, Shift+Enter for a new line, / for commands";
+  },
+  toolBlock(b) {
+    this.hideTyping();
+    const okc = b.ok ? "ok" : "fail";
+    const d = document.createElement("div");
+    d.className = "tool";
+    let bodyHTML = "";
+    if (b.kind === "edit" && b.diff) bodyHTML = renderDiff(b.diff.old, b.diff.new);
+    else if (b.body != null) bodyHTML = hl(b.body, b.lang || "");
+    d.innerHTML =
+      `<div class="thead"><span class="tdot ${okc}"></span>` +
+      `<span class="tname">${esc(b.header || b.kind)}</span>` +
+      (b.note ? `<span class="tkind">${esc(b.note)}</span>` : "") +
+      `<span class="tarrow">▶</span></div>` +
+      (bodyHTML ? `<div class="tbody ${b.kind==="edit"?"diff":""}">${bodyHTML}</div>` : "");
+    d.querySelector(".thead").onclick = () => d.classList.toggle("open");
+    // auto-open edits/writes so the user sees the change; collapse noisy reads
+    if (b.kind === "edit" || b.kind === "write") d.classList.add("open");
+    $("msgs").insertBefore(d, $("typing"));
+    scrollDown();
+  },
+
   /* ---- rich cards ---- */
   richCard(c) {
     this.hideTyping();
@@ -804,6 +896,7 @@ const gil = {
     {cmd: "/website",  desc: "Build a website for…",                      kind: "arg"},
     {cmd: "/image",    desc: "Generate an image of…",                     kind: "arg"},
     {cmd: "/code",     desc: "Have GIL write or fix code",                kind: "arg"},
+    {cmd: "/codemode", desc: "Enter the developer terminal (Claude-Code style)", kind: "arg"},
     {cmd: "/remember", desc: "Tell GIL a fact to remember (not search)",  kind: "arg"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
@@ -852,11 +945,12 @@ const gil = {
       this.addMessage({sender: "user", text}); this.showTyping(); api("send", text);
       return;
     }
-    // /study runs even with no argument — it opens the full study area.
-    if (known.kind === "arg" && !arg && cmd !== "/study") { $("inp").value = cmd + " "; this.grow(); return; }
+    // /study and /codemode run even with no argument.
+    const noArgOk = (cmd === "/study" || cmd === "/codemode");
+    if (known.kind === "arg" && !arg && !noArgOk) { $("inp").value = cmd + " "; this.grow(); return; }
     $("inp").value = ""; this.grow();
     if (arg) this.addMessage({sender: "user", text: cmd + " " + arg});
-    else if (cmd === "/study") this.addMessage({sender: "user", text: "/study"});
+    else if (noArgOk) this.addMessage({sender: "user", text: cmd});
     if (cmd === "/clear") { api("new_chat"); return; }
     if (cmd === "/voice") { api("toggle_voice"); return; }
     if (cmd === "/stop")  { api("command", "stop", ""); return; }

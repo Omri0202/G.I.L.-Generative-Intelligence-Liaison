@@ -324,6 +324,46 @@ def _known_locations() -> str:
     return "\n".join(lines)
 
 
+def _lang_for(path: str) -> str:
+    ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path else ""
+    return {".py": "python", ".js": "javascript", ".ts": "typescript",
+            ".jsx": "javascript", ".tsx": "typescript", ".html": "html",
+            ".css": "css", ".json": "json", ".sh": "bash", ".rs": "rust",
+            ".go": "go", ".java": "java", ".c": "c", ".cpp": "cpp",
+            ".swift": "swift", ".rb": "ruby", ".php": "php",
+            ".yml": "yaml", ".yaml": "yaml", ".md": "markdown"}.get(ext, "")
+
+
+def _emit_tool_block(window, tool: str, args: dict, result: str, ok: bool) -> None:
+    """Push a structured tool-call block to the web terminal (no-op elsewhere)."""
+    fn = getattr(window, "tool_block", None)
+    if not callable(fn):
+        return
+    path = str(args.get("path") or args.get("dir") or "")
+    try:
+        if tool == "run":
+            fn({"kind": "bash", "header": f"Bash({str(args.get('command',''))[:80]})",
+                "body": result[:2000], "lang": "bash", "ok": ok})
+        elif tool == "edit_file":
+            fn({"kind": "edit", "header": f"Edit({path})",
+                "diff": {"old": str(args.get("old", ""))[:1500],
+                         "new": str(args.get("new", ""))[:1500]},
+                "lang": _lang_for(path), "ok": ok, "note": result[:80]})
+        elif tool == "write_file":
+            fn({"kind": "write", "header": f"Write({path})",
+                "body": str(args.get("content", ""))[:2000],
+                "lang": _lang_for(path), "ok": ok, "note": result[:80]})
+        elif tool == "read_file":
+            fn({"kind": "read", "header": f"Read({path})",
+                "body": result[:1800], "lang": _lang_for(path), "ok": ok})
+        elif tool in ("list_dir", "search"):
+            fn({"kind": tool, "header": f"{'List' if tool=='list_dir' else 'Search'}"
+                f"({path or args.get('pattern','')})",
+                "body": result[:1500], "lang": "", "ok": ok})
+    except Exception:
+        pass
+
+
 def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     """Execute the agent loop (call from a worker thread)."""
     import activity
@@ -444,6 +484,10 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
 
             ok = not result.startswith("ERROR")
             (activity.done if ok else activity.fail)(aid, result[:110])
+
+            # Rich Claude-Code-style tool block for the /codemode terminal:
+            # header + output/diff + language, so the UI can colour it.
+            _emit_tool_block(window, tool, args, result, ok)
 
             messages.append({"role": "assistant", "content": json.dumps(action)})
             messages.append({"role": "user", "content": f"RESULT:\n{result[:2200]}"})
