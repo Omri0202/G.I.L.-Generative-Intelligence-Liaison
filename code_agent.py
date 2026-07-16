@@ -63,11 +63,19 @@ write_file {"path": "...", "content": "..."}            create or overwrite a fi
 done       {"summary": "...", "success": true/false}    finish the task
 
 RULES:
-- INVESTIGATE first (read_file/search/run read-only) before changing anything.
-- Smallest change that fixes the problem. Match the existing code style.
-- File edits and state-changing commands require the user's approval — the
-  user sees exactly what you propose. If they decline, try another approach.
-- After an edit, VERIFY: run the relevant test / py_compile / build command.
+- INVESTIGATE first: read the exact code (read_file/search) before editing.
+  Never edit a file you have not read this session.
+- Smallest change that actually fixes the problem. Match the existing style.
+- Every edit MUST change real behaviour. NEVER propose cosmetic or no-op edits
+  (e.g. adding an unused `except X as e`, re-quoting, or reformatting only).
+- Your edits are AUTO-CHECKED before they apply: the proposed file is syntax-
+  checked (py_compile / JSON parse / bracket balance) and rejected if it would
+  break, and auto-reverted if a landed change breaks the file. So get it right —
+  copy `old` text exactly (it must match once) and keep the result valid.
+- File edits and state-changing commands need the user's approval — they see a
+  diff of exactly what you propose. If they decline, try a different approach.
+- After editing, VERIFY: run the relevant py_compile / test / build command and
+  read the result before calling done.
 - Absolute Windows paths. Non-interactive commands only. Never destructive
   (no format/shutdown/registry wipes/mass delete).
 - "why" is one short sentence, present tense: "Reading the config loader".
@@ -318,20 +326,205 @@ def _t_write_file(args: dict) -> str:
         return f"ERROR: {exc}"
 
 
+# ── Self-review of proposed edits (so GIL earns trust) ──────────────────────────
+
+def _bracket_error(src: str) -> str | None:
+    """Heuristic brace/paren/bracket + string balance for JS/TS/HTML/CSS.
+    Skips strings (incl. template literals with ${…}), // /* */ and <!-- -->
+    comments, AND /regex/ literals (with char classes). Regex-vs-division is
+    decided from the previous significant char. Only reports high-confidence
+    breakage so it never rejects a valid edit."""
+    pairs = {")": "(", "]": "[", "}": "{"}
+    opens = set("([{")
+    stack, tmpl = [], []          # tmpl: nesting depth where a `…${ opened
+    i, n, quote = 0, len(src), None
+    prev = ""                     # last significant (non-space) char seen
+    while i < n:
+        c = src[i]
+        if quote:
+            if c == "\\":
+                i += 2; continue
+            if quote == "`" and c == "$" and i + 1 < n and src[i + 1] == "{":
+                tmpl.append(len(stack)); stack.append("{"); quote = None
+                prev = "{"; i += 2; continue
+            if c == quote:
+                quote = None
+            i += 1; prev = '"'; continue
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            end = src.find("*/", i + 2)
+            i = (end + 2) if end != -1 else n; continue
+        if src[i:i + 4] == "<!--":
+            end = src.find("-->", i + 4)
+            i = (end + 3) if end != -1 else n; continue
+        if c == "/" and (prev == "" or prev in "([{,;:=!&|?+-*%^~<>"):
+            # regex literal — scan to the closing unescaped '/', respecting [..]
+            i += 1; incls = False
+            while i < n:
+                rc = src[i]
+                if rc == "\\":
+                    i += 2; continue
+                if rc == "\n":
+                    break                      # not a regex after all; stop
+                if rc == "[":
+                    incls = True
+                elif rc == "]":
+                    incls = False
+                elif rc == "/" and not incls:
+                    i += 1; break
+                i += 1
+            prev = "/"; continue
+        if c in ("'", '"', "`"):
+            quote = c; i += 1; continue
+        if c in opens:
+            stack.append(c); prev = c; i += 1; continue
+        if c in pairs:
+            if not stack or stack[-1] != pairs[c]:
+                return f"unbalanced '{c}'"
+            stack.pop()
+            if c == "}" and tmpl and len(stack) == tmpl[-1]:
+                tmpl.pop(); quote = "`"          # back into the template string
+            prev = c; i += 1; continue
+        if not c.isspace():
+            prev = c
+        i += 1
+    if quote and quote != "`":
+        return f"unterminated string ({quote})"
+    if stack:
+        return f"unclosed '{stack[-1]}'"
+    return None
+
+
+def _validate_syntax(path: str, content: str) -> str | None:
+    """Return why `content` is broken for its file type, else None. Static only —
+    never runs the code. Backs GIL's 'reject my own broken edit' guarantee."""
+    ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path else ""
+    try:
+        if ext == ".py":
+            compile(content, path or "<edit>", "exec")
+        elif ext == ".json":
+            json.loads(content)
+        elif ext in (".js", ".jsx", ".mjs", ".ts", ".tsx",
+                     ".html", ".htm", ".css"):
+            return _bracket_error(content)
+    except SyntaxError as exc:
+        return f"Python syntax error (line {exc.lineno}): {exc.msg}"
+    except json.JSONDecodeError as exc:
+        return f"invalid JSON (line {exc.lineno}): {exc.msg}"
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def _pointless_edit(old: str, new: str) -> str | None:
+    """Catch edits that change nothing meaningful (the trust-killers)."""
+    if new == old:
+        return "the new text is identical to the old text"
+    # adds `except X as e:` where the bound name is never used → pure churn
+    m = re.search(r"except\b[^\n:]*\bas\s+([A-Za-z_]\w*)\s*:", new)
+    if m:
+        name = m.group(1)
+        without = re.sub(r"\s+as\s+" + re.escape(name) + r"\s*:", ":", new, count=1)
+        uses = len(re.findall(r"\b" + re.escape(name) + r"\b", new))
+        if without.strip() == old.strip() and uses <= 1:
+            return (f"this only adds an exception variable '{name}' that is never "
+                    "used — it changes nothing")
+    return None
+
+
+def _restore_one(p: Path) -> bool:
+    """Revert a single file to its pre-edit checkpoint (auto-revert safety net)."""
+    backup = _session_backups.get(str(p.resolve()))
+    if not backup:
+        return False
+    try:
+        import shutil
+        if backup.name.endswith(".NEW"):
+            p.unlink(missing_ok=True)
+        else:
+            shutil.copy2(str(backup), str(p))
+        return True
+    except Exception:
+        log.exception("auto-revert failed for %s", p)
+        return False
+
+
+def _verify_or_revert(path: str, ok_result: str) -> str:
+    """After an edit lands, re-check the file ON DISK. If it's broken, restore
+    the checkpoint automatically so GIL never leaves broken code behind."""
+    p = Path(str(path))
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ok_result
+    broke = _validate_syntax(str(path), content)
+    if broke:
+        reverted = _restore_one(p)
+        return (f"ERROR: reverted — the change broke {p.name} ({broke})."
+                + ("" if reverted else " (could not auto-restore — check backups)"))
+    return ok_result
+
+
+def _precheck_change(tool: str, args: dict) -> str | None:
+    """Static safety review of a proposed edit BEFORE the user ever sees it.
+    Returns a rejection reason, or None if the change is sound and worth showing."""
+    path = str(args.get("path", ""))
+    if tool == "edit_file":
+        p = Path(path)
+        if not p.exists():
+            return f"{p.name} doesn't exist yet — read or write it, don't edit it"
+        try:
+            src = p.read_text(encoding="utf-8")
+        except Exception as exc:
+            return f"can't read {p.name}: {exc}"
+        old, new = str(args.get("old", "")), str(args.get("new", ""))
+        cnt = src.count(old) if old else 0
+        if cnt == 0:
+            return "the 'old' text isn't in the file — read it again and copy it exactly"
+        if cnt > 1:
+            return (f"the 'old' text appears {cnt} times — add surrounding context "
+                    "so it matches exactly once")
+        pointless = _pointless_edit(old, new)
+        if pointless:
+            return pointless
+        broke = _validate_syntax(path, src.replace(old, new, 1))
+        if broke:
+            return f"this edit would break {p.name} — {broke}"
+        return None
+    if tool == "write_file":
+        content = str(args.get("content", ""))
+        p = Path(path)
+        if p.exists():
+            try:
+                if p.read_text(encoding="utf-8") == content:
+                    return "the file already has exactly this content — nothing to do"
+            except Exception:
+                pass
+        broke = _validate_syntax(path, content)
+        if broke:
+            return f"this would write a broken {p.name} — {broke}"
+        return None
+    return None
+
+
 # ── Approval gate ─────────────────────────────────────────────────────────────
 
-def _ask_approval(eng, description: str) -> bool:
+def _ask_approval(eng, description: str, diff: dict | None = None,
+                  file: str | None = None) -> bool:
     """Post the proposed change and block until the user decides. In the web
-    chat this renders clickable Approve/Reject buttons (Claude-style); the
-    voice/text "yes"/"no" path (fast_path_handler._fix_confirm) still works
-    and resolves the same gate."""
+    chat this renders clickable Approve/Reject buttons + a unified diff
+    (Claude-style); the voice/text "yes"/"no" path (fast_path_handler.
+    _fix_confirm) still works and resolves the same gate."""
     gate = {"event": threading.Event(), "approved": False}
     eng._agent_gate = gate
     win = eng.window
     # Clickable buttons when the web UI is available; text prompt otherwise.
     if hasattr(win, "request_approval"):
         win.request_approval("**Approval needed** — I want to run this:\n\n"
-                             + description, kind="agent")
+                             + description, kind="agent", diff=diff, file=file)
     else:
         win.add_chat_message(
             "**Approval needed** — I want to run this:\n\n" + description +
@@ -488,9 +681,28 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             if code_mode and " " in why and why.lower() != tool:
                 window.add_chat_message(why, "gil")
 
+            # ---- self-review edits BEFORE the user ever sees them ----
+            # GIL syntax-checks the proposed result and rejects no-op/broken
+            # edits himself, re-planning instead of asking you to approve junk.
+            if tool in ("edit_file", "write_file"):
+                reject = _precheck_change(tool, args)
+                if reject:
+                    _p = Path(str(args.get("path", ""))).name or "the file"
+                    activity.instant("code", "Rejected my own edit", reject[:90],
+                                     status="fail")
+                    window.add_chat_message(
+                        f"I caught a problem with my own edit to `{_p}` — {reject}. "
+                        "Re-planning instead of applying it.", "gil")
+                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                    messages.append({"role": "user", "content":
+                        f"RESULT:\nSELF-CHECK REJECTED your {tool}: {reject}. "
+                        "Do NOT repeat that same change. Read the file if you need to, "
+                        "then propose a correct, meaningful edit — or move on."})
+                    continue
+
             # ---- execute the tool ----
             needs_approval = False
-            desc = ""
+            desc, appr_diff, appr_file = "", None, None
             if tool == "run":
                 cmd = str(args.get("command", ""))
                 if error_fixer.is_blocked(cmd):
@@ -502,19 +714,18 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 desc = f"```powershell\n{cmd}\n```"
             elif tool == "edit_file":
                 needs_approval = True
-                desc = (f"Edit `{args.get('path','?')}`:\n\n**Remove:**\n```\n"
-                        f"{str(args.get('old',''))[:800]}\n```\n**Insert:**\n```\n"
-                        f"{str(args.get('new',''))[:800]}\n```")
+                appr_file = str(args.get("path", "?"))
+                appr_diff = {"old": str(args.get("old", ""))[:1600],
+                             "new": str(args.get("new", ""))[:1600]}
             elif tool == "write_file":
                 needs_approval = True
-                content = str(args.get("content", ""))
-                desc = (f"Write `{args.get('path','?')}` "
-                        f"({len(content)} chars):\n```\n{content[:900]}"
-                        f"{'…' if len(content) > 900 else ''}\n```")
+                appr_file = str(args.get("path", "?"))
+                appr_diff = {"old": "", "new": str(args.get("content", ""))[:1600]}
 
             if needs_approval:
                 aid = activity.start("code", f"Waiting for approval: {why}")
-                approved = _ask_approval(eng, f"*{why}*\n\n{desc}")
+                approved = _ask_approval(eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
+                                         diff=appr_diff, file=appr_file)
                 if not approved:
                     activity.fail(aid, "declined by user")
                     messages.append({"role": "assistant", "content": json.dumps(action)})
@@ -551,11 +762,15 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 elif tool == "edit_file":
                     result = _t_edit_file(args)
                     if result.startswith("OK"):
-                        edits_made += 1
+                        result = _verify_or_revert(args.get("path", ""), result)
+                        if result.startswith("OK"):
+                            edits_made += 1
                 elif tool == "write_file":
                     result = _t_write_file(args)
                     if result.startswith("OK"):
-                        edits_made += 1
+                        result = _verify_or_revert(args.get("path", ""), result)
+                        if result.startswith("OK"):
+                            edits_made += 1
                 else:
                     result = f"ERROR: unknown tool {tool!r}"
             except Exception as exc:

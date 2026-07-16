@@ -417,9 +417,12 @@ class WebChat:
         if not approved:
             self.add_message("Skipped that change.", "gil")
 
-    def request_approval(self, text: str, kind: str = "agent") -> None:
-        """Push an approval request with clickable buttons to the web UI."""
-        self._push("gil.approval", {"text": text, "kind": kind})
+    def request_approval(self, text: str, kind: str = "agent",
+                         diff: dict | None = None, file: str | None = None) -> None:
+        """Push an approval request with clickable buttons + optional unified
+        diff to the web UI."""
+        self._push("gil.approval",
+                   {"text": text, "kind": kind, "diff": diff, "file": file})
 
     def tool_block(self, block: dict) -> None:
         """Push a Claude-Code-style tool-call block to the terminal UI."""

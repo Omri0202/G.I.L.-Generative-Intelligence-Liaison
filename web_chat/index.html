@@ -287,12 +287,34 @@ body.codemode #worktimer{font-family:var(--cmfont);}
 .hl-kw{color:#C08A5E;} .hl-str{color:#A9B665;} .hl-num{color:#D8A657;}
 .hl-com{color:#6E675C;font-style:italic;} .hl-fn{color:#83A598;}
 .hl-op{color:#A89984;} .hl-punc{color:#928374;}
-/* approval card — terminal-styled in code mode */
-body.codemode .approval{margin:6px 0 12px 20px;border-color:var(--accent);
-  font-family:var(--cmfont);border-radius:10px;}
-body.codemode .approval .atext{font-size:13px;}
-body.codemode .approval .yes{background:var(--accent);color:#1A1206;}
-body.codemode .approval button{font-family:var(--cmfont);}
+/* full-screen terminal — hide the sidebar, main fills the viewport */
+body.codemode #sidebar{display:none;}
+body.codemode #main{width:100vw;}
+
+/* approval card — compact, low-profile terminal utility buttons + unified diff */
+body.codemode .approval{margin:6px 0 12px 20px;max-width:880px;
+  border:1px solid var(--border);border-left:2px solid var(--accent);
+  background:var(--surf);font-family:var(--cmfont);border-radius:10px;}
+body.codemode .approval .atext{font-size:12.5px;color:var(--dim);padding:11px 14px 8px;}
+body.codemode .approval .atext strong{color:var(--txt);}
+body.codemode .approval .appdiff{margin:0 12px 6px;background:#161615;
+  border:1px solid var(--border);border-radius:8px;padding:9px 12px;overflow-x:auto;
+  font-size:12.5px;line-height:1.6;}
+body.codemode .approval .appdiff .dhead{white-space:normal;}
+body.codemode .approval .abtns{display:flex;justify-content:flex-end;gap:8px;
+  padding:6px 14px 12px;}
+body.codemode .approval button{flex:0 0 auto;padding:4px 12px;font-size:11.5px;
+  font-weight:600;border-radius:7px;font-family:var(--cmfont);letter-spacing:.02em;}
+body.codemode .approval .yes{background:rgba(224,133,38,.16);color:var(--accent);
+  border:1px solid rgba(224,133,38,.42);}
+body.codemode .approval .yes:hover{background:rgba(224,133,38,.26);}
+body.codemode .approval .no{background:transparent;color:var(--muted);
+  border:1px solid var(--border);}
+body.codemode .approval .no:hover{color:var(--txt);border-color:var(--muted);}
+body.codemode .approval kbd{display:inline-block;min-width:14px;text-align:center;
+  padding:0 4px;margin-inline-end:5px;border-radius:4px;font-size:10.5px;font-weight:700;
+  background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.09);}
+body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--muted);}
 
 /* approval card — clickable Approve / Reject (Claude-style) */
 .approval { margin:0 0 22px 37px; max-width:640px; background:var(--input);
@@ -840,11 +862,15 @@ const gil = {
     this.startTimer();
     const d = document.createElement("div");
     d.className = "approval";
-    d.innerHTML =
-      `<div class="atext">${md(c.text || "Approve this action?")}</div>` +
-      `<div class="abtns"><button class="yes">✓ Approve</button>` +
-      `<button class="no">✕ Reject</button></div>` +
-      `<div class="chose"></div>`;
+    let inner = `<div class="atext">${md(c.text || "Approve this action?")}</div>`;
+    if (c.diff) {   // unified diff viewer — one block, file header, +/- gutters
+      inner += `<div class="appdiff diff">` +
+        (c.file ? `<div class="dhead">${svg("file",13)}<span>${esc(c.file)}</span></div>` : "") +
+        renderDiff(c.diff.old, c.diff.new) + `</div>`;
+    }
+    inner += `<div class="abtns"><button class="yes"><kbd>y</kbd> approve</button>` +
+      `<button class="no"><kbd>n</kbd> reject</button></div><div class="chose"></div>`;
+    d.innerHTML = inner;
     const done = (ok) => {
       this._approvalOpen = false;
       d.classList.add("done");
