@@ -235,16 +235,14 @@ body.codemode #send{background:var(--accent);color:#1A1206;}
 body.codemode #hint{font-family:"Cascadia Code",Consolas,monospace;}
 body.codemode #hint .cmstat b{color:var(--accent);}
 
-/* ── running status icon: a rounded amber square inside a thin circle ──
-   Replaces the bouncing dots while GIL is actively working on a task. */
+/* ── running status: the CLI spinner line ( / — \ | ) next to "working Ns" ── */
 body.codemode #typing{padding-left:20px;gap:9px;}
 body.codemode #typing i{display:none;}
-.busy{display:none;}                       /* only shown in the terminal, while working */
-body.codemode #typing .busy{display:inline-flex;align-items:center;justify-content:center;
-  width:15px;height:15px;border:1.5px solid var(--border);border-radius:50%;
-  flex-shrink:0;animation:busyPulse 1.4s ease-in-out infinite;}
-body.codemode #typing .busy::before{content:"";width:6px;height:6px;
-  border-radius:2px;background:var(--accent);}
+.busy{display:none;}                       /* square-in-circle stays on the send button only */
+body.codemode #typing::before{content:"/";color:var(--accent);font-family:var(--cmfont);
+  font-weight:700;font-size:14px;display:inline-block;width:12px;
+  animation:cli 480ms steps(1,end) infinite;}
+@keyframes cli{0%{content:"/";}25%{content:"\2014";}50%{content:"\\";}75%{content:"|";}}
 @keyframes busyPulse{0%,100%{opacity:1;}50%{opacity:.4;}}
 /* the send button (the circle in the bottom-right) turns into the same busy
    indicator while GIL is running — a pulsing amber square in a thin circle */
