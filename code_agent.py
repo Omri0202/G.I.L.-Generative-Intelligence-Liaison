@@ -80,9 +80,54 @@ def _keys() -> list[str]:
                         os.getenv("GROQ_API_KEY_2", "")) if k]
 
 
+def _extract_action(raw: str) -> dict | None:
+    """Pull one JSON action object out of a model reply, tolerantly.
+    Handles ```json fences, leading prose, and multiple/!nested braces by
+    scanning for the first brace-balanced span that parses and has a 'tool'."""
+    if not raw:
+        return None
+    txt = raw.strip()
+    # strip a ```json … ``` (or plain ```) fence if present
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", txt)
+    if fence:
+        txt = fence.group(1).strip()
+    # fast path: the whole thing is the object
+    try:
+        obj = json.loads(txt)
+        if isinstance(obj, dict) and "tool" in obj:
+            return obj
+    except Exception:
+        pass
+    # scan for balanced {...} spans and return the first that parses w/ a tool
+    for start in (i for i, c in enumerate(txt) if c == "{"):
+        depth, instr, esc = 0, False, False
+        for j in range(start, len(txt)):
+            c = txt[j]
+            if esc:
+                esc = False; continue
+            if c == "\\":
+                esc = True; continue
+            if c == '"':
+                instr = not instr
+            elif not instr and c == "{":
+                depth += 1
+            elif not instr and c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(txt[start:j + 1])
+                        if isinstance(obj, dict) and "tool" in obj:
+                            return obj
+                    except Exception:
+                        pass
+                    break
+    return None
+
+
 def _llm(messages: list) -> dict | None:
     payload = {"model": "llama-3.3-70b-versatile", "messages": messages,
-               "temperature": 0.2, "max_tokens": 1600}
+               "temperature": 0.2, "max_tokens": 1600,
+               "response_format": {"type": "json_object"}}
     for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
         payload["model"] = model
         for key in _keys():
@@ -93,11 +138,19 @@ def _llm(messages: list) -> dict | None:
                                   timeout=45)
                 if r.status_code == 429:
                     continue
+                # json_object mode can 400 on some models — retry without it
+                if r.status_code == 400 and "response_format" in payload:
+                    p2 = {k: v for k, v in payload.items() if k != "response_format"}
+                    r = requests.post(_GROQ_URL, json=p2,
+                                      headers={"Authorization": f"Bearer {key}",
+                                               "Content-Type": "application/json"},
+                                      timeout=45)
                 r.raise_for_status()
                 raw = r.json()["choices"][0]["message"]["content"]
-                m = re.search(r"\{[\s\S]*\}", raw)
-                if m:
-                    return json.loads(m.group(0))
+                act = _extract_action(raw)
+                if act:
+                    return act
+                log.debug("agent llm: no parseable action in reply: %.160s", raw)
             except Exception as exc:
                 log.debug("agent llm attempt failed: %s", exc)
     return None
@@ -366,7 +419,7 @@ def _emit_tool_block(window, tool: str, args: dict, result: str, ok: bool) -> No
                 f"({path or args.get('pattern','')})",
                 "body": result[:1500], "lang": "", "ok": ok})
     except Exception:
-        pass
+        log.exception("tool_block emit failed for %s", tool)   # was silently swallowed
 
 
 def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
@@ -388,14 +441,27 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
     activity.set_group("Coding agent")
     edits_made, verified = 0, False
+    bad_replies = 0
     try:
         for step in range(1, _MAX_STEPS + 1):
             action = _llm(messages)
             if not action or "tool" not in action:
+                # Don't give up on one malformed reply — nudge the model back
+                # onto the JSON rails and retry a couple of times first.
+                bad_replies += 1
+                if bad_replies <= 3:
+                    messages.append({"role": "user", "content":
+                        "Your last reply was not a valid action. Respond with "
+                        "EXACTLY ONE JSON object and nothing else, e.g. "
+                        '{"tool":"read_file","args":{"path":"..."},"why":"..."} '
+                        'or {"tool":"done","args":{"summary":"...","success":true}}.'})
+                    continue
                 window.add_chat_message(
-                    "I lost the thread mid-task (model returned garbage). "
-                    "Ask me to try again.", "gil")
+                    "I couldn't get a clean next step from the model after a few "
+                    "tries. Tell me to continue and I'll pick up where I left off.",
+                    "gil")
                 return
+            bad_replies = 0
             tool = str(action.get("tool", ""))
             args = action.get("args") or {}
             why  = str(action.get("why", tool))[:90]

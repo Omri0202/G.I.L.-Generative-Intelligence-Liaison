@@ -171,100 +171,127 @@ button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
 .actions button:hover { background:var(--hover); color:var(--accent); }
 
 /* ═══════ /codemode — developer terminal (Claude-Code style) ═══════ */
-/* whole surface becomes a hand-drawn developer terminal */
-body.codemode{--page:#0C0E15;--side:#090B11;--surf:#11141D;--input:#0F131B;
-  --border:#212836;--hover:#171C27;--txt:#CBD4E6;--muted:#5A6274;--dim:#8A93A6;
-  --accent:#5FD0E6;--ok:#3DDC84;
+/* Warm Academic Terminal — the premium Claude-Code palette */
+body.codemode{--page:#1A1A1A;--side:#161616;--surf:#212120;--input:#1D1D1C;
+  --border:#2D2D2D;--hover:#282826;--txt:#EDEAE3;--muted:#8A857B;--dim:#B4AFA3;
+  --accent:#E08526;--ok:#6DBE84;--fail:#E5695E;--shadow:rgba(0,0,0,.5);
   --cmfont:"Cascadia Code","JetBrains Mono","Fira Code",Consolas,ui-monospace,monospace;}
-body.codemode #sidebar{border-right-color:#141924;}
+body.codemode #sidebar{border-right-color:#1F1F1E;}
 body.codemode #topbar{display:none;}          /* replaced by the terminal bar */
 body.codemode #welcome{display:none;}
 body.codemode .actcard{display:none;}          /* tool blocks replace activity cards */
 body.codemode #scroll{background:
-  radial-gradient(130% 55% at 50% -12%, rgba(95,208,230,.06), transparent 62%),var(--page);}
-body.codemode #msgs{font-family:var(--cmfont);padding-top:4px;}
+  radial-gradient(130% 55% at 50% -12%, rgba(224,133,38,.05), transparent 60%),var(--page);}
+body.codemode #msgs{font-family:var(--cmfont);padding-top:6px;}
 
-/* ── terminal top bar (hand-drawn traffic lights) ── */
-#cmbar{display:none;align-items:center;gap:11px;padding:10px 20px;
+/* ── terminal top bar (crisp traffic lights + hand-drawn dashed divider) ── */
+#cmbar{display:none;align-items:center;gap:12px;padding:11px 22px;
   font-family:"Cascadia Code","JetBrains Mono",Consolas,monospace;
   font-size:12.5px;color:var(--muted);background:var(--side);
   border-bottom:1px dashed var(--border);}
-#cmbar .lights{display:flex;gap:7px;}
-#cmbar .lights i{width:11px;height:11px;border-radius:52% 48% 50% 50%/50% 52% 48% 50%;
-  transform:rotate(-4deg);}
-#cmbar .lights i:nth-child(1){background:#FF5F57;}
-#cmbar .lights i:nth-child(2){background:#FEBC2E;transform:rotate(3deg);}
-#cmbar .lights i:nth-child(3){background:#28C840;transform:rotate(-2deg);}
+#cmbar .lights{display:flex;gap:8px;}
+#cmbar .lights i{width:11px;height:11px;border-radius:50%;
+  transition:transform .15s ease, filter .15s ease;}
+#cmbar .lights:hover i{filter:brightness(1.18);transform:scale(1.12);}
+#cmbar .lights i:nth-child(1){background:#FF5F56;box-shadow:0 0 0 .5px rgba(0,0,0,.35) inset;}
+#cmbar .lights i:nth-child(2){background:#FEBC2E;box-shadow:0 0 0 .5px rgba(0,0,0,.35) inset;}
+#cmbar .lights i:nth-child(3){background:#28C840;box-shadow:0 0 0 .5px rgba(0,0,0,.35) inset;}
 #cmbar .cmtitle{color:var(--txt);font-weight:700;letter-spacing:.02em;}
 #cmbar .cmtitle b{color:var(--accent);margin-inline-end:6px;font-weight:700;}
 #cmbar .cmpath{margin-inline-start:auto;color:var(--muted);
   max-width:46%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
-/* ── GIL narration → terminal bullet line ── */
+/* ── GIL narration → terminal bullet line (amber dot) ── */
 body.codemode .msg.gil{margin:0 0 3px 0;}
 body.codemode .msg.gil .head,body.codemode .msg.gil .actions{display:none;}
 body.codemode .msg.gil .body{position:relative;padding:3px 22px 3px 42px;
-  font-family:var(--cmfont);font-size:13px;line-height:1.75;color:var(--txt);}
-body.codemode .msg.gil .body::before{content:"";position:absolute;left:20px;top:9px;
-  width:8px;height:8px;border-radius:50% 50% 48% 52%;background:var(--ok);}
+  font-family:var(--cmfont);font-size:13px;line-height:1.75;color:var(--dim);}
+body.codemode .msg.gil .body::before{content:"";position:absolute;left:21px;top:9px;
+  width:7px;height:7px;border-radius:50%;background:var(--accent);}
 body.codemode .msg.gil .body p{margin:0;}
-body.codemode .msg.gil .body strong{color:#EAF0FF;}
-body.codemode .msg.gil .body code{font-family:var(--cmfont);color:#C3E88D;
-  background:rgba(195,232,141,.08);padding:1px 5px;border-radius:5px;}
-body.codemode .msg.gil .body pre{font-size:12.5px;border-radius:11px 8px 12px 9px/9px 12px 8px 11px;}
+body.codemode .msg.gil .body strong{color:var(--txt);}
+body.codemode .msg.gil .body code{font-family:var(--cmfont);color:#C7B089;
+  background:rgba(224,133,38,.10);padding:1px 5px;border-radius:5px;}
+body.codemode .msg.gil .body pre{font-size:12.5px;border-radius:10px;}
 
-/* ── user command → prompt echo line ── */
-body.codemode .msg.user{margin:12px 0 5px 0;justify-content:flex-start;}
+/* ── user command → amber prompt echo line ── */
+body.codemode .msg.user{margin:14px 0 6px 0;justify-content:flex-start;}
 body.codemode .msg.user .bubble{background:none;border:none;box-shadow:none;
-  color:var(--accent);font-family:var(--cmfont);font-size:13px;max-width:none;
+  color:var(--txt);font-family:var(--cmfont);font-size:13px;font-weight:600;max-width:none;
   padding:2px 20px 2px 42px;position:relative;}
-body.codemode .msg.user .bubble::before{content:"\203A";position:absolute;left:22px;top:2px;
-  color:var(--muted);font-weight:700;font-size:15px;}
+body.codemode .msg.user .bubble::before{content:"\203A";position:absolute;left:22px;top:1px;
+  color:var(--accent);font-weight:800;font-size:16px;}
 
-/* ── input → terminal prompt with a hand-drawn wobble ── */
+/* ── input → terminal prompt with bold amber caret ── */
 body.codemode #composer{padding-top:6px;}
 body.codemode #box{background:var(--input);border-color:var(--border);
-  border-radius:15px 11px 16px 10px/10px 16px 11px 15px;
-  padding-left:36px;position:relative;}
+  border-radius:12px;padding-left:36px;position:relative;}
+body.codemode #box:focus-within{border-color:var(--accent);
+  box-shadow:0 0 0 1px rgba(224,133,38,.25);}
 body.codemode #box::before{content:"\203A";position:absolute;left:16px;bottom:13px;
-  color:var(--accent);font-weight:700;font-size:17px;font-family:var(--cmfont);}
+  color:var(--accent);font-weight:800;font-size:17px;font-family:var(--cmfont);}
 body.codemode #inp{font-family:var(--cmfont);font-size:13.5px;}
-body.codemode #send{background:var(--accent);color:#06121A;}
+body.codemode #send{background:var(--accent);color:#1A1206;}
 body.codemode #hint{font-family:"Cascadia Code",Consolas,monospace;}
-body.codemode #hint .cmstat b{color:var(--ok);}
+body.codemode #hint .cmstat b{color:var(--accent);}
 
-/* ── tool-call blocks — hand-drawn terminal cards ── */
-.tool{margin:0 0 8px 20px;max-width:840px;background:var(--surf);
-  border:1px solid var(--border);border-radius:12px 9px 13px 8px/8px 13px 9px 12px;
+/* ── CLI spinner while GIL is working (replaces bouncing dots) ── */
+body.codemode #typing{padding-left:42px;}
+body.codemode #typing i{display:none;}
+body.codemode #typing::before{content:"/";color:var(--accent);font-family:var(--cmfont);
+  font-weight:700;font-size:14px;animation:cli 480ms steps(1,end) infinite;
+  display:inline-block;width:12px;}
+@keyframes cli{0%{content:"/";}25%{content:"\2014";}50%{content:"\\";}75%{content:"|";}}
+body.codemode #worktimer{font-family:var(--cmfont);}
+
+/* ── tool-call blocks — clean terminal cards with a thread guide ── */
+.tool{margin:0 0 7px 20px;max-width:860px;background:var(--surf);
+  border:1px solid var(--border);border-radius:10px;position:relative;
   overflow:hidden;font-family:"Cascadia Code","JetBrains Mono",Consolas,monospace;
-  animation:rise .25s ease both;box-shadow:0 2px 12px var(--shadow);}
-.tool .thead{display:flex;align-items:center;gap:9px;padding:8px 13px;
+  animation:rise .22s ease both;box-shadow:0 1px 8px var(--shadow);}
+.tool::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:var(--border);}
+.tool.k-read::before{background:#6E675C;}
+.tool.k-write::before{background:#4C8B5E;}
+.tool.k-run::before{background:#6E63A8;}
+.tool .thead{display:flex;align-items:center;gap:9px;padding:8px 13px 8px 15px;
   font-size:12.5px;cursor:pointer;user-select:none;border-bottom:1px solid transparent;}
 .tool.open .thead{border-bottom-color:var(--border);}
-.tool .tdot{width:9px;height:9px;border-radius:50% 50% 48% 52%;flex-shrink:0;transform:rotate(-6deg);}
-.tool .tdot.ok{background:#3DDC84;} .tool .tdot.fail{background:#FF5C6C;}
-.tool .tname{font-weight:700;color:#7FB0FF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.tool .tkind{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;}
-.tool .tarrow{margin-inline-start:auto;color:var(--muted);font-size:11px;transition:transform .15s;}
+.tool .tdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.tool .tdot.ok{background:var(--ok);} .tool .tdot.fail{background:var(--fail);}
+/* colour-coded action badges */
+.tool .tbadge{font-size:10.5px;font-weight:700;letter-spacing:.02em;
+  padding:2px 8px;border-radius:6px;flex-shrink:0;}
+.tool .tbadge.read{background:rgba(138,133,123,.16);color:#C9C3B6;}
+.tool .tbadge.write{background:rgba(76,139,94,.18);color:#8FD8A0;}
+.tool .tbadge.run{background:rgba(110,99,168,.20);color:#B7A9EC;}
+.tool .tname{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tool .tkind{color:var(--muted);font-size:11px;}
+.tool .tarrow{margin-inline-start:auto;color:var(--muted);display:flex;
+  transition:transform .15s;}
 .tool.open .tarrow{transform:rotate(90deg);}
 .tool .tbody{display:none;padding:10px 14px;overflow-x:auto;font-size:12.5px;line-height:1.65;
-  background:#0A0C12;white-space:pre;}
+  background:#161615;white-space:pre;}
 .tool.open .tbody{display:block;}
 .tool .tnote{padding:5px 14px;font-size:11px;color:var(--muted);}
-/* diff lines */
-.diff .dl{white-space:pre;padding:0 6px;border-radius:3px;}
-.diff .add{background:rgba(61,220,132,.14);color:#8CE7B0;}
-.diff .del{background:rgba(255,92,108,.14);color:#FF9AA5;}
+/* diff block — clean header with file path + coloured gutters */
+.dhead{display:flex;align-items:center;gap:7px;white-space:normal;
+  padding:2px 2px 9px;margin-bottom:7px;border-bottom:1px solid var(--border);
+  color:var(--dim);font-size:12px;font-weight:600;}
+.dhead svg{color:var(--muted);flex-shrink:0;}
+.diff .dl{white-space:pre;padding:0 6px;border-radius:2px;}
+.diff .add{background:rgba(34,197,94,.12);color:#8FD8A0;}
+.diff .del{background:rgba(239,68,68,.12);color:#E9928C;}
 .diff .hdr{color:var(--muted);}
-/* syntax highlight tokens */
-.hl-kw{color:#C792EA;} .hl-str{color:#C3E88D;} .hl-num{color:#F78C6C;}
-.hl-com{color:#5C6373;font-style:italic;} .hl-fn{color:#82AAFF;}
-.hl-op{color:#89DDFF;} .hl-punc{color:#8892A6;}
+/* syntax highlight — warm, low-contrast, blends with the charcoal */
+.hl-kw{color:#C08A5E;} .hl-str{color:#A9B665;} .hl-num{color:#D8A657;}
+.hl-com{color:#6E675C;font-style:italic;} .hl-fn{color:#83A598;}
+.hl-op{color:#A89984;} .hl-punc{color:#928374;}
 /* approval card — terminal-styled in code mode */
 body.codemode .approval{margin:6px 0 12px 20px;border-color:var(--accent);
-  font-family:var(--cmfont);border-radius:13px 9px 14px 10px/10px 14px 9px 13px;}
+  font-family:var(--cmfont);border-radius:10px;}
 body.codemode .approval .atext{font-size:13px;}
-body.codemode .approval .yes{background:var(--ok);color:#062012;}
+body.codemode .approval .yes{background:var(--accent);color:#1A1206;}
 body.codemode .approval button{font-family:var(--cmfont);}
 
 /* approval card — clickable Approve / Reject (Claude-style) */
@@ -563,6 +590,7 @@ const _P = {
   sun:    '<circle cx="12" cy="12" r="4"/><line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/><line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/><line x1="5.3" y1="5.3" x2="7" y2="7"/><line x1="17" y1="17" x2="18.7" y2="18.7"/><line x1="18.7" y1="5.3" x2="17" y2="7"/><line x1="7" y1="17" x2="5.3" y2="18.7"/>',
   trash:  '<line x1="4.5" y1="7" x2="19.5" y2="7"/><path d="M6.5 7l1 13h9l1-13"/><path d="M9.5 7V4h5v3"/><line x1="10.5" y1="10.5" x2="10.5" y2="16.5"/><line x1="13.5" y1="10.5" x2="13.5" y2="16.5"/>',
   copy:   '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M4 15.5V5a1 1 0 0 1 1-1h10.5"/>',
+  chev:   '<polyline points="9 6 15 12 9 18"/>',
 };
 function svg(name, size) {
   return `<svg width="${size||14}" height="${size||14}" viewBox="0 0 24 24" fill="none" ` +
@@ -859,16 +887,29 @@ const gil = {
   toolBlock(b) {
     this.hideTyping();
     const okc = b.ok ? "ok" : "fail";
+    // action badge: label + colour-group (read=slate, write=green, run=indigo)
+    const BADGE = { bash:["Bash","run"], run:["Bash","run"], read:["Read","read"],
+      list_dir:["List","read"], search:["Search","read"], edit:["Edit","write"],
+      write:["Write","write"] };
+    const [blabel, bgroup] = BADGE[b.kind] || ["Tool", "read"];
+    // header comes in as "Verb(target)" — show just the target next to the badge
+    const hm = /^[^(]*\((.*)\)\s*$/.exec(b.header || "");
+    const name = hm ? hm[1] : (b.header || b.kind || "");
     const d = document.createElement("div");
-    d.className = "tool";
+    d.className = "tool k-" + bgroup;
     let bodyHTML = "";
-    if (b.kind === "edit" && b.diff) bodyHTML = renderDiff(b.diff.old, b.diff.new);
-    else if (b.body != null) bodyHTML = hl(b.body, b.lang || "");
+    if (b.kind === "edit" && b.diff) {
+      bodyHTML = `<div class="dhead">${svg("file", 13)}<span>${esc(name)}</span></div>` +
+        renderDiff(b.diff.old, b.diff.new);
+    } else if (b.body != null) {
+      bodyHTML = hl(b.body, b.lang || "");
+    }
     d.innerHTML =
       `<div class="thead"><span class="tdot ${okc}"></span>` +
-      `<span class="tname">${esc(b.header || b.kind)}</span>` +
+      `<span class="tbadge ${bgroup}">${esc(blabel)}</span>` +
+      `<span class="tname">${esc(name)}</span>` +
       (b.note ? `<span class="tkind">${esc(b.note)}</span>` : "") +
-      `<span class="tarrow">▶</span></div>` +
+      `<span class="tarrow">${svg("chev", 12)}</span></div>` +
       (bodyHTML ? `<div class="tbody ${b.kind==="edit"?"diff":""}">${bodyHTML}</div>` : "");
     d.querySelector(".thead").onclick = () => d.classList.toggle("open");
     // auto-open edits/writes so the user sees the change; collapse noisy reads
