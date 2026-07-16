@@ -3902,6 +3902,21 @@ class GILWindow(ctk.CTk):
                 self._chat_win.hide_typing()
         self.after(0, _do)
 
+    def request_approval(self, text: str, kind: str = "agent") -> None:
+        """Push a clickable Approve/Reject card to the web chat (code agent).
+        Thread-safe: the web bridge only enqueues an SSE push, so no `after`."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "request_approval", None)
+        if callable(fn):
+            fn(text, kind)
+
+    def tool_block(self, block: dict) -> None:
+        """Push a Claude-Code-style tool-call block to the web terminal."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "tool_block", None)
+        if callable(fn):
+            fn(block)
+
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
             self._float_btn = _FloatingChatButton(self, self._open_chat_window)

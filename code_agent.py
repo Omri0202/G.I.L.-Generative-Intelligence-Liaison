@@ -283,14 +283,19 @@ def _ask_approval(eng, description: str) -> bool:
         win.add_chat_message(
             "**Approval needed** — I want to run this:\n\n" + description +
             "\n\nSay **yes** to approve or **no** to skip.", "gil")
-    try:
-        spoken = "I need your approval for the next step — approve or skip it in the chat."
-        win.set_state("speaking", said=spoken)
-        eng._speak(spoken)
-        eng._last_spoke_at[0] = time.time() - 1.5
-        win.set_state("listening")
-    except Exception:
-        pass
+    # In /codemode this is a typed developer surface — GIL must NOT speak the
+    # prompt. Speaking made the mic hear GIL and transcribe his own words into
+    # the user's next message. Approval is click-only (or typed yes/no).
+    if not getattr(eng, "_code_mode", False):
+        try:
+            spoken = "I need your approval for the next step — approve or skip it in the chat."
+            win.set_state("speaking", said=spoken)
+            eng._speak(spoken)
+            eng._last_spoke_at[0] = time.time() - 1.5
+            eng._last_said[0]     = spoken   # let the echo filter suppress it
+            win.set_state("listening")
+        except Exception:
+            pass
     gate["event"].wait(_APPROVAL_TIMEOUT)
     eng._agent_gate = None
     return gate["approved"]
@@ -379,6 +384,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                  (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +
                   "\n".join(hints) if hints else "")}]
 
+    code_mode = bool(getattr(eng, "_code_mode", False))
+    eng._agent_running = True         # so a new /codemode message won't spawn a rival task
     activity.set_group("Coding agent")
     edits_made, verified = 0, False
     try:
@@ -403,11 +410,17 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
                      if edits_made else ""), "gil")
                 spoken = summary.split(".")[0][:140] + "."
-                window.set_state("speaking", said=spoken)
-                eng._speak(spoken)
+                if not code_mode:            # code mode is silent (typed surface)
+                    window.set_state("speaking", said=spoken)
+                    eng._speak(spoken)
                 eng._last_spoke_at[0] = time.time() - 1.5
                 eng._last_said[0] = spoken
                 return
+
+            # In /codemode, narrate the reasoning as a terminal bullet line
+            # (Claude-Code style: a sentence, then the tool line beneath it).
+            if code_mode and " " in why and why.lower() != tool:
+                window.add_chat_message(why, "gil")
 
             # ---- execute the tool ----
             needs_approval = False
@@ -502,12 +515,14 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         import activity as _a
         _a.clear_group()
         eng._agent_gate = None
+        eng._agent_running = False
         try:
             from ears import unmute
             unmute()
         except Exception:
             pass
-        window.set_state("listening")
+        if not code_mode:          # don't drop a silent code session back into listen
+            window.set_state("listening")
 
 
 def run_async(eng, task: str, hints: list[str] | None = None) -> None:

@@ -212,6 +212,24 @@ class WebChat:
         # works like Claude Code, editing files and running commands with
         # per-change approval, rendered in the terminal.
         if eng is not None and getattr(eng, "_code_mode", False):
+            low = text.lower().strip(" .!?")
+            # A change is waiting on approval → a typed yes/no resolves THAT gate,
+            # it does not start a brand-new task (that was the "Task 'yes'" bug).
+            if getattr(eng, "_agent_gate", None):
+                if low in ("yes", "y", "yeah", "yep", "ok", "okay", "sure",
+                           "approve", "approved", "go", "go ahead", "do it"):
+                    self._rpc_approve("agent", True);  return
+                if low in ("no", "n", "nope", "skip", "reject", "rejected",
+                           "stop", "cancel", "dont", "don't"):
+                    self._rpc_approve("agent", False); return
+                self.add_message("There's a change waiting on your approval above — "
+                                 "**Approve** or **Reject** it first.", "gil")
+                return
+            # An agent is mid-task → queue nothing, just tell the user (no rival run).
+            if getattr(eng, "_agent_running", False):
+                self.add_message("I'm still working on the previous task — "
+                                 "one moment, then send the next one.", "gil")
+                return
             try:
                 import code_agent
                 code_agent.run_async(eng, text)
