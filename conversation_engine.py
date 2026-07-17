@@ -384,8 +384,17 @@ class ConversationEngine:
 
     # ── Helpers used by _process / _do_process ────────────────────────────────
 
-    @staticmethod
-    def _is_ambient_speech(lower: str) -> bool:
+    # Short control/confirmation words — a valid answer to a pending yes/no
+    # prompt even at 1-2 words, so _is_ambient_speech must not reject these.
+    _CONFIRM_WORDS = {
+        "yes", "y", "yeah", "yep", "sure", "ok", "okay", "please", "go",
+        "approve", "approved", "continue", "proceed", "do", "it",
+        "no", "n", "nope", "nah", "cancel", "skip", "stop", "decline", "wait",
+        "not", "now",
+    }
+
+    @classmethod
+    def _is_ambient_speech(cls, lower: str) -> bool:
         """
         Heuristic: does this look like background conversation rather than a GIL command?
         Returns True → filter it out (don't process, don't hit Groq).
@@ -399,9 +408,11 @@ class ConversationEngine:
         if not words:
             return True
 
-        # Very short — likely a filler or background word
+        stripped = {w.strip(",.!?") for w in words}
+        # Very short — likely a filler or background word, UNLESS it's a
+        # recognizable yes/no/stop-style reply ("yes", "no", "stop").
         if len(words) <= 2:
-            return True
+            return not (stripped & cls._CONFIRM_WORDS)
 
         # Third-person pronouns in the first 3 words = talking about someone else
         _THIRD = {"he", "she", "they", "her", "him", "them", "his", "hers", "their"}
@@ -862,6 +873,18 @@ class ConversationEngine:
         # There is no time-based "stay active" window anymore, so ambient
         # conversation and follow-ups never trigger GIL without the wake word.
         if self._has_pending_prompt():
+            # A real answer to "yes/no" or "want me to fix it?" is always short.
+            # Anything longer (or English filler/third-person chatter) that
+            # arrives while GIL is armed for a reply is ambient noise — a TV, a
+            # conversation in the room — not addressed to him. Word-count is
+            # language-independent so it also catches non-English overhears
+            # that _is_ambient_speech's English heuristics would miss.
+            MAX_REPLY_WORDS = 6
+            words = text.strip().split()
+            if len(words) > MAX_REPLY_WORDS or self._is_ambient_speech(lower):
+                log.info("pending prompt armed but heard unrelated speech "
+                         "(%d words) — ignored: %r", len(words), text[:60])
+                return
             log.info("answering pending prompt (no wake word needed): %r", text[:50])
             threading.Thread(target=self._process, args=(text, False),
                              daemon=True, name="GIL-Process").start()

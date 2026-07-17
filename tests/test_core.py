@@ -309,6 +309,28 @@ def test_wake_word_gate_and_pending_prompt():
     assert s._has_pending_prompt() is True            # fix pending → yes/no allowed
 
 
+def test_ambient_speech_never_treated_as_a_pending_prompt_reply():
+    """Regression: while GIL was armed for a yes/no reply (an approval or fix
+    prompt pending), ambient TV/room audio with no wake word — e.g. an overheard
+    French phrase — was getting dispatched as if it answered the prompt. A real
+    reply is always short; word-count is language-independent so it also catches
+    non-English overhears the English filler heuristics would miss."""
+    import conversation_engine as ce
+    E = ce.ConversationEngine
+    def would_pass(text):
+        words = text.strip().split()
+        return not (len(words) > 6 or E._is_ambient_speech(text.lower()))
+
+    # the exact overheard phrase from the reported bug
+    assert would_pass("y a un choc cipou. Véter, bonheur.") is False
+    assert would_pass("oh really that's interesting I guess") is False   # english filler
+
+    # genuine short confirmations must still get through
+    for reply in ("yes", "no", "stop", "y", "n", "continue please",
+                  "not right now thanks"):
+        assert would_pass(reply) is True, reply
+
+
 def test_statement_vs_question_classifier():
     import fast_path_handler as fph
     Q = fph._looks_like_question

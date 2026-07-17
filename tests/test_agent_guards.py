@@ -132,6 +132,25 @@ def test_agent_prompt_rejects_vague_findings_and_loop_termination_false_positive
     assert "NORMAL termination idiom" in ca._SYSTEM
     assert "CONCRETE failure" in ca._SYSTEM
 
+def test_read_file_clips_dense_minified_lines(tmp_path):
+    # a single 15k-char line (bundled JS/CSS) used to be dumped whole, which
+    # poisoned a small model's context and caused repeated bad replies
+    f = tmp_path / "dense.js"
+    f.write_text("const a=1;\n" + ("x" * 15000) + "\nconst b=2;\n", encoding="utf-8")
+    out = ca._t_read_file({"path": str(f), "lines": 10})
+    assert len(out) < 1000
+    assert "chars]" in out   # the clip note is present
+
+def test_trim_biggest_result_shrinks_dense_tool_dump():
+    msgs = [{"role": "user", "content": "RESULT:\n" + "x" * 3000}]
+    assert ca._trim_biggest_result(msgs) is True
+    assert len(msgs[0]["content"]) < 500
+    # nothing large enough → no-op, doesn't crash
+    small = [{"role": "user", "content": "RESULT:\nshort"}]
+    assert ca._trim_biggest_result(small) is False
+    assert small[0]["content"] == "RESULT:\nshort"
+
+
 def test_brain_prompt_still_formats_with_all_placeholders():
     # a stray single brace in the persona would crash the brain at runtime
     import string, gil_brain

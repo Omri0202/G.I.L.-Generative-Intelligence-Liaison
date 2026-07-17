@@ -245,6 +245,25 @@ def _llm_json(messages: list, must_have: str = "tool",
     return None
 
 
+def _trim_biggest_result(messages: list, tail_n: int = 6, min_len: int = 1200) -> bool:
+    """Find the largest RESULT message in the last `tail_n` entries and shrink it
+    to a short note. A dense tool dump (a huge minified file, a giant search hit
+    list) is the most common reason a small model starts replying with garbage —
+    this gives the agent one clean shot at recovering instead of just bailing.
+    Mutates `messages` in place; returns whether anything was trimmed."""
+    tail = messages[-tail_n:]
+    biggest = max(
+        (m for m in tail if m.get("role") == "user"
+         and str(m.get("content", "")).startswith("RESULT:") and len(m["content"]) > min_len),
+        key=lambda m: len(m["content"]), default=None)
+    if not biggest:
+        return False
+    biggest["content"] = (biggest["content"][:300] +
+        "\n…[trimmed — that result was too dense; use a narrower "
+        "read_file range or search pattern next]")
+    return True
+
+
 def _extract_action(raw: str) -> dict | None:
     return _extract_json(raw, "tool")
 
@@ -307,7 +326,14 @@ def _t_read_file(args: dict) -> str:
     start = max(1, int(args.get("start", 1)))
     count = min(300, int(args.get("lines", 150)))
     chunk = lines[start - 1:start - 1 + count]
-    body = "\n".join(f"{i}: {l}" for i, l in enumerate(chunk, start))
+    # A single dense/minified line (bundled JS, one-line CSS) can be tens of
+    # thousands of chars — that poisoned a small model's context and triggered
+    # repeated "couldn't get a clean next step" bails. Cap each line so the
+    # slice always has real line structure, however the source file is written.
+    LINE_CAP = 300
+    def _clip(l: str) -> str:
+        return l if len(l) <= LINE_CAP else l[:LINE_CAP] + f"…[+{len(l)-LINE_CAP} chars]"
+    body = "\n".join(f"{i}: {_clip(l)}" for i, l in enumerate(chunk, start))
     return f"[{p} — {len(lines)} lines total, showing {start}-{start+len(chunk)-1}]\n{body}"
 
 
@@ -910,6 +936,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     activity.set_group("Coding agent")
     edits_made, verified = 0, False
     bad_replies = 0
+    recovered_once = False
     try:
         for step in range(1, _MAX_STEPS + 1):
             action = _llm(messages)
@@ -923,6 +950,17 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                         "EXACTLY ONE JSON object and nothing else, e.g. "
                         '{"tool":"read_file","args":{"path":"..."},"why":"..."} '
                         'or {"tool":"done","args":{"summary":"...","success":true}}.'})
+                    continue
+                if not recovered_once:
+                    # A dense recent tool result (a huge file dump) is the most
+                    # common reason a small model starts replying with garbage.
+                    # Trim the largest recent RESULT and give it ONE clean retry
+                    # before actually giving up — this is why tasks were "cutting
+                    # off" right after a big read_file/search step.
+                    recovered_once, bad_replies = True, 0
+                    _trim_biggest_result(messages)
+                    messages.append({"role": "user", "content":
+                        "Take a smaller, more targeted next step."})
                     continue
                 window.add_chat_message(
                     "I couldn't get a clean next step from the model after a few "
