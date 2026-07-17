@@ -132,6 +132,15 @@ def test_agent_prompt_rejects_vague_findings_and_loop_termination_false_positive
     assert "NORMAL termination idiom" in ca._SYSTEM
     assert "CONCRETE failure" in ca._SYSTEM
 
+def test_opening_ack_is_deterministic_and_names_the_real_project():
+    # a guaranteed code-generated hook line, independent of the model's own "why"
+    assert "G.I.L." in ca._opening_ack("look at the gil project for bugs")
+    assert "G.I.L." in ca._opening_ack("review your code for issues")
+    ack = ca._opening_ack(r"fix the bug in C:\Users\Omri\Desktop\myapp\main.py")
+    assert "`myapp`" in ack and "main.py" not in ack   # folder, not the filename
+    assert ca._opening_ack("add a dark theme toggle")   # never empty/crashes
+
+
 def test_read_file_clips_dense_minified_lines(tmp_path):
     # a single 15k-char line (bundled JS/CSS) used to be dumped whole, which
     # poisoned a small model's context and caused repeated bad replies

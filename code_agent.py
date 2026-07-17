@@ -912,6 +912,26 @@ def _emit_tool_block(window, tool: str, args: dict, result: str, ok: bool) -> No
         log.exception("tool_block emit failed for %s", tool)   # was silently swallowed
 
 
+def _opening_ack(task: str) -> str:
+    """A guaranteed, CODE-generated opening line — Python decides this, not the
+    model, so the very first thing a run shows always names the real project
+    being read, instead of depending on whatever the model's own first `why`
+    happens to say (which could be anything, or nothing useful)."""
+    t = task.lower()
+    if any(w in t for w in ("gil project", "gil's project", "gil's code",
+                            "your project", "your code", "this project", "yourself")):
+        label = "the G.I.L. project"
+    else:
+        m = re.search(r"[A-Za-z]:\\[^\s\"']+", task)   # a path mentioned in the task
+        if m:
+            mp = Path(m.group(0))
+            folder = mp.parent.name if "." in mp.name else mp.name   # file -> its folder
+        else:
+            folder = Path(os.getcwd()).name
+        label = f"the `{folder}` project"
+    return f"Reading {label}'s entry point and layout."
+
+
 def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     """Execute the agent loop (call from a worker thread)."""
     import activity
@@ -933,6 +953,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
     if hasattr(window, "set_working"):
         window.set_working(True)      # pin the spinner + "working Ns" for the whole run
+    if code_mode:
+        window.add_chat_message(_opening_ack(task), "gil")   # deterministic hook line
     activity.set_group("Coding agent")
     edits_made, verified = 0, False
     bad_replies = 0
