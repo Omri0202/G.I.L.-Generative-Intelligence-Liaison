@@ -107,3 +107,29 @@ def test_read_and_list_suggest_real_names(tmp_path):
     (tmp_path / "eyes.py").write_text("x=1\n", encoding="utf-8")
     miss = ca._t_read_file({"path": str(tmp_path / "gil_eyes.py")})
     assert "does not exist" in miss and "eyes.py" in miss
+
+
+# ── report formatting: markdown reports must never be spoken as markdown ──────
+
+def test_speakable_strips_markdown_for_tts():
+    report = ("I traced your run. Three real problems:\n\n"
+              "**1. Search was line-based** — multi-line patterns never matched.\n"
+              "Fixed with whole-file regex.\n\n"
+              "Plus 2 quality fixes:\n- Noise excluded.\n\n117 passed.")
+    spoken = ca._speakable(report)
+    assert spoken == "I traced your run."
+    for ch in ("*", "#", "`", "\n"):
+        assert ch not in spoken
+    assert ca._speakable("") == "Task finished."
+
+def test_agent_prompt_demands_the_report_format():
+    assert "REPORT FORMAT" in ca._SYSTEM
+    assert "Plus N quality fixes:" in ca._SYSTEM
+
+def test_brain_prompt_still_formats_with_all_placeholders():
+    # a stray single brace in the persona would crash the brain at runtime
+    import string, gil_brain
+    fields = {f for _, f, _, _ in string.Formatter().parse(gil_brain._SYSTEM) if f}
+    out = gil_brain._SYSTEM.format(**{f: "X" for f in fields})
+    assert "REPORT FIELD" in out                      # written-report spec present
+    assert "1-3 plain spoken sentences" in out        # speech stays TTS-safe

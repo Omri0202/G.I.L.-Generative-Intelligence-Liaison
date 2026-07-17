@@ -80,6 +80,22 @@ METHOD (how a good engineer works):
 3. If asked to CHANGE, make the smallest correct edit, then VERIFY it (pytest /
    py_compile) and read the result before you finish.
 
+REPORT FORMAT — your `done` summary IS the engineering report. Markdown. Write it
+like a staff engineer updating a peer, never like a chatbot:
+- OPEN with ONE sharp line: what you did and what you found ("I traced the run.
+  Three real problems:"). NEVER "Sure", "Here is the report", "I hope this helps".
+- Then NUMBERED findings, most important first, each shaped exactly:
+  **1. Short title** — the issue or fix in one clause.
+  then 1-3 sentences: why it happens, exactly where (file.py:line), and the fix.
+  Ground every claim in code you actually read or a command you actually ran.
+- Then, if there are smaller items: a line "Plus N quality fixes:" followed by
+  `-` bullets, one punchy but informative line each.
+- END with proof: the command you ran and its REAL result ("117 passed"), plus one
+  line on what the user should do or run next.
+- Be QUANTITATIVE: real filenames, line numbers, counts, before -> after values
+  ("shimmer 3.4s -> 4.6s", "256 swallowed excepts"). No vague adjectives.
+- Never paste raw search output as the report. Turn hits into findings.
+
 RULES:
 - INVESTIGATE first: read the exact code (read_file/search) before editing.
   Never edit a file you have not read this session.
@@ -216,6 +232,20 @@ def _extract_action(raw: str) -> dict | None:
 
 def _llm(messages: list) -> dict | None:
     return _llm_json(messages, must_have="tool")
+
+
+def _speakable(md: str, limit: int = 160) -> str:
+    """First sentence of a markdown report, stripped for TTS — the report is now
+    formatted markdown, and reading '**1.' aloud sounds broken."""
+    txt = re.sub(r"```[\s\S]*?```", " ", md or "")          # drop code fences
+    txt = re.sub(r"^\s*[-*#>]+\s*", " ", txt, flags=re.MULTILINE)
+    txt = re.sub(r"[*`_#>|]+", "", txt)                      # markdown punctuation
+    txt = re.sub(r"^\s*\d+\.\s*", " ", txt, flags=re.MULTILINE)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if not txt:
+        return "Task finished."
+    first = re.split(r"(?<=[.!?])\s", txt)[0]
+    return (first[:limit].rstrip(" ,;:—-") or txt[:limit]) + ("" if first.endswith((".", "!", "?")) else ".")
 
 
 def _is_free_command(cmd: str) -> bool:
@@ -886,15 +916,16 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             why  = str(action.get("why", tool))[:90]
 
             if tool == "done":
-                summary = str(args.get("summary", "Task finished."))[:600]
+                # Room for a real structured report — 600 chars truncated them.
+                summary = str(args.get("summary", "Task finished."))[:2500]
                 ok = bool(args.get("success", True))
                 activity.instant("code", "Agent finished",
-                                 summary[:100], status="done" if ok else "fail")
+                                 _speakable(summary)[:100], status="done" if ok else "fail")
                 window.add_chat_message(
                     ("**Solved** ✓ — " if ok else "**Stopped** — ") + summary +
                     (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
                      if edits_made else ""), "gil")
-                spoken = summary.split(".")[0][:140] + "."
+                spoken = _speakable(summary)
                 if not code_mode:            # code mode is silent (typed surface)
                     window.set_state("speaking", said=spoken)
                     eng._speak(spoken)
