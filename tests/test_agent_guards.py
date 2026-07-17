@@ -88,3 +88,22 @@ def test_agent_models_defaults_to_safe_fallback():
     models = ca._agent_models()
     assert models[-1] == "llama-3.1-8b-instant"
     assert "llama-3.3-70b-versatile" in models
+
+
+# ── search must actually work: multi-line patterns + filename help ────────────
+
+def test_search_matches_multiline_pattern(tmp_path):
+    (tmp_path / "m.py").write_text("try:\n    x()\nexcept Exception:\n    pass\n",
+                                   encoding="utf-8")
+    out = ca._t_search({"pattern": r"except[^\n]*:\s*\n\s*pass", "dir": str(tmp_path)})
+    assert "m.py" in out and "No matches" not in out   # line-based scan missed this
+
+def test_search_falls_back_to_filename_hint(tmp_path):
+    (tmp_path / "eyes.py").write_text("print('vision')\n", encoding="utf-8")
+    out = ca._t_search({"pattern": "gil_eyes.py", "dir": str(tmp_path)})
+    assert "eyes.py" in out    # no text match, but the similar filename is suggested
+
+def test_read_and_list_suggest_real_names(tmp_path):
+    (tmp_path / "eyes.py").write_text("x=1\n", encoding="utf-8")
+    miss = ca._t_read_file({"path": str(tmp_path / "gil_eyes.py")})
+    assert "does not exist" in miss and "eyes.py" in miss

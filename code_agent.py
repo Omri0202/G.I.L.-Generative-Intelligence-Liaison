@@ -55,18 +55,28 @@ working step by step with tools. Each turn, return ONE JSON object only:
 
 TOOLS:
 read_file  {"path": "...", "start": 1, "lines": 120}   read part of a file
-list_dir   {"path": "..."}                              list a folder
-search     {"pattern": "...", "dir": "..."}             find text in files (recursive)
+list_dir   {"path": "..."}                              list a folder (find real filenames)
+search     {"pattern": "...", "dir": "..."}             find TEXT INSIDE files (recursive, regex)
 run        {"command": "..."}                           PowerShell command
 edit_file  {"path": "...", "old": "...", "new": "..."}  replace EXACT text (must match once)
 write_file {"path": "...", "content": "..."}            create or overwrite a file
 done       {"summary": "...", "success": true/false}    finish the task
 
+FILENAMES — do not invent them:
+- ALWAYS list_dir the folder first and use the EXACT names it returns. Never
+  read/py_compile a path you have not seen in a listing (no "gil_eyes.py" guesses).
+- `search` finds text INSIDE files — it does NOT find a file by name. To locate a
+  file, list_dir. If a read/list fails, the error suggests the real name — use it.
+
 METHOD (how a good engineer works):
-1. UNDERSTAND — use the toolkit: run tests/py_compile, search for the pattern,
-   read the actual code. Confirm every claim against real code, never a guess.
+1. UNDERSTAND — use the toolkit: list_dir for real names, run tests/py_compile,
+   search for the pattern, read the actual code. Confirm every claim against the
+   real code, never a guess.
 2. If the task only asks you to LOOK / FIND / REVIEW / DIAGNOSE, STOP after
-   understanding: report a findings list with `done`. Do NOT change anything.
+   understanding and report a findings list with done + success:TRUE (a report IS
+   a success). Do NOT change anything. Don't dump raw search hits — for each real
+   issue give file:line, why it matters, and the fix. A broad except that logs is
+   NOT an issue.
 3. If asked to CHANGE, make the smallest correct edit, then VERIFY it (pytest /
    py_compile) and read the result before you finish.
 
@@ -216,10 +226,31 @@ def _is_free_command(cmd: str) -> bool:
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
+_SEARCH_SKIP_DIRS = ("__pycache__", ".git", ".github", "node_modules", "dist",
+                     "build", "venv", ".venv", ".pytest_cache", "agent_backups",
+                     "_web_profile", ".claude")
+_SEARCH_SKIP_EXT = (".exe", ".dll", ".pyd", ".zip", ".jpg", ".jpeg", ".png",
+                    ".gif", ".db", ".ico", ".pyc", ".spec", ".bin", ".pdf",
+                    ".log")   # logs are pure noise for a code search
+
+
+def _did_you_mean(p: Path) -> str:
+    """Suggest real filenames close to a guessed one — stops the model from
+    chasing a file it invented (e.g. gil_eyes.py → eyes.py)."""
+    import difflib
+    try:
+        d = p.parent if str(p.parent) and p.parent.is_dir() else Path(__file__).parent
+        names = [f.name for f in d.iterdir() if f.is_file()]
+        near = difflib.get_close_matches(p.name, names, n=4, cutoff=0.45)
+        return (" Did you mean: " + ", ".join(near) + "?") if near else ""
+    except Exception:
+        return ""
+
+
 def _t_read_file(args: dict) -> str:
     p = Path(args.get("path", ""))
     if not p.exists():
-        return f"ERROR: {p} does not exist"
+        return f"ERROR: {p} does not exist.{_did_you_mean(p)}"
     try:
         lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     except Exception as exc:
@@ -234,43 +265,64 @@ def _t_read_file(args: dict) -> str:
 def _t_list_dir(args: dict) -> str:
     p = Path(args.get("path", "."))
     if not p.is_dir():
-        return f"ERROR: {p} is not a folder"
+        return f"ERROR: {p} is not a folder.{_did_you_mean(p)}"
     items = []
-    for c in sorted(p.iterdir())[:80]:
+    for c in sorted(p.iterdir())[:120]:
         items.append(f"{'[D]' if c.is_dir() else '   '} {c.name}")
     return "\n".join(items) or "(empty)"
 
 
 def _t_search(args: dict) -> str:
     pattern = args.get("pattern", "")
-    root = Path(args.get("dir", "."))
-    if not pattern or not root.is_dir():
-        return "ERROR: need pattern and a valid dir"
-    hits = []
+    root = Path(args.get("dir", ".") or ".")
+    if not pattern:
+        return "ERROR: need a search pattern"
+    if not root.is_dir():
+        return f"ERROR: {root} is not a folder.{_did_you_mean(root)}"
+    # Whole-file (multi-line) regex so patterns that span lines actually match —
+    # the old line-by-line scan silently failed on those.
     try:
-        rx = re.compile(pattern)
+        rx = re.compile(pattern, re.MULTILINE)
     except re.error:
-        rx = re.compile(re.escape(pattern))
+        rx = re.compile(re.escape(pattern), re.MULTILINE)
+
+    def _skip(f: Path) -> bool:
+        return (not f.is_file() or f.suffix.lower() in _SEARCH_SKIP_EXT
+                or any(part in _SEARCH_SKIP_DIRS for part in f.parts))
+
+    hits, total, DISPLAY, SCAN_CAP = [], 0, 40, 600
     for f in root.rglob("*"):
-        if len(hits) >= 40:
-            break
-        if not f.is_file() or f.suffix.lower() in (
-                ".exe", ".dll", ".pyd", ".zip", ".jpg", ".png", ".db",
-                ".ico", ".pyc"):
-            continue
-        if any(part in ("__pycache__", ".git", "node_modules", "dist", "venv",
-                        ".venv") for part in f.parts):
+        if _skip(f):
             continue
         try:
-            for n, line in enumerate(
-                    f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                if rx.search(line):
-                    hits.append(f"{f}:{n}: {line.strip()[:140]}")
-                    if len(hits) >= 40:
-                        break
+            text = f.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-    return "\n".join(hits) or "No matches."
+        for m in rx.finditer(text):
+            total += 1
+            if len(hits) < DISPLAY:
+                ln = text.count("\n", 0, m.start()) + 1
+                snippet = text[m.start():m.start() + 160].splitlines()[0]
+                hits.append(f"{f}:{ln}: {snippet.strip()[:140]}")
+        if total >= SCAN_CAP:
+            break
+    if hits:
+        more = (f"\n[{total}+ matches — showing first {len(hits)}; narrow the pattern "
+                f"to see the rest]" if total > len(hits) else f"\n[{total} match(es)]")
+        return "\n".join(hits) + more
+    # No text matched — maybe they meant a FILE by that name (a common mixup).
+    import difflib
+    names = {}
+    for f in root.rglob("*"):
+        if f.is_file() and not any(part in _SEARCH_SKIP_DIRS for part in f.parts):
+            names[f.name] = str(f)
+    core = re.sub(r"[^\w.]", "", pattern)
+    near = [names[n] for n in difflib.get_close_matches(core, list(names), n=6, cutoff=0.4)]
+    near += [v for n, v in names.items() if core and core.lower() in n.lower() and v not in near]
+    if near:
+        return ("No text matches. NOTE: `search` looks INSIDE files. To open a file "
+                "use read_file. Files whose NAME is similar:\n" + "\n".join(near[:8]))
+    return "No matches."
 
 
 def _t_run(cmd: str) -> str:
@@ -664,13 +716,14 @@ def _known_locations() -> str:
 # real subject of the task.
 _PLAYBOOK = {
     "bugs": [
+        'list_dir the project FIRST to get the REAL filenames — never guess a name',
         'run {"command":"python -m pytest -q"}  — do the tests already fail? read the failures first',
-        'run {"command":"python -m py_compile <file>"}  — syntax / import-time errors',
-        r'search {"pattern":"except\s*:|except Exception:\s*$"}  — bare / silent excepts',
-        r'search {"pattern":"except[^\n]*:\s*\n\s*pass"}  — swallowed exceptions',
+        r'search {"pattern":"except[^\n]*:\s*\n\s*(pass|continue)\s*$"}  — errors swallowed silently',
         r'search {"pattern":"==\s*None|!=\s*None"}  — should be `is` / `is not None`',
         r'search {"pattern":"def \w+\([^)]*=\s*(\[\]|\{\})"}  — mutable default argument',
-        r'search {"pattern":"TODO|FIXME|HACK|XXX|BUG"}  — known-unfinished / risky spots',
+        r'search {"pattern":"TODO|FIXME|HACK|XXX"}  — known-unfinished / risky spots',
+        'A broad `except Exception` that LOGS or handles the error is FINE — do NOT '
+        'report those; only a truly SILENT swallow (bare pass/continue) is a finding.',
     ],
     "error": [
         'search the EXACT error text / exception name, then read the file around each hit',
