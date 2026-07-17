@@ -244,11 +244,19 @@ PROJECT, or REPORT BUGS/FIXES — then write it like a staff engineer updating a
 • OPEN with ONE sharp line: what you did and what you found. Never "Sure",
   "Here is the report", "I hope this helps".
 • Then NUMBERED findings, most important first, each shaped exactly:
-  **1. Short title** — the issue or the fix in one clause.
-  then 1-3 sentences: why it happens, exactly where (file.py:line), and the fix.
-• Then, for smaller items, a line "Plus N quality fixes:" followed by - bullets,
-  one punchy but informative line each.
-• END with proof: what you ran and its REAL result, plus what to do or run next.
+  **1. Bold the first 3-6 words as the anchor** — em dash, then the fix in the
+  same clause. Next: 1-3 sentences on why it happens, exactly where
+  (`file.py:line`), and the fix. Every claim grounded in real code/output.
+  A finding must name a CONCRETE failure (specific input -> wrong output/crash) —
+  "could cause issues" is not a finding, drop it or make it concrete.
+• Then, for smaller items: **Plus N quality fixes:** (bold, own line) then
+  `-` bullets, first few words bolded the same way.
+• END with proof: the command wrapped in backticks and its REAL result bolded
+  ("`pytest -q` — **120 passed**"), plus what to do or run next.
+• MICRO-TYPOGRAPHY: bold every number that matters (counts, lines, durations,
+  before → after inside the bold); backtick every code token — filenames, paths,
+  functions, exceptions, commands, flags, regex — no exceptions; a sub-heading is
+  **bold text** on its own line, never a `#` heading.
 • Be QUANTITATIVE: real filenames, line numbers, counts, before -> after values.
   No vague adjectives. Never paste a raw dump as the report.
 Markdown belongs in "report" ONLY — "speech" stays 1-3 plain spoken sentences.

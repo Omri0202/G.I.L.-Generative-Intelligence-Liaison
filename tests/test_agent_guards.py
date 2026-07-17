@@ -125,6 +125,12 @@ def test_speakable_strips_markdown_for_tts():
 def test_agent_prompt_demands_the_report_format():
     assert "REPORT FORMAT" in ca._SYSTEM
     assert "Plus N quality fixes:" in ca._SYSTEM
+    assert "MICRO-TYPOGRAPHY" in ca._SYSTEM
+
+def test_agent_prompt_rejects_vague_findings_and_loop_termination_false_positives():
+    # the exact false-positive GIL produced on actions.py's EnumKey/OSError loop
+    assert "NORMAL termination idiom" in ca._SYSTEM
+    assert "CONCRETE failure" in ca._SYSTEM
 
 def test_brain_prompt_still_formats_with_all_placeholders():
     # a stray single brace in the persona would crash the brain at runtime
