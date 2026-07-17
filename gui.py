@@ -317,12 +317,13 @@ class SettingsWindow(ctk.CTkToplevel):
                      font=ctk.CTkFont("Segoe UI", 11, "bold"),
                      text_color="#4A4A6A").pack(anchor="w", pady=(0, 6))
         _MODELS = [
-            ("llama-3.1-8b-instant",    "llama-3.1-8b  (fast, default)"),
+            ("openai/gpt-oss-120b",     "gpt-oss-120b  (strongest, default)"),
+            ("llama-3.1-8b-instant",    "llama-3.1-8b  (fast)"),
             ("llama-3.3-70b-versatile", "llama-3.3-70b  (smarter, slower)"),
             ("mixtral-8x7b-32768",      "Mixtral 8×7B  (multilingual)"),
             ("gemma2-9b-it",            "Gemma 2 9B    (lightweight)"),
         ]
-        self._model_var = ctk.StringVar(value=self._cfg_get("ai_model", "llama-3.1-8b-instant"))
+        self._model_var = ctk.StringVar(value=self._cfg_get("ai_model", "openai/gpt-oss-120b"))
         for model_id, label in _MODELS:
             row = ctk.CTkFrame(s, fg_color="#0A0A18", corner_radius=6, height=38)
             row.pack(fill="x", pady=2); row.pack_propagate(False)
@@ -527,7 +528,7 @@ class SettingsWindow(ctk.CTkToplevel):
                      font=ctk.CTkFont("Segoe UI", 11, "bold"),
                      text_color="#4A4A6A").pack(anchor="w", pady=(20, 8))
         for lbl, val in [
-            ("AI Model",    "Groq / llama-3.1-8b-instant"),
+            ("AI Model",    "Groq / openai/gpt-oss-120b"),
             ("Voice In",    "Google Speech Recognition"),
             ("Voice Out",   "edge-tts / en-GB-RyanNeural"),
             ("Wake phrase", "Hello G.I.L."),
@@ -1461,7 +1462,7 @@ class ChatWindow(ctk.CTkToplevel):
             ver = _V
         except Exception:
             ver = "1.x"
-        ctk.CTkLabel(info_bar, text=f"G.I.L. v{ver}  •  llama-3.1",
+        ctk.CTkLabel(info_bar, text=f"G.I.L. v{ver}  •  gpt-oss-120b",
                      font=ctk.CTkFont("Segoe UI", 9),
                      text_color=self._VERSION_TXT).pack(anchor="w", padx=12, pady=14)
 
@@ -3499,6 +3500,7 @@ class ChatWindow(ctk.CTkToplevel):
         import json
         from pathlib import Path
         _MODELS = [
+            "openai/gpt-oss-120b",
             "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
             "gemma2-9b-it",
@@ -3924,6 +3926,20 @@ class GILWindow(ctk.CTk):
         fn = getattr(win, "set_working", None)
         if callable(fn):
             fn(on)
+
+    def stream_thought(self, delta: str) -> None:
+        """Forward a live reasoning-token chunk to the web terminal (typewriter)."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "stream_thought", None)
+        if callable(fn):
+            fn(delta)
+
+    def stream_thought_end(self) -> None:
+        """Settle/close the live thought line for the current step."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "stream_thought_end", None)
+        if callable(fn):
+            fn()
 
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():

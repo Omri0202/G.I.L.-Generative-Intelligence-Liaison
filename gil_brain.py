@@ -74,16 +74,16 @@ def _load_model() -> str:
         import json
         from pathlib import Path
         with open(Path(__file__).parent / "data" / "gil_config.json") as f:
-            return json.load(f).get("ai_model", "llama-3.1-8b-instant")
+            return json.load(f).get("ai_model", "openai/gpt-oss-120b")
     except Exception:
-        return "llama-3.1-8b-instant"
+        return "openai/gpt-oss-120b"
 
 
 GROQ_MODEL = _load_model()
 
 # The heavyweight model used for complex/multi-step/coding queries.
 # Simple commands stay on the configured fast model for sub-second latency.
-_SMART_MODEL = "llama-3.3-70b-versatile"
+_SMART_MODEL = "openai/gpt-oss-120b"
 
 _MISSION_HINTS = (
     "set up", "setup", "workflow", "routine", "organize", "prepare",
@@ -709,6 +709,11 @@ class GILBrain:
             "temperature": 0.30,
             "max_tokens":  2000 if mode == "chat" else 900,
         }
+        # gpt-oss models spend part of the token budget on hidden reasoning
+        # before emitting content. Keep effort low so fast commands stay snappy
+        # and short (900-token) replies aren't starved by reasoning tokens.
+        if "gpt-oss" in chosen_model:
+            payload["reasoning_effort"] = "low"
         # Hard budget: if the whole request is still too big, drop the oldest
         # history turns until it fits (keeps the system prompt + newest turns).
         _MAX_CHARS = 90000
@@ -768,6 +773,9 @@ class GILBrain:
                     for fb_model in _FALLBACK_MODELS:
                         for key in GROQ_KEYS:
                             fb_payload = {**payload, "model": fb_model}
+                            # Llama/Gemma fallbacks reject reasoning_effort (400).
+                            if "gpt-oss" not in fb_model:
+                                fb_payload.pop("reasoning_effort", None)
                             hdrs = {"Authorization": f"Bearer {key}",
                                     "Content-Type": "application/json"}
                             try:

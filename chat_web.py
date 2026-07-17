@@ -534,6 +534,11 @@ class WebChat:
     def hide_typing(self) -> None: self._push("gil.hideTyping")
     def on_activity(self, entry: dict) -> None: self._push("gil.activity", entry)
 
+    # live token stream — GIL's reasoning typewriters into the terminal as it
+    # thinks (transient; not persisted to history).
+    def stream_thought(self, delta: str) -> None: self._push("gil.streamThought", delta)
+    def stream_thought_end(self) -> None: self._push("gil.streamThoughtEnd")
+
     def add_image_message(self, path) -> None:
         p = str(path)
         threading.Thread(target=self._persist, args=(f"[IMAGE:{p}]", "gil"),

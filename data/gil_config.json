@@ -1,8 +1,10 @@
 {
-  "ai_model": "llama-3.1-8b-instant",
+  "ai_model": "openai/gpt-oss-120b",
+  "agent_model": "openai/gpt-oss-120b",
+  "agent_speed_mode": "auto",
   "clap_detect_on": true,
   "tts_voice": "en-GB-RyanNeural",
   "chat_theme": "dark",
-  "voice_enabled": true,
+  "voice_enabled": false,
   "autonomous_mode": true
 }

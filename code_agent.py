@@ -60,7 +60,13 @@ search     {"pattern": "...", "dir": "..."}             find TEXT INSIDE files (
 run        {"command": "..."}                           PowerShell command
 edit_file  {"path": "...", "old": "...", "new": "..."}  replace EXACT text (must match once)
 write_file {"path": "...", "content": "..."}            create or overwrite a file
+plan_next  {}                                           check off the current plan step, advance to the next
 done       {"summary": "...", "success": true/false}    finish the task
+
+WORK PLAN: you are given a numbered plan and told which step is your CURRENT
+FOCUS. Do that step only. When it is genuinely satisfied, emit {"tool":"plan_next"}
+to check it off and move on. When all steps are checked, emit `done` with your
+report. Never repeat a step you already completed.
 
 FILENAMES — do not invent them:
 - ALWAYS list_dir the folder first and use the EXACT names it returns. Never
@@ -169,6 +175,53 @@ def _agent_models() -> tuple[str, ...]:
     return tuple(out)
 
 
+# ── Speed Mode / adaptive reasoning ───────────────────────────────────────────
+# gpt-oss on Groq's free tier is capped at 8000 tokens-per-minute; heavy
+# reasoning burns that budget and triggers backoff pauses. Speed Mode trades a
+# little depth for a lot of wall-clock: medium reasoning + a tighter context so
+# steps stay well under the cap and never 429/413.
+#   deep → high effort, roomy context      (complex, careful debugging & edits)
+#   fast → medium effort, trimmed context  (reads, structural sweeps, simple work)
+#   auto → fast while investigating, deep the moment GIL starts changing code
+# NOTE: Groq gpt-oss only accepts none/default/low/medium/high — there is no
+# "max", so a "max"/"deep" preference maps to high (its true ceiling).
+_SPEED_PROFILES = {
+    "deep": {"effort": "high",   "max_tokens": 2200, "ctx": 16000},
+    "fast": {"effort": "medium", "max_tokens": 1100, "ctx": 11000},
+}
+_EFFORTS = ("low", "medium", "high")
+
+
+def _agent_speed_mode() -> str:
+    """Resolve the Speed Mode preference: deep | fast | auto. Env wins (so it can
+    be flipped without a rebuild), then gil_config.json, default 'auto'."""
+    v = (os.getenv("GIL_SPEED_MODE") or "").strip().lower()
+    if not v:
+        try:
+            cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")
+                             .read_text(encoding="utf-8"))
+            v = str(cfg.get("agent_speed_mode", "")).strip().lower()
+        except Exception:
+            v = ""
+    if v in ("deep", "max", "quality", "smart"):
+        return "deep"
+    if v in ("fast", "speed", "quick"):
+        return "fast"
+    return "auto"
+
+
+def _step_profile(mode: str, deep_phase: bool) -> dict:
+    """Per-step reasoning profile. In auto mode we reason fast while investigating
+    and switch to deep once real changes are on the table. An explicit
+    GIL_REASONING=low|medium|high overrides just the effort (advanced/manual)."""
+    resolved = ("deep" if deep_phase else "fast") if mode == "auto" else mode
+    prof = dict(_SPEED_PROFILES.get(resolved, _SPEED_PROFILES["fast"]))
+    forced = (os.getenv("GIL_REASONING") or "").strip().lower()
+    if forced in _EFFORTS:
+        prof["effort"] = forced
+    return prof
+
+
 def _extract_json(raw: str, must_have: str = "tool") -> dict | None:
     """Pull one JSON object out of a model reply, tolerantly. Handles ```json
     fences, leading prose, and nested braces by scanning for the first brace-
@@ -210,38 +263,150 @@ def _extract_json(raw: str, must_have: str = "tool") -> dict | None:
     return None
 
 
+def _retry_after_secs(r) -> float:
+    """Seconds Groq wants us to wait before retrying a 429. Prefers the
+    `retry-after` header, falls back to `x-ratelimit-reset-tokens`, else 0."""
+    for hdr in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        v = r.headers.get(hdr, "")
+        if not v:
+            continue
+        m = re.match(r"([\d.]+)\s*(ms|s|m)?", str(v).strip())
+        if m:
+            n = float(m.group(1))
+            return n / 1000.0 if m.group(2) == "ms" else n * 60.0 if m.group(2) == "m" else n
+    return 0.0
+
+
+def _stream_groq(payload: dict, headers: dict, on_thought) -> tuple:
+    """Streaming POST. Forwards gpt-oss `reasoning` deltas to on_thought the
+    instant they arrive (the live typewriter thought stream) while accumulating
+    the `content` deltas (the JSON action). Returns (status, content, response)."""
+    r = requests.post(_GROQ_URL, json={**payload, "stream": True},
+                      headers=headers, timeout=60, stream=True)
+    if r.status_code != 200:
+        return r.status_code, "", r
+    parts: list[str] = []
+    try:
+        for line in r.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                delta = json.loads(data)["choices"][0].get("delta", {})
+            except Exception:
+                continue
+            think = delta.get("reasoning")
+            if think and on_thought:
+                try:
+                    on_thought(think)
+                except Exception:
+                    pass
+            if delta.get("content"):
+                parts.append(delta["content"])
+    finally:
+        r.close()
+    return 200, "".join(parts), r
+
+
+def _call_groq(payload: dict, key: str, on_thought) -> tuple:
+    """One Groq call normalised to (status, content_str, response). Streams the
+    reasoning to on_thought when set and the model exposes it (gpt-oss); a plain
+    blocking call otherwise. One return shape lets the sweep treat 429/413/400
+    identically for both paths."""
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    if on_thought and "gpt-oss" in payload.get("model", ""):
+        return _stream_groq(payload, headers, on_thought)
+    r = requests.post(_GROQ_URL, json=payload, headers=headers, timeout=45)
+    if r.status_code != 200:
+        return r.status_code, "", r
+    try:
+        return 200, r.json()["choices"][0]["message"]["content"], r
+    except Exception:
+        return 200, "", r
+
+
 def _llm_json(messages: list, must_have: str = "tool",
               models: tuple[str, ...] | None = None,
-              temperature: float = 0.2) -> dict | None:
+              temperature: float = 0.2, on_thought=None,
+              effort: str = "high", max_tokens: int = 2000) -> dict | None:
     """One structured-JSON call to Groq with model + key fallback. Returns the
-    first reply that parses to a dict containing `must_have`, else None."""
-    payload = {"messages": messages, "temperature": temperature,
-               "max_tokens": 1600, "response_format": {"type": "json_object"}}
-    for model in (models or _agent_models()):
-        payload["model"] = model
-        for key in _keys():
-            try:
-                r = requests.post(_GROQ_URL, json=payload,
-                                  headers={"Authorization": f"Bearer {key}",
-                                           "Content-Type": "application/json"},
-                                  timeout=45)
-                if r.status_code == 429:
-                    continue
-                # json_object mode (or an unknown model) can 400 — retry plainly
-                if r.status_code == 400 and "response_format" in payload:
-                    p2 = {k: v for k, v in payload.items() if k != "response_format"}
-                    r = requests.post(_GROQ_URL, json=p2,
-                                      headers={"Authorization": f"Bearer {key}",
-                                               "Content-Type": "application/json"},
-                                      timeout=45)
-                r.raise_for_status()
-                raw = r.json()["choices"][0]["message"]["content"]
-                obj = _extract_json(raw, must_have)
-                if obj:
-                    return obj
-                log.debug("agent llm: no '%s' in reply: %.160s", must_have, raw)
-            except Exception as exc:
-                log.debug("agent llm attempt failed (%s): %s", model, exc)
+    first reply that parses to a dict containing `must_have`, else None.
+
+    Rate limits are NOT the same as a bad reply: gpt-oss-120b has a low
+    tokens-per-minute ceiling, so as the agent's context grows a step can 429
+    on every model. When a whole sweep fails *only* to rate-limiting we wait out
+    the reset window and retry the sweep, instead of returning None and letting
+    the caller misread throttling as malformed JSON (which made runs bail early)."""
+    base = {"messages": messages, "temperature": temperature,
+            "response_format": {"type": "json_object"}}
+    model_list = models or _agent_models()
+    shrink_budget = 16000
+
+    for sweep in range(4):
+        rate_limited = too_big = False
+        retry_after = 0.0
+        for model in model_list:
+            payload = dict(base)
+            payload["model"] = model
+            # Code mode is "slower but smarter": let gpt-oss reason hard. Keep its
+            # max_tokens modest — Groq reserves prompt+max_tokens against the TPM
+            # limit, so an oversized reservation makes big-context steps fail that
+            # would otherwise fit. Only gpt-oss accepts reasoning_effort; strip it
+            # for the Llama fallbacks (which would 400 on an unknown field).
+            if "gpt-oss" in model:
+                payload["reasoning_effort"] = effort
+                payload["max_tokens"] = max_tokens
+            else:
+                payload.pop("reasoning_effort", None)
+                payload["max_tokens"] = 1600
+            # Only the primary gpt-oss attempt streams its reasoning to the
+            # terminal; the Llama fallbacks have no reasoning to show.
+            think_cb = on_thought if "gpt-oss" in model else None
+            for key in _keys():
+                try:
+                    status, raw, r = _call_groq(payload, key, think_cb)
+                    # 429 = rolling per-minute budget spent (wait it out).
+                    if status == 429:
+                        rate_limited = True
+                        retry_after = max(retry_after, _retry_after_secs(r))
+                        continue
+                    # 413 = this single request exceeds the model's TPM ceiling
+                    # (gpt-oss's is only 8k). A bigger-limit model may still take
+                    # it; if none does, we shrink the transcript below and retry.
+                    if status == 413:
+                        too_big = True
+                        continue
+                    # json_object mode (or an unknown model) can 400 — retry plainly
+                    if status == 400 and "response_format" in payload:
+                        p2 = {k: v for k, v in payload.items() if k != "response_format"}
+                        status, raw, r = _call_groq(p2, key, think_cb)
+                    if status != 200:
+                        continue
+                    obj = _extract_json(raw, must_have)
+                    if obj:
+                        return obj
+                    log.debug("agent llm: no '%s' in reply: %.160s", must_have, raw)
+                except Exception as exc:
+                    log.debug("agent llm attempt failed (%s): %s", model, exc)
+
+        # A full sweep produced nothing. Distinguish *capacity* failures (the
+        # models never ran) from genuine bad replies — only the latter should
+        # fall through to None so the caller nudges the model's JSON.
+        if too_big and sweep < 3:
+            # Every model that could serve this was too small for the request.
+            # Shrink the running transcript and retry immediately.
+            shrink_budget = int(shrink_budget * 0.6)
+            _cap_context(messages, max_chars=shrink_budget)
+            log.warning("agent llm: request too large — trimmed to ~%d chars, retrying", shrink_budget)
+            continue
+        if rate_limited and sweep < 3:
+            wait = min(max(retry_after, 6.0), 30.0)
+            log.warning("agent llm: all models rate-limited — waiting %.1fs then retrying", wait)
+            time.sleep(wait)
+            continue
+        break
     return None
 
 
@@ -264,12 +429,38 @@ def _trim_biggest_result(messages: list, tail_n: int = 6, min_len: int = 1200) -
     return True
 
 
+def _cap_context(messages: list, max_chars: int = 16000) -> None:
+    """Keep the running transcript small enough to fit gpt-oss-120b's tight
+    tokens-per-minute ceiling (~8k TPM; Groq reserves prompt+max_tokens against
+    it). Preserves the system prompt (index 0) and the original task (index 1),
+    then drops the oldest intermediate turns, and finally shrinks any remaining
+    oversized RESULT bodies, until the whole request fits. Mutates in place.
+
+    ~16k chars ≈ 4–4.8k tokens, which with the 2k-token reply reservation stays
+    under the 8k limit. Without this, long runs exceed even the Llama fallback's
+    12k limit and every model rejects the request (429/413)."""
+    def total() -> int:
+        return sum(len(m.get("content", "")) for m in messages)
+    # Drop oldest middle turns first (keep system + task at 0,1 and recent turns).
+    while total() > max_chars and len(messages) > 8:
+        del messages[2]
+    # Still too big: shrink the largest remaining bodies.
+    while total() > max_chars:
+        biggest = max((m for m in messages[2:] if len(m.get("content", "")) > 400),
+                      key=lambda m: len(m["content"]), default=None)
+        if biggest is None:
+            break
+        biggest["content"] = biggest["content"][:400] + "\n…[trimmed to save context]"
+
+
 def _extract_action(raw: str) -> dict | None:
     return _extract_json(raw, "tool")
 
 
-def _llm(messages: list) -> dict | None:
-    return _llm_json(messages, must_have="tool")
+def _llm(messages: list, on_thought=None,
+         effort: str = "high", max_tokens: int = 2000) -> dict | None:
+    return _llm_json(messages, must_have="tool", on_thought=on_thought,
+                     effort=effort, max_tokens=max_tokens)
 
 
 def _speakable(md: str, limit: int = 160) -> str:
@@ -872,6 +1063,87 @@ def _playbook_block(task: str) -> str:
     return block
 
 
+# ── Planner — turn a task into a short, ordered, executable work plan ───────────
+_PLAN_SYSTEM = """\
+You are the PLANNER for G.I.L.'s coding agent. Given a task, produce a SHORT,
+concrete, ordered work plan that the agent will then execute ONE step at a time
+with these tools: read_file, list_dir, search, run (PowerShell), edit_file,
+write_file.
+
+Return ONE JSON object only:  {"plan": ["step 1", "step 2", ...]}
+
+What a GOOD plan looks like:
+- 3 to 5 steps. Fewer is better. Each step is ONE concrete, checkable unit.
+- Ordered the way a staff engineer works: UNDERSTAND (list_dir, run tests,
+  search, read the real code) BEFORE deciding — then act — then VERIFY.
+- Each step says WHAT to do in the agent's own tools and HOW you'll know it's
+  done, with concrete targets. GOOD: "List the project and run `pytest -q` to
+  learn the real filenames and see current failures." BAD: "Investigate."
+- A LOOK / REVIEW / AUDIT task must END by REPORTING findings — no edits.
+- A FIX / CHANGE / IMPROVE task investigates, then makes ONE smallest correct
+  change, then VERIFIES it with pytest / py_compile.
+- Never invent filenames — refer to areas/patterns; the agent finds real names.
+Return ONLY the JSON object, nothing else."""
+
+
+def _make_plan(task: str, mode: str) -> list[str]:
+    """Ask the model for a short ordered work plan. Returns [] on any failure so
+    the agent simply runs unplanned (previous behaviour) rather than breaking."""
+    try:
+        msgs = [{"role": "system", "content": _PLAN_SYSTEM},
+                {"role": "user", "content":
+                 f"TASK:\n{task[:1500]}\n\nTASK MODE: {mode}\n\n"
+                 f"KNOWN LOCATIONS:\n{_known_locations()}\n\n"
+                 f"{_playbook_block(task)}\n\nProduce the plan now."}]
+        obj = _llm_json(msgs, must_have="plan")
+        steps: list[str] = []
+        for s in (obj or {}).get("plan", []) or []:
+            s = str(s).strip().lstrip("0123456789.)-• ").strip()
+            if s:
+                steps.append(s[:160])
+            if len(steps) >= 6:
+                break
+        return steps
+    except Exception:
+        log.debug("plan generation failed", exc_info=True)
+        return []
+
+
+def _should_plan(task: str) -> bool:
+    """Plan for real, multi-part tasks; skip the overhead for a one-liner lookup."""
+    return len(task.split()) >= 5
+
+
+def _plan_status_block(plan: list[str], idx: int) -> str:
+    """Render the plan as a live checklist with the current focus marked, so the
+    agent always sees where it is and what's left — its compass every turn."""
+    if not plan:
+        return ""
+    rows = []
+    for i, step in enumerate(plan):
+        mark = "[x]" if i < idx else ("[>]" if i == idx else "[ ]")
+        rows.append(f"  {mark} {i + 1}. {step}")
+    if idx < len(plan):
+        tail = (f"CURRENT FOCUS -> step {idx + 1}: {plan[idx]}\n"
+                "Work ONLY this step. The moment it is genuinely satisfied, reply "
+                'with {"tool":"plan_next"} to check it off and advance. Never repeat '
+                "a step you already did.")
+    else:
+        tail = ("ALL STEPS ARE CHECKED. Finish NOW with `done` — your summary is the "
+                "final report.")
+    return ("WORK PLAN (this is YOUR plan; do the steps in order, one at a time):\n"
+            + "\n".join(rows) + "\n\n" + tail)
+
+
+def _action_sig(action: dict) -> str:
+    """A stable signature of an action (tool + its main target) used to detect
+    thrashing — the same read/search/edit proposed over and over."""
+    a = action.get("args") or {}
+    tgt = str(a.get("path") or a.get("pattern") or a.get("command")
+              or a.get("dir") or "").lower().strip()
+    return f"{str(action.get('tool', '')).lower()}:{tgt}"
+
+
 def _lang_for(path: str) -> str:
     ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path else ""
     return {".py": "python", ".js": "javascript", ".ts": "typescript",
@@ -932,36 +1204,181 @@ def _opening_ack(task: str) -> str:
     return f"Reading {label}'s entry point and layout."
 
 
+def _assemble_report_from_transcript(messages: list, task: str) -> str:
+    """Last-resort report built purely in Python from the tool results already in
+    the transcript — files inspected, patterns searched, concrete `file:line`
+    hits — so even a hard rate-limit wall yields real findings instead of a blank
+    'keep going' apology. This is the floor; the model synthesis above is better."""
+    files, searches, hits = [], [], []
+    for m in messages:
+        c = m.get("content", "")
+        if m.get("role") == "assistant":
+            try:
+                a = json.loads(c)
+            except Exception:
+                continue
+            tool, ar = a.get("tool"), (a.get("args") or {})
+            if tool == "read_file" and ar.get("path"):
+                files.append(str(ar["path"]))
+            elif tool == "search" and ar.get("pattern"):
+                searches.append(str(ar["pattern"]))
+        elif m.get("role") == "user" and c.startswith("RESULT:"):
+            for line in c[7:].splitlines():
+                if re.search(r":\d+:", line) and len(line.strip()) > 3:
+                    hits.append(line.strip()[:120])
+    files = list(dict.fromkeys(files))[:8]
+    searches = list(dict.fromkeys(searches))[:6]
+    hits = hits[:12]
+    out = [f"**Ran out of steps before finishing** — here's what I gathered on "
+           f"*{task[:80]}*:", ""]
+    if hits:
+        out.append(f"**{len(hits)} candidate location(s)** surfaced by the searches I ran:")
+        out += [f"- `{h}`" for h in hits]
+        out.append("")
+    if files:
+        out.append("**Files inspected:** "
+                   + ", ".join(f"`{Path(f).name}`" for f in files))
+    if searches:
+        out.append("**Patterns searched:** " + ", ".join(f"`{s}`" for s in searches))
+    if not (hits or files or searches):
+        out.append("I didn't reach any concrete findings before the limit.")
+    out += ["", "Say **continue** and I'll resume from here with a fresh step budget."]
+    return "\n".join(out)
+
+
+def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, bool]:
+    """Out of steps / stuck → never a blank fallback. First ask the model to
+    compile whatever it found into the real engineering report (one shot, riding
+    the same 429/413 backoff). If even that can't be reached, fall back to a
+    transcript-assembled report so the user ALWAYS gets findings."""
+    ask = list(messages) + [{"role": "user", "content":
+        "You are OUT OF STEPS for this task — do NOT request another tool. Reply "
+        "with ONE JSON object and nothing else: "
+        '{"summary": "<final engineering report in markdown: open with one sharp '
+        "line and the number of concrete findings; then a numbered list, most "
+        "important first, each bolding its first 3-6 words, giving `file:line`, why "
+        "it matters and the fix; end with what to run next>\", "
+        '"success": true/false}. Ground every point in what you actually read or '
+        "ran above — no guesses, no padding."}]
+    try:
+        obj = _llm_json(ask, must_have="summary")
+    except Exception:
+        obj = None
+    if obj and str(obj.get("summary", "")).strip():
+        return str(obj["summary"])[:2500], bool(obj.get("success", True))
+    return _assemble_report_from_transcript(messages, task), False
+
+
 def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     """Execute the agent loop (call from a worker thread)."""
     import activity
     import error_fixer
 
     window = eng.window
-    messages = [{"role": "system", "content": _SYSTEM.replace("{steps}", str(_MAX_STEPS))},
-                {"role": "user", "content":
-                 f"TASK:\n{task[:2500]}\n\n"
-                 f"KNOWN LOCATIONS (use these — do NOT guess paths):\n"
-                 f"{_known_locations()}\n\n"
-                 f"{_playbook_block(task)}\n\n"
-                 f"Start with the toolkit above on the relevant known location." +
-                 (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +
-                  "\n".join(hints) if hints else "")}]
-
     code_mode = bool(getattr(eng, "_code_mode", False))
     task_mode = _task_mode(task)      # 'investigate' (report only) vs 'change'
+
+    # The task message lives in a fixed slot (messages[1]) that _cap_context
+    # always preserves. We keep the immutable brief in `base_task_msg` and append
+    # a LIVE plan checklist that we re-render each step, so the agent always sees
+    # its plan and current focus without the context growing.
+    base_task_msg = (
+        f"TASK:\n{task[:2500]}\n\n"
+        f"KNOWN LOCATIONS (use these — do NOT guess paths):\n"
+        f"{_known_locations()}\n\n"
+        f"{_playbook_block(task)}\n\n"
+        f"Start with the toolkit above on the relevant known location." +
+        (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +
+         "\n".join(hints) if hints else ""))
+    messages = [{"role": "system", "content": _SYSTEM.replace("{steps}", str(_MAX_STEPS))},
+                {"role": "user", "content": base_task_msg}]
+
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
     if hasattr(window, "set_working"):
         window.set_working(True)      # pin the spinner + "working Ns" for the whole run
     if code_mode:
         window.add_chat_message(_opening_ack(task), "gil")   # deterministic hook line
     activity.set_group("Coding agent")
+
+    # ---- Build the work plan up front (the "designed, smart plan" GIL follows) ----
+    plan: list[str] = _make_plan(task, task_mode) if _should_plan(task) else []
+    plan_idx = 0            # which plan step is the current focus
+    item_steps = 0         # tool-steps spent on the current plan step
+    from collections import Counter
+    sig_counts: Counter = Counter()
+
+    def _refresh_plan_view() -> None:
+        block = _plan_status_block(plan, plan_idx)
+        messages[1]["content"] = base_task_msg + (("\n\n" + block) if block else "")
+
+    if plan:
+        pid = activity.start("brain", "Planned the work")
+        activity.done(pid, f"{len(plan)} steps")
+        if code_mode:
+            window.add_chat_message(
+                "**Plan** — here's how I'll tackle this:\n"
+                + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan)), "gil")
+    _refresh_plan_view()
+
+    # ---- live "thought stream": gpt-oss reasoning tokens typewriter into the
+    # terminal as GIL thinks, instead of a silent wait then a sudden dump. Only
+    # in the code terminal, and only if the window bridge exposes the hook. ----
+    _stream_ok = code_mode and hasattr(window, "stream_thought")
+    _tbuf: list[str] = []
+    def _on_thought(delta: str) -> None:
+        _tbuf.append(delta)
+        if sum(len(x) for x in _tbuf) >= 18 or "\n" in delta:
+            chunk = "".join(_tbuf); _tbuf.clear()
+            try:
+                window.stream_thought(chunk)
+            except Exception:
+                pass
+    def _end_thought() -> None:
+        if not _stream_ok:
+            return
+        if _tbuf:
+            try:
+                window.stream_thought("".join(_tbuf))
+            except Exception:
+                pass
+            _tbuf.clear()
+        try:
+            window.stream_thought_end()
+        except Exception:
+            pass
+    thought_cb = _on_thought if _stream_ok else None
+
     edits_made, verified = 0, False
     bad_replies = 0
     recovered_once = False
+    rejected_flag = False           # a change got bounced → reason harder next step
+    speed_mode = _agent_speed_mode()
+    if code_mode and speed_mode != "auto":
+        activity.instant("brain", f"Speed mode: {speed_mode}",
+                         "medium reasoning" if speed_mode == "fast" else "deep reasoning",
+                         status="done")
     try:
         for step in range(1, _MAX_STEPS + 1):
-            action = _llm(messages)
+            _refresh_plan_view()     # keep the plan checklist current every turn
+            # Adaptive reasoning: investigation steps run fast (medium effort,
+            # trimmed context → no 429 backoff); once real changes are on the
+            # table we reason deep. The context cap follows the profile so a fast
+            # step also carries a lighter payload.
+            _cur = (plan[plan_idx].lower() if plan and plan_idx < len(plan) else "")
+            deep_phase = (edits_made > 0 or rejected_flag or task_mode == "change"
+                          and any(w in _cur for w in ("edit", "fix", "change", "write",
+                                  "replace", "patch", "implement", "add ")))
+            prof = _step_profile(speed_mode, deep_phase)
+            _cap_context(messages, prof["ctx"])   # profile-sized payload under the TPM cap
+            # Second-to-last step: tell GIL to land the plane himself now — a clean
+            # self-authored `done` beats the forced finalize we'd otherwise do.
+            if step == _MAX_STEPS - 1:
+                messages.append({"role": "user", "content":
+                    "You are on your SECOND-TO-LAST step. Do not start new work — "
+                    "finish NOW with `done` and your full findings report."})
+            action = _llm(messages, on_thought=thought_cb,
+                          effort=prof["effort"], max_tokens=prof["max_tokens"])
+            _end_thought()           # settle the live thought line for this step
             if not action or "tool" not in action:
                 # Don't give up on one malformed reply — nudge the model back
                 # onto the JSON rails and retry a couple of times first.
@@ -984,10 +1401,16 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     messages.append({"role": "user", "content":
                         "Take a smaller, more targeted next step."})
                     continue
+                # Don't leave a blank "keep going" line — compile whatever GIL
+                # gathered so far into the real report before stopping.
+                _end_thought()
+                summary, ok = _finalize_report(messages, task, edits_made)
+                activity.instant("code", "Compiled findings", _speakable(summary)[:90],
+                                 status="done" if ok else "fail")
                 window.add_chat_message(
-                    "I couldn't get a clean next step from the model after a few "
-                    "tries. Tell me to continue and I'll pick up where I left off.",
-                    "gil")
+                    ("**Solved** ✓ — " if ok else "**Stopped** — ") + summary +
+                    (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
+                     if edits_made else ""), "gil")
                 return
             bad_replies = 0
             tool = str(action.get("tool", ""))
@@ -1011,6 +1434,57 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 eng._last_spoke_at[0] = time.time() - 1.5
                 eng._last_said[0] = spoken
                 return
+
+            # ---- plan_next: the agent checks off the current step and advances ----
+            if tool == "plan_next":
+                if plan and plan_idx < len(plan):
+                    activity.instant("code", f"Step {plan_idx + 1} done ✓",
+                                     plan[plan_idx][:80], status="done")
+                    plan_idx += 1
+                    item_steps = 0
+                    sig_counts.clear()
+                _refresh_plan_view()
+                messages.append({"role": "assistant", "content": json.dumps(action)})
+                if not plan or plan_idx >= len(plan):
+                    messages.append({"role": "user", "content":
+                        "RESULT:\nEvery plan step is checked off. Finish NOW with `done` "
+                        "and your full report — do not start new work."})
+                else:
+                    messages.append({"role": "user", "content":
+                        f"RESULT:\nChecked off. CURRENT FOCUS is now step {plan_idx + 1}: "
+                        f"{plan[plan_idx]}"})
+                continue
+
+            # ---- progress / anti-thrash guard ----------------------------------
+            # A planned run must keep moving. If the agent repeats the same move,
+            # or lingers too long on one step, force it forward instead of letting
+            # it spin (the exact loop that left a task unfinished after minutes).
+            if plan:
+                item_steps += 1
+                sig = _action_sig(action)
+                sig_counts[sig] += 1
+                repeating = sig_counts[sig] >= 3 and tool not in ("done", "plan_next")
+                stalled = item_steps > 7 and plan_idx < len(plan) - 1
+                if repeating or stalled:
+                    moved = ""
+                    if plan_idx < len(plan) - 1:
+                        plan_idx += 1
+                        item_steps = 0
+                        sig_counts.clear()
+                        moved = f" Advancing to step {plan_idx + 1}: {plan[plan_idx]}."
+                    activity.instant("code", "Breaking a loop",
+                                     (f"repeated {sig[:52]}" if repeating
+                                      else f"step budget reached"), status="fail")
+                    _refresh_plan_view()
+                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                    messages.append({"role": "user", "content":
+                        "RESULT:\n" + (
+                            f"You have tried `{sig}` repeatedly without progress. "
+                            if repeating else "You have spent enough on this step. ")
+                        + "Do NOT repeat it." + moved +
+                        (" If the plan is effectively done, finish with `done` and your "
+                         "findings." if plan_idx >= len(plan) - 1 else "")})
+                    continue
 
             # In /codemode, narrate the reasoning as a terminal bullet line
             # (Claude-Code style: a sentence, then the tool line beneath it).
@@ -1036,6 +1510,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     # Silent — the user never sees a change that failed a check.
                     activity.instant("code", "Self-check re-plan", reject[:90],
                                      status="fail")
+                    rejected_flag = True   # reason harder on the retry (auto mode)
                     messages.append({"role": "assistant", "content": json.dumps(action)})
                     messages.append({"role": "user", "content":
                         f"RESULT:\nSELF-CHECK REJECTED your {tool}: {reject}. "
@@ -1053,6 +1528,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 v, reason = verdict["verdict"], verdict["reason"]
                 activity.done(rid, f"{v}: {reason[:70]}")
                 if v in ("reject", "warn"):
+                    rejected_flag = True   # reason harder on the retry (auto mode)
                     messages.append({"role": "assistant", "content": json.dumps(action)})
                     messages.append({"role": "user", "content":
                         f"RESULT:\nAUTOMATED REVIEW did not pass this {tool} ({v}): {reason}. "
@@ -1089,6 +1565,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     diff=appr_diff, file=appr_file)
                 if not approved:
                     activity.fail(aid, "declined by user")
+                    rejected_flag = True   # reason harder on the retry (auto mode)
                     messages.append({"role": "assistant", "content": json.dumps(action)})
                     messages.append({"role": "user", "content":
                                      "RESULT:\nUser DECLINED this change. Try a "
@@ -1150,9 +1627,17 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             if len(messages) > 34:
                 messages = messages[:2] + messages[-32:]
 
+        # Hit the step ceiling without a `done` — gracefully collapse the context
+        # and compile the findings so far into the report, instead of a bare
+        # "keep going" line the user can't act on.
+        _end_thought()
+        summary, ok = _finalize_report(messages, task, edits_made)
+        activity.instant("code", "Compiled findings at step limit",
+                         _speakable(summary)[:90], status="done" if ok else "fail")
         window.add_chat_message(
-            f"I hit my {_MAX_STEPS}-step limit. Applied {edits_made} change(s) so far — "
-            "tell me to continue if you want me to keep going.", "gil")
+            ("**Solved** ✓ — " if ok else "**Stopped at the step limit** — ") + summary +
+            (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
+             if edits_made else ""), "gil")
     finally:
         import activity as _a
         _a.clear_group()
