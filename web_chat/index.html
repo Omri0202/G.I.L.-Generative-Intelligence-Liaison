@@ -199,7 +199,10 @@ body.codemode #welcome{display:none;}
 body.codemode .actcard{display:none;}          /* tool blocks replace activity cards */
 body.codemode #scroll{background:
   radial-gradient(130% 55% at 50% -12%, rgba(217,119,6,.05), transparent 60%),var(--page);}
-body.codemode #msgs{font-family:var(--cmfont);padding-top:6px;}
+/* terminal layout: the whole log flows from the LEFT edge, full width — not the
+   centered 820px chat column. */
+body.codemode #msgs{font-family:var(--cmfont);max-width:none;margin:0;
+  padding:8px 26px 12px;}
 
 /* ── SECTION 2.2 — terminal top bar: fixed 45px, traffic lights · divider ·
    title · right metadata; never wraps, cmpath ellipsises when cramped ── */
@@ -385,6 +388,16 @@ body.codemode #worktimer{font-family:var(--cmfont);}
 .diff .del{background:rgba(239,68,68,.12);color:#F0A19B;}   /* - removed */
 .diff .ctx{background:transparent;color:var(--dim);}        /* neutral   */
 .diff .hdr{color:var(--muted);}
+
+/* markdown tables — the "chart" GIL renders for reports (columns + rows) */
+.msg .body table{border-collapse:collapse;margin:12px 0;font-size:13px;
+  display:block;overflow-x:auto;max-width:100%;}
+.msg .body th,.msg .body td{border:1px solid var(--border);padding:6px 12px;
+  text-align:left;vertical-align:top;white-space:normal;}
+.msg .body th{background:var(--hover);font-weight:700;color:var(--txt);white-space:nowrap;}
+body.codemode .msg.gil .body table{font-family:var(--cmfont);font-size:12.5px;}
+body.codemode .msg.gil .body th{background:#17171B;color:var(--txt);border-color:#2A2B30;}
+body.codemode .msg.gil .body td{color:var(--dim);border-color:#26272C;}
 /* syntax highlight — warm, low-contrast, blends with the charcoal */
 .hl-kw{color:#C08A5E;} .hl-str{color:#A9B665;} .hl-num{color:#D8A657;}
 .hl-com{color:#6E675C;font-style:italic;} .hl-fn{color:#83A598;}
@@ -684,7 +697,7 @@ function md(src) {
   const blocks = [];
   src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
     blocks.push({lang: lang || "code", code});
-    return " B" + (blocks.length - 1) + " ";
+    return " B" + (blocks.length - 1) + " ";
   });
   src = src
     .replace(/^### (.*)$/gm, "<h3>$1</h3>")
@@ -700,12 +713,22 @@ function md(src) {
     m => "<ul>" + m.trim().split(/\n/).map(l => "<li>" + l.replace(/^[-•] /, "") + "</li>").join("") + "</ul>");
   src = src.replace(/((?:^\d+\. .*\n?)+)/gm,
     m => "<ol>" + m.trim().split(/\n/).map(l => "<li>" + l.replace(/^\d+\. /, "") + "</li>").join("") + "</ol>");
+  // tables:  | Col | Col |  +  | --- | --- | separator  +  body rows -> real <table>
+  src = src.replace(/(?:^[ \t]*\|.*\|[ \t]*\n?)+/gm, m => {
+    const rows = m.trim().split(/\n/).map(r => r.trim());
+    if (rows.length < 2 || !/^\|[\s:|-]+\|$/.test(rows[1])) return m;
+    const cells = r => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+    const head = cells(rows[0]);
+    let h = "<table><thead><tr>" + head.map(c => "<th>" + c + "</th>").join("") + "</tr></thead><tbody>";
+    rows.slice(2).forEach(r => { h += "<tr>" + cells(r).map(c => "<td>" + c + "</td>").join("") + "</tr>"; });
+    return h + "</tbody></table>";
+  });
   // paragraphs
   src = src.split(/\n{2,}/).map(p =>
-    /^<(h\d|ul|ol|blockquote| )/.test(p.trim()) ? p : "<p>" + p.replace(/\n/g, "<br>") + "</p>"
+    /^<(h\d|ul|ol|blockquote|table| )/.test(p.trim()) ? p : "<p>" + p.replace(/\n/g, "<br>") + "</p>"
   ).join("");
   // restore code blocks
-  src = src.replace(/ B(\d+) /g, (m, i) => {
+  src = src.replace(/ B(\d+) /g, (m, i) => {
     const b = blocks[+i];
     return `<pre><div class="codehead"><span>${esc(b.lang)}</span>` +
       `<button class="copy" onclick="gil.copyCode(this)">copy</button></div>` +

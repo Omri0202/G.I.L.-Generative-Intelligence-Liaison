@@ -112,10 +112,17 @@ METHOD (how a good engineer works):
 3. If asked to CHANGE, make the smallest correct edit, then VERIFY it (pytest /
    py_compile) and read the result before you finish.
 
-REPORT FORMAT — your `done` summary IS the engineering report. Markdown. Write it
-like a staff engineer updating a peer, never like a chatbot:
+REPORT FORMAT — your `done` summary IS the engineering report. Markdown. Be
+THOROUGH and richly structured (a real report, never a one-liner). Write it like a
+staff engineer updating a peer, never like a chatbot:
 - OPEN with ONE sharp line: what you did and what you found ("I traced the run.
   **3 real problems**:"). NEVER "Sure", "Here is the report", "I hope this helps".
+- SUMMARY TABLE (required whenever you report 2+ findings/results/items): render a
+  Markdown table so it displays as a chart with columns and rows, e.g.
+      | # | Finding | Location | Severity | Fix |
+      |---|---------|----------|----------|-----|
+      | 1 | Bare `except: pass` swallows the write error | `error_fixer.py:72` | high | log + re-raise |
+  Bold the numbers, backtick every `file:line` and identifier. THEN expand below.
 - Then NUMBERED findings, most important first, each shaped exactly:
   **1. Bold the first 3-6 words as the anchor** — then an em dash, then the fix
   in the same clause. Next line(s): 1-3 sentences on why it happens, exactly
@@ -1114,7 +1121,9 @@ def _make_plan(task: str, mode: str) -> list[str]:
                  f"TASK:\n{task[:1500]}\n\nTASK MODE: {mode}\n\n"
                  f"KNOWN LOCATIONS:\n{_known_locations()}\n\n"
                  f"{_playbook_block(task)}\n\nProduce the plan now."}]
-        obj = _llm_json(msgs, must_have="plan")
+        # planning is quick structuring, not deep reasoning — run it fast so every
+        # task starts sooner (low effort + small budget = less latency & TPM).
+        obj = _llm_json(msgs, must_have="plan", effort="low", max_tokens=700)
         steps: list[str] = []
         for s in (obj or {}).get("plan", []) or []:
             s = str(s).strip().lstrip("0123456789.)-• ").strip()
@@ -1274,9 +1283,11 @@ def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, b
         "You are OUT OF STEPS for this task — do NOT request another tool. Reply "
         "with ONE JSON object and nothing else: "
         '{"summary": "<final engineering report in markdown: open with one sharp '
-        "line and the number of concrete findings; then a numbered list, most "
-        "important first, each bolding its first 3-6 words, giving `file:line`, why "
-        "it matters and the fix; end with what to run next>\", "
+        "line and the number of concrete findings; then a Markdown TABLE of the "
+        "findings (columns: # | Finding | Location | Fix) so it renders as a chart; "
+        "then a numbered list, most important first, each bolding its first 3-6 "
+        "words, giving `file:line`, why it matters and the fix; end with what to "
+        "run next>\", "
         '"success": true/false}. Ground every point in what you actually read or '
         "ran above — no guesses, no padding."}]
     try:
@@ -1284,7 +1295,7 @@ def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, b
     except Exception:
         obj = None
     if obj and str(obj.get("summary", "")).strip():
-        return str(obj["summary"])[:2500], bool(obj.get("success", True))
+        return str(obj["summary"])[:4500], bool(obj.get("success", True))
     return _assemble_report_from_transcript(messages, task), False
 
 
@@ -1331,12 +1342,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         messages[1]["content"] = base_task_msg + (("\n\n" + block) if block else "")
 
     if plan:
-        pid = activity.start("brain", "Planned the work")
-        activity.done(pid, f"{len(plan)} steps")
-        if code_mode:
-            window.add_chat_message(
-                "**Plan** — here's how I'll tackle this:\n"
-                + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan)), "gil")
+        # The plan drives execution internally (injected into messages[1]) but is
+        # NOT shown to the user — a brief activity blip only.
+        activity.done(activity.start("brain", "Planned the work"), f"{len(plan)} steps")
     _refresh_plan_view()
 
     # ---- live "thought stream": gpt-oss reasoning tokens typewriter into the
@@ -1437,8 +1445,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             why  = str(action.get("why", tool))[:90]
 
             if tool == "done":
-                # Room for a real structured report — 600 chars truncated them.
-                summary = str(args.get("summary", "Task finished."))[:2500]
+                # Room for a real structured report (table + findings + proof).
+                summary = str(args.get("summary", "Task finished."))[:4500]
                 ok = bool(args.get("success", True))
                 activity.instant("code", "Agent finished",
                                  _speakable(summary)[:100], status="done" if ok else "fail")
