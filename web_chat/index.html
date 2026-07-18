@@ -232,32 +232,24 @@ body.codemode #msgs{font-family:var(--cmfont);padding-top:6px;}
   font-weight:400;letter-spacing:.03em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
-/* ── SECTION 4.2 — diagnostic indicator sub-row (under the console input) ── */
-#cmdiag{display:none;align-items:center;gap:8px;height:30px;padding:0 16px;
+/* ── diagnostic status row: live state verb · N active · elapsed · shortcuts ──
+   the single bottom status line (the decorative foot-bar was removed). Every
+   value here is REAL telemetry, driven by updateDiag(). */
+#cmdiag{display:none;align-items:center;gap:6px;height:30px;padding:0 16px;
   background:var(--page);border-top:1px solid #1A1B1F;
   font-family:var(--cmfont);font-size:11.5px;color:var(--muted);
   white-space:nowrap;overflow:hidden;user-select:none;flex:0 0 auto;}
 body.codemode #cmdiag{display:flex;}
 #cmdiag .diagarrow{color:var(--accent);font-weight:800;letter-spacing:-1.5px;
   margin-inline-end:2px;}
-#cmdiag .diagcount{color:var(--accent-cyan);font-weight:700;font-style:normal;
-  font-variant-numeric:tabular-nums;}
-
-/* ── SECTION 4.3 — utilitarian system status foot-bar (baseline anchor) ── */
-#cmfoot{display:none;align-items:center;justify-content:space-between;height:32px;
-  padding:0 12px;background:var(--bg-statusbar);font-family:var(--cmfont);
-  font-size:11px;font-weight:400;color:var(--muted);white-space:nowrap;
-  overflow:hidden;user-select:none;flex:0 0 auto;}
-body.codemode #cmfoot{display:flex;}
-#cmfoot .footleft,#cmfoot .footright{display:flex;align-items:center;gap:8px;min-width:0;}
-#cmfoot .footleft{flex:1 1 auto;overflow:hidden;}
-#cmfoot .footright{flex:0 0 auto;}
-#cmfoot .footglyph{font-size:12px;line-height:1;}
-#cmfoot .footpipe{color:#3A3B40;}
-#cmfoot .wslot{padding:3px 7px;border-radius:3px;color:var(--muted);flex:0 0 auto;}
-#cmfoot .wslot.active{background:var(--bg-activetab);color:#FFFFFF;}
-#cmfoot .footclock{color:var(--accent-cyan);font-variant-numeric:tabular-nums;
-  letter-spacing:.04em;}
+#cmdiag .diagverb{color:var(--muted);}
+#cmdiag .diagverb.busy{color:var(--accent);}          /* amber while in flight  */
+#cmdiag .diagmeta{color:var(--muted);}
+#cmdiag .diagcount,#cmdiag .diagtime{color:var(--accent-cyan);   /* live cyan  */
+  font-weight:700;font-variant-numeric:tabular-nums;}
+#cmdiag .diagtime{font-weight:400;}
+#cmdiag .diaghint{margin-inline-start:auto;color:#5C5D66;flex:0 1 auto;
+  overflow:hidden;text-overflow:ellipsis;}
 
 /* ── GIL narration → terminal bullet line (amber dot) ── */
 body.codemode .msg.gil{margin:0 0 3px 0;}
@@ -384,6 +376,10 @@ body.codemode #worktimer{font-family:var(--cmfont);}
   line-height:1.6;}
 .cdiff .cdhead{padding:6px 12px;border-bottom:1px solid #232429;color:var(--dim);
   font-size:12px;display:flex;align-items:center;gap:6px;white-space:nowrap;}
+/* diff line-stats badge: +added −removed (Claude-style) */
+.cdhead .dstats,.dhead .dstats{margin-inline-start:auto;display:flex;gap:8px;
+  flex-shrink:0;font-size:11px;font-variant-numeric:tabular-nums;}
+.dstats .dadd{color:#9BE3AE;} .dstats .ddel{color:#F0A19B;}
 .diff .dl{white-space:pre;padding:1px 12px;}
 .diff .add{background:rgba(34,197,94,.12);color:#9BE3AE;}   /* + added   */
 .diff .del{background:rgba(239,68,68,.12);color:#F0A19B;}   /* - removed */
@@ -407,7 +403,8 @@ body.codemode .approval .appdiff{margin:0 12px 8px;background:#141416;
   border:1px solid #232429;border-radius:0;overflow-x:auto;
   font-size:12.5px;line-height:1.6;}
 body.codemode .approval .appdiff .dhead{white-space:nowrap;padding:6px 12px;
-  margin:0;border-bottom:1px solid #232429;color:var(--dim);}
+  margin:0;border-bottom:1px solid #232429;color:var(--dim);
+  display:flex;align-items:center;gap:6px;}
 body.codemode .approval .appdiff .dl{padding:1px 12px;}
 body.codemode .approval .abtns{display:flex;justify-content:flex-end;gap:8px;
   padding:6px 14px 12px;}
@@ -671,6 +668,15 @@ function renderDiff(oldT, newT){
   for (let i = o.length - e; i < o.length; i++) h += '<div class="dl ctx"> '+esc(o[i])+'</div>';
   return h;
 }
+function diffStats(oldT, newT){
+  const o = (oldT||"").split("\n"), n = (newT||"").split("\n");
+  let s = 0; while (s < o.length && s < n.length && o[s] === n[s]) s++;
+  let e = 0; while (e < o.length - s && e < n.length - s &&
+                    o[o.length-1-e] === n[n.length-1-e]) e++;
+  const del = Math.max(0, (o.length - e) - s), add = Math.max(0, (n.length - e) - s);
+  return `<span class="dstats"><span class="dadd">+${add}</span>` +
+         `<span class="ddel">−${del}</span></span>`;
+}
 
 /* ═══════════ markdown (tiny, safe) ═══════════ */
 function md(src) {
@@ -876,13 +882,7 @@ const gil = {
     document.body.classList.toggle("working", !!on);   // drives the busy indicator
     if (on) { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); }
     else { this.clearShimmer(); $("typing").classList.remove("on"); this.scheduleStop(); }
-    // live telemetry in the diagnostic row: 1 background task while working, else 0
-    const dc = document.querySelector("#cmdiag .diagcount");
-    if (dc) {
-      dc.textContent = on ? "1" : "0";
-      const s = document.querySelector("#cmdiag .diags");
-      if (s) s.style.display = on ? "none" : "inline";   // "1 task" vs "0 tasks"
-    }
+    this.updateDiag();   // refresh the live status/task telemetry
   },
   clearShimmer() {
     document.querySelectorAll(".msg.gil .body.shimmer")
@@ -937,6 +937,7 @@ const gil = {
       const s = (Date.now() - this._timerStart) / 1000;
       $("worktimer").textContent = "working " +
         (s < 60 ? s.toFixed(0) + "s" : Math.floor(s/60) + "m " + Math.floor(s%60) + "s");
+      this.updateDiag();   // live elapsed + running-task count in the status row
     };
     tick();
     this._timerId = setInterval(tick, 250);
@@ -955,6 +956,8 @@ const gil = {
     if (this._stopT) { clearTimeout(this._stopT); this._stopT = null; }
     if (this._timerId) { clearInterval(this._timerId); this._timerId = null; }
     $("worktimer").textContent = "";
+    this._timerStart = 0;
+    this.updateDiag();   // back to "ready"
   },
 
   copyMsg(btn) {
@@ -1039,7 +1042,7 @@ const gil = {
     let inner = `<div class="atext">${md(c.text || "Approve this action?")}</div>`;
     if (c.diff) {   // unified diff viewer — one block, file header, +/- gutters
       inner += `<div class="appdiff diff">` +
-        (c.file ? `<div class="dhead">📁 <span>${esc(c.file)}</span></div>` : "") +
+        (c.file ? `<div class="dhead">📁 <span>${esc(c.file)}</span>${diffStats(c.diff.old, c.diff.new)}</div>` : "") +
         renderDiff(c.diff.old, c.diff.new) + `</div>`;
     }
     inner += `<div class="abtns"><button class="yes"><kbd>y</kbd> approve</button>` +
@@ -1076,33 +1079,21 @@ const gil = {
       main.insertBefore(bar, $("scroll"));
     }
     if (bar) bar.style.display = on ? "flex" : "none";
-    // build the diagnostic sub-row + system status foot-bar once; CSS shows them
-    // only in codemode. Appended after the composer so they anchor the bottom.
-    if (on && !document.getElementById("cmfoot")) {
+    // build the diagnostic status row once (CSS shows it only in codemode).
+    // Live telemetry: state verb · N active tasks · elapsed · shortcut hints.
+    if (on && !document.getElementById("cmdiag")) {
       const diag = document.createElement("div");
       diag.id = "cmdiag";
       diag.innerHTML =
         `<span class="diagarrow">▶▶</span>` +
-        `<span class="diagtext">approval required &nbsp;·&nbsp; ` +
-        `<b class="diagcount">0</b> background task<span class="diags">s</span></span>`;
-      const foot = document.createElement("div");
-      foot.id = "cmfoot";
-      foot.innerHTML =
-        `<span class="footleft"><span class="footglyph">🦖</span>` +
-        `<span class="footpipe">│</span>` +
-        `<span class="wslot">1:gorp-rs</span><span class="wslot">2:mux-rs</span>` +
-        `<span class="wslot active">3:poka</span><span class="wslot">4:tcord</span>` +
-        `<span class="wslot">5:timetravel</span></span>` +
-        `<span class="footright"><span class="footpipe">│</span>` +
-        `<span class="footclock">--:--</span></span>`;
+        `<span class="diagverb">ready</span>` +
+        `<span class="diagmeta"></span>` +
+        `<span class="diaghint">↵ send &nbsp;·&nbsp; /chat leave &nbsp;·&nbsp; ctrl+o expand</span>`;
       main.appendChild(diag);
-      main.appendChild(foot);
     }
     // flat "↵ send" badge in codemode, the round ↑ arrow otherwise
     $("send").textContent = on ? "↵ send" : "↑";
-    // live host clock in the foot-bar
-    if (on) { this._tickClock(); if (!this._clockT) this._clockT = setInterval(() => this._tickClock(), 15000); }
-    else if (this._clockT) { clearInterval(this._clockT); this._clockT = null; }
+    if (on) this.updateDiag();
     $("inp").placeholder = on
       ? "describe a coding task — GIL reads, edits & runs, asking first"
       : "Message G.I.L.  —  Enter sends, Shift+Enter for a new line, / for commands";
@@ -1112,13 +1103,31 @@ const gil = {
       : `Type <b>/</b> for commands · G.I.L. shows every tool he uses, live.`;
     scrollDown();
   },
-  _clockT: null,
-  _tickClock() {
-    const el = document.querySelector("#cmfoot .footclock");
-    if (!el) return;
-    const d = new Date();
-    el.textContent = String(d.getHours()).padStart(2, "0") + ":" +
-                     String(d.getMinutes()).padStart(2, "0");
+  /* live diagnostic telemetry — real state, not decorative placeholders:
+     the current activity verb, how many operations are actually in flight,
+     and the elapsed time. Called on every state change and each timer tick. */
+  updateDiag() {
+    const diag = document.getElementById("cmdiag");
+    if (!diag) return;
+    const verbEl = diag.querySelector(".diagverb");
+    const metaEl = diag.querySelector(".diagmeta");
+    const running = this.running ? this.running.size : 0;
+    const active = running + ((this._working && running === 0) ? 1 : 0);
+    let word, busy = true, meta = "";
+    if (this._approvalOpen) {
+      word = "awaiting approval";
+    } else if (this._working || active > 0) {
+      word = running > 0 ? "running" : "thinking";
+      const s = this._timerStart ? (Date.now() - this._timerStart) / 1000 : 0;
+      const t = s < 60 ? s.toFixed(0) + "s" : Math.floor(s/60) + "m " + Math.floor(s%60) + "s";
+      meta = ` &nbsp;·&nbsp; <b class="diagcount">${active}</b> active ` +
+             `&nbsp;·&nbsp; <span class="diagtime">${t}</span>`;
+    } else {
+      word = "ready"; busy = false;
+    }
+    verbEl.textContent = word;
+    verbEl.classList.toggle("busy", busy);
+    metaEl.innerHTML = meta;
   },
   toolBlock(b) {
     this.clearShimmer();       // the narration that led to this tool settles
@@ -1146,15 +1155,19 @@ const gil = {
     // ── branches ──
     if (b.kind === "edit" && b.diff) {          // proposed change → unified diff box
       html += `<div class="tbranch"><div class="cdiff diff">` +
-        `<div class="cdhead">📁 <span>${esc(target)}</span></div>` +
+        `<div class="cdhead">📁 <span>${esc(target)}</span>${diffStats(b.diff.old, b.diff.new)}</div>` +
         renderDiff(b.diff.old, b.diff.new) + `</div></div>`;
     } else if (b.body != null && String(b.body).trim()) {
       const lines = String(b.body).replace(/\s+$/, "").split("\n");
+      // syntax-highlight code file readouts; leave terminal/dir/search output raw
+      const isCode = (b.kind === "read" || b.kind === "edit") &&
+        /^(py|python|js|ts|jsx|tsx|json|java|c|cpp|h|go|rs|rb|css|html|xml|sh|yaml|yml)$/i.test(b.lang || "");
+      const fmt = l => isCode ? hl(l, b.lang) : esc(l);
       const SHOWN = 6;
-      let rows = lines.slice(0, SHOWN).map(l => `<div class="bl">${esc(l)}</div>`).join("");
+      let rows = lines.slice(0, SHOWN).map(l => `<div class="bl">${fmt(l)}</div>`).join("");
       if (lines.length > SHOWN) {
         const restN = lines.length - SHOWN;
-        const rest = lines.slice(SHOWN).map(l => `<div class="bl">${esc(l)}</div>`).join("");
+        const rest = lines.slice(SHOWN).map(l => `<div class="bl">${fmt(l)}</div>`).join("");
         rows += `<div class="bl more" tabindex="0">... +${restN} lines (ctrl+o to expand)</div>` +
           `<div class="blrest" hidden>${rest}</div>`;
       }
