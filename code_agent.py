@@ -120,6 +120,16 @@ file inspection, do NOT use tools: go straight to `done` (success:true) with the
 COMPLETE, ready-to-submit deliverable as the summary — nothing to read or run first.
 {deliverable}
 
+TRUTHFULNESS — never lie about what happened:
+- NEVER claim a file was created / found / opened, a command ran, or a task is done
+  unless a tool RESULT in THIS session confirms it. If a RESULT says "not found" /
+  "File not found" / "ERROR" or otherwise fails, report that failure plainly — do
+  NOT claim success or say you're "opening"/"done" when it failed.
+- NEVER invent a file path, filename, or fact. Only cite paths/names a tool actually
+  returned in a RESULT. If you don't know a path, run list_dir/search to find it.
+- If you produced TEXT but did not save a file, say exactly that — never claim
+  "attached" / "file created" / "הקובץ מוכן" / "מצורף".
+
 REPORT FORMAT — your `done` summary IS the engineering report. Markdown. Be
 THOROUGH and richly structured (a real report, never a one-liner). Write it like a
 staff engineer updating a peer, never like a chatbot:
@@ -1157,6 +1167,79 @@ def _should_plan(task: str) -> bool:
     return len(task.split()) >= 5
 
 
+# ── Real file output + truthfulness -------------------------------------------
+_FILE_WORDS = ("word file", "word document", ".docx", "docx", "doc file", "a document file",
+               "קובץ וורד", "קובץ word", "מסמך וורד", "קובץ מסמך", "קובץ .docx")
+
+
+def _wants_file(task: str) -> bool:
+    """True when the user asked for an actual saved FILE (a .docx), not just text."""
+    t = task.lower()
+    return any(w in t for w in _FILE_WORDS)
+
+
+def _save_docx(text: str, task: str) -> str:
+    """Write `text` (markdown-ish) to a REAL .docx via python-docx and return the
+    saved absolute path. Verifies the file exists on disk before returning. Raises
+    on failure so the caller reports the truth instead of a fake 'file created'."""
+    from docx import Document
+    doc = Document()
+    for line in (text or "").splitlines():
+        s = line.rstrip()
+        if not s:
+            continue
+        if s.startswith("### "):
+            doc.add_heading(s[4:].strip(), level=3)
+        elif s.startswith("## "):
+            doc.add_heading(s[3:].strip(), level=2)
+        elif s.startswith("# "):
+            doc.add_heading(s[2:].strip(), level=1)
+        elif s.lstrip().startswith(("- ", "* ", "• ")):
+            doc.add_paragraph(s.lstrip()[2:].strip(), style="List Bullet")
+        else:
+            doc.add_paragraph(s)
+    # a safe, findable name in the user's Documents folder
+    base = re.sub(r"[^\w֐-׿ ]+", "", task)[:40].strip().replace(" ", "_") or "GIL_document"
+    docs = Path.home() / "Documents"
+    docs.mkdir(parents=True, exist_ok=True)
+    out = docs / f"{base}.docx"
+    doc.save(str(out))
+    if not out.exists() or out.stat().st_size < 200:
+        raise RuntimeError("docx save produced no real file")
+    return str(out)
+
+
+_VERIFY_SYSTEM = """You are a strict, independent verification agent. You are shown \
+the user's ORIGINAL REQUEST, G.I.L.'s FINAL ANSWER, and the ACTUAL TOOL RESULTS from \
+the run. Judge ONE thing: does the answer truthfully and fully do what the user \
+asked, with every factual claim grounded in the tool results? Reply with ONE JSON \
+object, nothing else:
+{"ok": true|false, "reason": "<one short sentence>", "fix": "<if not ok: exactly what GIL must say/do instead>"}
+Set ok=FALSE when the answer:
+- claims an action succeeded (file created / found / opened, command ran, task done)
+  that the tool results do NOT confirm — or that a result shows FAILED ("not found",
+  "ERROR", "File not found");
+- invents a file path, filename, or fact that is not present in the tool results;
+- does not actually answer the question or deliver what was asked.
+When a claim is not clearly grounded in the results, choose ok=false. Be concrete."""
+
+
+def _verify_answer(task: str, answer: str, results_blob: str) -> dict:
+    """Independent agent that compares the request, the answer, and the real tool
+    results — catching GIL claiming success/files it never confirmed. Never blocks
+    on its own error (returns ok:True if the verifier is unreachable)."""
+    msgs = [{"role": "system", "content": _VERIFY_SYSTEM},
+            {"role": "user", "content":
+             f"USER REQUEST:\n{task[:800]}\n\nGIL'S FINAL ANSWER:\n{answer[:2500]}\n\n"
+             f"ACTUAL TOOL RESULTS FROM THIS RUN:\n{(results_blob or '(no tools were run)')[:3000]}"}]
+    out = _llm_json(msgs, must_have="ok", temperature=0.0)
+    if not out:
+        return {"ok": True, "reason": "(verifier unavailable)", "fix": ""}
+    return {"ok": bool(out.get("ok", True)),
+            "reason": str(out.get("reason", ""))[:200],
+            "fix": str(out.get("fix", ""))[:400]}
+
+
 def _plan_status_block(plan: list[str], idx: int) -> str:
     """Render the plan as a live checklist with the current focus marked, so the
     agent always sees where it is and what's left — its compass every turn."""
@@ -1401,6 +1484,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     recovered_once = False
     rejected_flag = False           # a change got bounced → reason harder next step
     content_retries = 0             # empty/closure-only deliverable → force a rewrite
+    verify_retries = 0              # answer failed the truth check → force a redo
     speed_mode = _agent_speed_mode()
     if code_mode and speed_mode != "auto":
         activity.instant("brain", f"Speed mode: {speed_mode}",
@@ -1495,12 +1579,47 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                         "'attached' / 'file ready' / 'הקובץ מוכן' / 'מצורף'."})
                     continue
                 summary = (summary or "Task finished.")[:8000]
+
+                # ── TRUTH CHECK (tool tasks): an independent agent compares the
+                # request ↔ answer ↔ actual tool results, so GIL cannot claim a
+                # file/action succeeded that the results never confirmed. One redo. ──
+                if not content_task and ok and verify_retries < 1:
+                    results_blob = "\n".join(
+                        str(m.get("content", ""))[:600] for m in messages[-18:]
+                        if m.get("role") == "user"
+                        and str(m.get("content", "")).startswith("RESULT:"))
+                    verdict = _verify_answer(task, summary, results_blob)
+                    if not verdict["ok"]:
+                        verify_retries += 1
+                        activity.instant("brain", "Answer failed the truth check",
+                                         verdict["reason"][:70], status="fail")
+                        messages.append({"role": "assistant", "content": json.dumps(action)})
+                        messages.append({"role": "user", "content":
+                            "RESULT:\nSELF-CHECK FAILED — your answer does not match what "
+                            "actually happened: " + verdict["reason"] + " "
+                            + (verdict["fix"] or "State the TRUTH grounded in the RESULTs "
+                               "above. Never claim a file/action succeeded unless a RESULT "
+                               "confirms it, and never invent a path or filename.")
+                            + " Redo `done` truthfully now — if it FAILED, say so plainly."})
+                        continue
+
+                # ── real .docx for a file request — actually create it and verify
+                # it on disk (python-docx), then report the REAL path (no lying). ──
+                file_note = ""
+                if content_task and ok and _wants_file(task):
+                    try:
+                        saved = _save_docx(summary, task)
+                        file_note = f"\n\n📄 Saved a real Word file → `{saved}`"
+                    except Exception as exc:
+                        file_note = ("\n\n⚠️ I wrote the text above but could not save a "
+                                     f".docx ({exc}). Copy it into Word to save the file.")
+
                 activity.instant("code", "Agent finished",
                                  _speakable(summary)[:100], status="done" if ok else "fail")
                 if content_task and ok:
                     # a deliverable: the document renders FIRST; the closure is a
                     # small footer at the bottom, never a header before the content.
-                    msg = summary + "\n\n— ✓ ready"
+                    msg = summary + file_note + "\n\n— ✓ ready"
                 else:
                     msg = (("**Solved** ✓ — " if ok else "**Stopped** — ") + summary +
                            (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
