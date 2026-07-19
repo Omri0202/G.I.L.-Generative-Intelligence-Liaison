@@ -1479,10 +1479,15 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 ok = bool(args.get("success", action.get("success", True)))
                 activity.instant("code", "Agent finished",
                                  _speakable(summary)[:100], status="done" if ok else "fail")
-                window.add_chat_message(
-                    ("**Solved** ✓ — " if ok else "**Stopped** — ") + summary +
-                    (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
-                     if edits_made else ""), "gil")
+                if content_task and ok:
+                    # a deliverable: the document renders FIRST; the closure is a
+                    # small footer at the bottom, never a header before the content.
+                    msg = summary + "\n\n— ✓ ready"
+                else:
+                    msg = (("**Solved** ✓ — " if ok else "**Stopped** — ") + summary +
+                           (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
+                            if edits_made else ""))
+                window.add_chat_message(msg, "gil")
                 spoken = _speakable(summary)
                 if not code_mode:            # code mode is silent (typed surface)
                     window.set_state("speaking", said=spoken)

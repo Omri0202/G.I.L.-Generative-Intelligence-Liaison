@@ -617,7 +617,10 @@ class ConversationEngine:
             chat_text = speech
             _rep = response.get("report")
             if _rep and isinstance(_rep, str) and _rep.strip() and _rep.strip() != speech.strip():
-                chat_text = speech + chr(10) + chr(10) + _rep.strip()
+                # Content-first: the report/deliverable renders FIRST; the short
+                # spoken closure line ("מוכן — …") becomes a footer at the bottom,
+                # never a header printed before the content exists.
+                chat_text = _rep.strip() + chr(10) + chr(10) + speech.strip()
             window.set_state("speaking", said=spoken)
             window.add_chat_message(chat_text, "gil")
             delivered = speak(spoken)

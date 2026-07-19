@@ -862,6 +862,8 @@ const gil = {
           !/^\s*\*\*(Solved|Stopped)/.test(m.text || "")) {
         body.classList.add("shimmer");
       }
+      // a substantial reply/document just landed → notify if the window is hidden
+      if ((m.text || "").length > 250) notifyDone("GIL replied — click to read.");
     }
     wrap.dataset.raw = m.text;
   },
@@ -952,10 +954,17 @@ const gil = {
   // sticky working state — Python raises it for the whole coding-agent run
   _working: false,
   setWorking(on) {
+    const was = this._working;
     this._working = !!on;
     document.body.classList.toggle("working", !!on);   // drives the busy indicator
-    if (on) { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); }
-    else { this.clearShimmer(); $("typing").classList.remove("on"); this.scheduleStop(); }
+    if (on) { this._workStart = Date.now(); $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); }
+    else {
+      this.clearShimmer(); $("typing").classList.remove("on"); this.scheduleStop();
+      // task finished → notify if the window is hidden and it was a real (>3s) run
+      if (was && this._workStart && Date.now() - this._workStart > 3000)
+        notifyDone("Finished in " + Math.round((Date.now()-this._workStart)/1000) + "s — click to view.");
+      this._workStart = 0;
+    }
     this.updateDiag();   // refresh the live status/task telemetry
   },
   clearShimmer() {
@@ -1471,6 +1480,36 @@ $("inp").addEventListener("keydown", e => {
   };
   es.onerror = () => { /* EventSource auto-reconnects */ };
 })();
+
+/* ═══════════ desktop notifications + background visibility ═══════════ */
+// Ask once, on load, if the user hasn't decided yet.
+try {
+  if ("Notification" in window && Notification.permission === "default")
+    Notification.requestPermission();
+} catch (e) {}
+let _lastNotify = 0;
+// Fire a native OS notification ONLY when the GIL window is HIDDEN — if the chat
+// is visible the text is already streaming into view, so an alert would be
+// redundant (this is also why no separate in-page toast is ever spawned).
+function notifyDone(body) {
+  try {
+    if (!document.hidden) return;                       // active window → suppress
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const now = Date.now();
+    if (now - _lastNotify < 4000) return;               // de-dupe bursts
+    _lastNotify = now;
+    const n = new Notification("GIL — task complete", {
+      body: body || "Your deliverable has finished.", icon: "/favicon.ico", tag: "gil-done" });
+    n.onclick = function () { window.focus(); this.close(); };
+  } catch (e) {}
+}
+// The heavy work runs SERVER-SIDE (Python) and streams over SSE, so it never
+// freezes or throttles when the window is minimized. Client timers use absolute
+// timestamps; on regaining focus we force an immediate catch-up so the elapsed
+// counter and status row are correct instantly rather than after the next tick.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { try { updateJump(); gil.updateDiag(); } catch (e) {} }
+});
 
 /* boot: pull initial state from Python */
 function boot() {
