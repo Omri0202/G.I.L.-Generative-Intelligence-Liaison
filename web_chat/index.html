@@ -170,6 +170,51 @@ button svg, .chip svg, .ic svg, .g svg { vertical-align:-2px; }
   border-radius:8px; transition:background .15s, color .15s; }
 .actions button:hover { background:var(--hover); color:var(--accent); }
 
+/* ══════════ UI refresh — depth, premium components, motion (regular chat) ══════════ */
+/* lit-from-above depth on the chat canvas */
+#scroll { background:radial-gradient(135% 60% at 50% -8%,
+  rgba(88,196,221,.055), transparent 58%), var(--page); }
+[data-theme="light"] #scroll { background:radial-gradient(135% 60% at 50% -8%,
+  rgba(11,156,184,.05), transparent 58%), var(--page); }
+/* thinner, accent-on-hover scrollbar */
+#scroll::-webkit-scrollbar { width:10px; }
+#scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:6px;
+  border:2px solid transparent; background-clip:padding-box; }
+#scroll::-webkit-scrollbar-thumb:hover { background:var(--muted); background-clip:padding-box; }
+/* premium GIL avatar: brighter gradient + soft glow ring */
+.msg.gil .av { background:linear-gradient(140deg, rgba(88,196,221,.24), rgba(167,139,250,.24));
+  box-shadow:0 0 0 1px rgba(88,196,221,.28), 0 3px 12px rgba(88,196,221,.14); }
+/* user bubble: subtle gradient + softer, deeper shadow */
+.msg.user .bubble { background:linear-gradient(135deg,
+  color-mix(in srgb, var(--userbg) 92%, var(--accent) 8%), var(--userbg));
+  box-shadow:0 4px 16px var(--shadow); transition:transform .16s ease, box-shadow .2s ease; }
+.msg.user .bubble:hover { transform:translateY(-1px); box-shadow:0 6px 22px var(--shadow); }
+/* sidebar: gradient new-chat, refined active session, smoother hovers */
+#newchat { background:linear-gradient(135deg, var(--accent),
+  color-mix(in srgb, var(--accent) 78%, var(--purple) 22%)); box-shadow:0 3px 14px rgba(88,196,221,.22); }
+.sess { transition:background .16s ease, transform .12s ease; }
+.sess:hover { transform:translateX(2px); }
+.sess.active { box-shadow:inset 3px 0 0 var(--accent),
+  0 2px 10px rgba(0,0,0,.18); background:var(--surf); }
+/* welcome: larger gem with a gentle float + glow */
+@keyframes floaty { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-6px); } }
+#welcome .gem { animation:floaty 4.5s ease-in-out infinite;
+  box-shadow:0 0 46px rgba(88,196,221,.22), 0 0 0 1px rgba(88,196,221,.3); }
+#welcome .chips span { transition:transform .14s ease, border-color .15s, color .15s; }
+#welcome .chips span:hover { transform:translateY(-2px); border-color:var(--accent); color:var(--accent); }
+/* code blocks: subtle top accent + depth */
+.msg.gil .body pre { box-shadow:0 4px 18px var(--shadow); }
+.msg.gil .body pre .codehead { background:var(--hover); }
+/* NEW FEATURE — floating "jump to latest" pill, shown only when scrolled up */
+#jumpdown { position:absolute; left:50%; top:-48px; transform:translateX(-50%) translateY(8px);
+  display:flex; align-items:center; gap:6px; padding:8px 15px; border-radius:22px;
+  background:var(--surf); border:1px solid var(--border); color:var(--dim);
+  font-size:12.5px; font-weight:600; box-shadow:0 6px 22px var(--shadow);
+  opacity:0; pointer-events:none; transition:opacity .2s ease, transform .2s ease; z-index:5; cursor:pointer; }
+#jumpdown.show { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
+#jumpdown:hover { color:var(--accent); border-color:var(--accent); }
+body.codemode #jumpdown { font-family:var(--cmfont); border-radius:6px; }
+
 /* ═══════ /codemode — developer terminal (Claude-Code CLI blueprint) ═══════ */
 /* SECTION 1 — global design tokens: matte terminal canvas, ash-white text,
    golden-amber accent, industrial grays, cyan/green/red signals. */
@@ -611,6 +656,7 @@ body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--
       <div id="typing"><span class="busy"></span><i></i><i></i><i></i><span id="worktimer"></span></div>
     </div></div>
     <div id="composer">
+      <div id="jumpdown" onclick="gil.jumpDown()">↓ jump to latest</div>
       <div id="slashmenu"></div>
       <div id="box">
         <textarea id="inp" rows="1" spellcheck="true"
@@ -641,6 +687,11 @@ function scrollDown(force) {
   const sc = $("scroll");
   if (force || sc.scrollTop + sc.clientHeight > sc.scrollHeight - 320)
     sc.scrollTop = sc.scrollHeight;
+  updateJump();
+}
+function updateJump() {
+  const sc = $("scroll"), jd = $("jumpdown");
+  if (jd) jd.classList.toggle("show", sc.scrollHeight - sc.scrollTop - sc.clientHeight > 240);
 }
 
 /* ═══════════ syntax highlighter (compact, self-contained) ═══════════ */
@@ -1385,8 +1436,13 @@ const gil = {
     this.showTyping();
     api("command", cmd.slice(1), arg);
   },
+  jumpDown() { const sc = $("scroll"); sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
+    setTimeout(updateJump, 380); },
 };
 window.gil = gil;
+
+/* jump-to-latest pill: reveal it whenever the user scrolls away from the bottom */
+$("scroll").addEventListener("scroll", updateJump, { passive: true });
 
 /* ═══════════ input wiring ═══════════ */
 $("inp").addEventListener("input", () => { gil.grow(); gil.slashUpdate(); });

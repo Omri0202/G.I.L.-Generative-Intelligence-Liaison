@@ -112,6 +112,14 @@ METHOD (how a good engineer works):
 3. If asked to CHANGE, make the smallest correct edit, then VERIFY it (pytest /
    py_compile) and read the result before you finish.
 
+LANGUAGE — {language}
+
+DELIVERABLE MODE — when the task is to WRITE or CREATE prose content (essay, report,
+treatise, document, presentation script, cover letter, study material) that needs NO
+file inspection, do NOT use tools: go straight to `done` (success:true) with the
+COMPLETE, ready-to-submit deliverable as the summary — nothing to read or run first.
+{deliverable}
+
 REPORT FORMAT — your `done` summary IS the engineering report. Markdown. Be
 THOROUGH and richly structured (a real report, never a one-liner). Write it like a
 staff engineer updating a peer, never like a chatbot:
@@ -246,6 +254,13 @@ def _step_profile(mode: str, deep_phase: bool) -> dict:
     if forced in _EFFORTS:
         prof["effort"] = forced
     return prof
+
+
+# Deliverable detection + the manifesto are shared with the chat brain via
+# deliverable.py — single source of truth, so the terminal and the web chat stay
+# byte-for-byte in sync (zero prompt drift).
+import deliverable as _deliverable
+_is_content_task = _deliverable.is_content_task
 
 
 def _extract_json(raw: str, must_have: str = "tool") -> dict | None:
@@ -1295,7 +1310,7 @@ def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, b
     except Exception:
         obj = None
     if obj and str(obj.get("summary", "")).strip():
-        return str(obj["summary"])[:4500], bool(obj.get("success", True))
+        return str(obj["summary"])[:8000], bool(obj.get("success", True))
     return _assemble_report_from_transcript(messages, task), False
 
 
@@ -1320,7 +1335,10 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         f"Start with the toolkit above on the relevant known location." +
         (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +
          "\n".join(hints) if hints else ""))
-    messages = [{"role": "system", "content": _SYSTEM.replace("{steps}", str(_MAX_STEPS))},
+    _sys = (_SYSTEM.replace("{steps}", str(_MAX_STEPS))
+            .replace("{language}", _deliverable.LANGUAGE_RULE)
+            .replace("{deliverable}", _deliverable.MANIFESTO))
+    messages = [{"role": "system", "content": _sys},
                 {"role": "user", "content": base_task_msg}]
 
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
@@ -1331,7 +1349,10 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     activity.set_group("Coding agent")
 
     # ---- Build the work plan up front (the "designed, smart plan" GIL follows) ----
-    plan: list[str] = _make_plan(task, task_mode) if _should_plan(task) else []
+    content_task = _is_content_task(task)
+    # a pure deliverable is one rich `done`, not a multi-step tool plan
+    plan: list[str] = [] if content_task else (
+        _make_plan(task, task_mode) if _should_plan(task) else [])
     plan_idx = 0            # which plan step is the current focus
     item_steps = 0         # tool-steps spent on the current plan step
     from collections import Counter
@@ -1396,6 +1417,11 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                           and any(w in _cur for w in ("edit", "fix", "change", "write",
                                   "replace", "patch", "implement", "add ")))
             prof = _step_profile(speed_mode, deep_phase)
+            if content_task:
+                # deep reasoning + a large output budget so a full document/essay
+                # isn't truncated (prompt is small — no accumulated file dumps —
+                # so ~5k reply tokens still fit under the 8k-TPM ceiling).
+                prof = {"effort": "high", "max_tokens": 5000, "ctx": 8000}
             _cap_context(messages, prof["ctx"])   # profile-sized payload under the TPM cap
             # Second-to-last step: tell GIL to land the plane himself now — a clean
             # self-authored `done` beats the forced finalize we'd otherwise do.
@@ -1446,8 +1472,11 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
 
             if tool == "done":
                 # Room for a real structured report (table + findings + proof).
-                summary = str(args.get("summary", "Task finished."))[:4500]
-                ok = bool(args.get("success", True))
+                # Tolerate the model putting summary/success at the top level
+                # instead of under `args` — the `done` signature invites both.
+                summary = str(args.get("summary") or action.get("summary")
+                              or "Task finished.")[:8000]
+                ok = bool(args.get("success", action.get("success", True)))
                 activity.instant("code", "Agent finished",
                                  _speakable(summary)[:100], status="done" if ok else "fail")
                 window.add_chat_message(

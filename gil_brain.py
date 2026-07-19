@@ -11,6 +11,7 @@ import time
 import requests
 from datetime import datetime
 from logger import get as _get_log
+import deliverable as _deliverable   # shared Content Deliverable Manifesto (zero drift)
 
 log = _get_log("brain")
 
@@ -681,6 +682,18 @@ class GILBrain:
                 "- The speech field IS the chat message - markdown is welcome there.\n"
                 "- Task requests still return the same JSON with actions/mission.")
 
+        # ── DELIVERABLE MODE — same manifesto the code agent uses (shared via
+        # deliverable.py). When the user asks for a document/essay/report/deck/
+        # code-review, the FULL finished asset goes in "report". ──
+        content_request = _deliverable.is_content_task(user_input)
+        if content_request:
+            system += ("\n\n━━ DELIVERABLE / DOCUMENT REQUEST ━━\n"
+                "The user is asking you to CREATE a document, essay, report, "
+                "presentation or code-review. Put a SHORT spoken acknowledgement in "
+                "\"speech\" and the COMPLETE, ready-to-submit deliverable (full "
+                "markdown) in \"report\" — never truncated, never a stub.\n"
+                + _deliverable.MANIFESTO)
+
         # Hard per-query language override — detected from the actual text,
         # not from the user profile. This overrides any "native: Hebrew" confusion.
         detected_lang = _detect_response_language(user_input)
@@ -707,7 +720,10 @@ class GILBrain:
             "model":       chosen_model,
             "messages":    [{"role": "system", "content": system}] + self.history,
             "temperature": 0.30,
-            "max_tokens":  2000 if mode == "chat" else 900,
+            # a document/essay/deck deliverable needs room to breathe (goes in
+            # "report"); ordinary chat 2000, spoken commands 900. 3000 keeps the
+            # whole request under gpt-oss's 8k-TPM ceiling.
+            "max_tokens":  3000 if content_request else (2000 if mode == "chat" else 900),
         }
         # gpt-oss models spend part of the token budget on hidden reasoning
         # before emitting content. Keep effort low so fast commands stay snappy
@@ -1028,9 +1044,17 @@ def _parse_json(raw: str) -> dict:
 
     if parsed is None:
         m = re.search(r'"speech"\s*:\s*"([^"]+)"', cleaned)
-        if m:
-            print("[G.I.L. BRAIN] Partial parse â€” extracted speech only.")
-            return {"speech": m.group(1), "action": None, "target": None, "report": None, "extra_actions": []}
+        # Salvage a (possibly truncated) document body so a long "report" survives a
+        # parse failure instead of being silently dropped to speech-only.
+        report = None
+        rm = re.search(r'"report"\s*:\s*"(.*)$', cleaned, re.DOTALL)
+        if rm:
+            rt = re.sub(r'(?:\\?"\s*[},\]]*\s*)$', '', rm.group(1).rstrip())
+            report = rt.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"') or None
+        if m or report:
+            print("[G.I.L. BRAIN] Partial parse â€” salvaged speech/report.")
+            return {"speech": (m.group(1) if m else ""), "action": None,
+                    "target": None, "report": report, "extra_actions": []}
         log.error("JSON parse failed. Raw: %s", raw[:120])
         return {"speech": "", "action": None, "target": None, "report": None, "extra_actions": []}
 
