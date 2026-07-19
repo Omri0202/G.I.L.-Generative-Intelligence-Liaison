@@ -1400,6 +1400,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     bad_replies = 0
     recovered_once = False
     rejected_flag = False           # a change got bounced → reason harder next step
+    content_retries = 0             # empty/closure-only deliverable → force a rewrite
     speed_mode = _agent_speed_mode()
     if code_mode and speed_mode != "auto":
         activity.instant("brain", f"Speed mode: {speed_mode}",
@@ -1418,10 +1419,11 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                                   "replace", "patch", "implement", "add ")))
             prof = _step_profile(speed_mode, deep_phase)
             if content_task:
-                # deep reasoning + a large output budget so a full document/essay
-                # isn't truncated (prompt is small — no accumulated file dumps —
-                # so ~5k reply tokens still fit under the 8k-TPM ceiling).
-                prof = {"effort": "high", "max_tokens": 5000, "ctx": 8000}
+                # MEDIUM (not high) effort: high reasoning burns the token budget
+                # thinking and sometimes emits an EMPTY document. Medium leaves the
+                # bulk of the 5k reply tokens for the actual text. Prompt is small
+                # (no file dumps) so this stays under the 8k-TPM ceiling.
+                prof = {"effort": "medium", "max_tokens": 5000, "ctx": 8000}
             _cap_context(messages, prof["ctx"])   # profile-sized payload under the TPM cap
             # Second-to-last step: tell GIL to land the plane himself now — a clean
             # self-authored `done` beats the forced finalize we'd otherwise do.
@@ -1474,9 +1476,25 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 # Room for a real structured report (table + findings + proof).
                 # Tolerate the model putting summary/success at the top level
                 # instead of under `args` — the `done` signature invites both.
-                summary = str(args.get("summary") or action.get("summary")
-                              or "Task finished.")[:8000]
+                summary = str(args.get("summary") or action.get("summary") or "").strip()
                 ok = bool(args.get("success", action.get("success", True)))
+                # DELIVERABLE GUARD: a content task must ship the FULL text, not an
+                # empty / "file is ready, attached" closure. If the model short-
+                # circuits, reject it and force a real write (up to 2 retries).
+                if content_task and content_retries < 2 and len(summary) < 250:
+                    content_retries += 1
+                    activity.instant("code", "Empty deliverable — rewriting",
+                                     (summary or "(empty)")[:50], status="fail")
+                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                    messages.append({"role": "user", "content":
+                        "RESULT:\nYour `done` summary was empty or just a closure line "
+                        "with NO document. You CANNOT attach or save a file — the TEXT is "
+                        "the deliverable. Write the COMPLETE document NOW as the `done` "
+                        "summary: title, `##` headings, full paragraphs, in the user's "
+                        "language, meeting or exceeding the requested length. Never say "
+                        "'attached' / 'file ready' / 'הקובץ מוכן' / 'מצורף'."})
+                    continue
+                summary = (summary or "Task finished.")[:8000]
                 activity.instant("code", "Agent finished",
                                  _speakable(summary)[:100], status="done" if ok else "fail")
                 if content_task and ok:

@@ -38,6 +38,12 @@ LANGUAGE_RULE = (
 # goes: the code agent puts it in `done.summary`, the chat brain in `report`).
 MANIFESTO = """DELIVERABLE STANDARDS — when creating prose content (essay, report,
 document, presentation script, cover letter, study material, code review):
+- NO FILE ATTACHMENTS: you CANNOT attach, save or produce a binary file. If the
+  user asks for a "Word file", "PDF", "document", "קובץ וורד", "מסמך" etc., that is
+  only a FORMAT hint — you must write the ENTIRE document TEXT INLINE as your
+  output. It is a HARD FAILURE to answer "the file is ready" / "attached" /
+  "הקובץ מוכן" / "מצורף", or any closure line, WITHOUT the full text present.
+  Never emit an empty or one-line output — the text IS the deliverable.
 - NO banter: never "Sure" / "Here is your essay". Open with the document's title or
   first real line. Institutional quality — ready to hand a professor or lead
   engineer AS-IS, from index zero of the output.
