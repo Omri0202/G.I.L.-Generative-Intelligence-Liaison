@@ -1167,46 +1167,148 @@ def _should_plan(task: str) -> bool:
     return len(task.split()) >= 5
 
 
-# ── Real file output + truthfulness -------------------------------------------
-_FILE_WORDS = ("word file", "word document", ".docx", "docx", "doc file", "a document file",
-               "קובץ וורד", "קובץ word", "מסמך וורד", "קובץ מסמך", "קובץ .docx")
+# ── Real Office document output (Word / Excel / PowerPoint) + truthfulness ─────
+# Format keywords, English + Hebrew, checked pptx → xlsx → docx (so "presentation"
+# never matches "document").
+_FMT_HINTS = (
+    ("pptx", ("powerpoint", "power point", ".pptx", " pptx", " ppt", "presentation",
+              "slide deck", "slides", "מצגת", "פאוארפוינט", "פאוור פוינט", "שקופיות")),
+    ("xlsx", ("excel", "spreadsheet", ".xlsx", " xlsx", "worksheet", "אקסל",
+              "גיליון", "גליון")),
+    ("docx", ("word file", "word document", "word doc", ".docx", " docx", "doc file",
+              "a document file", "קובץ וורד", "קובץ word", "מסמך וורד", "מסמך word",
+              "קובץ מסמך", "קובץ .docx")),
+)
+
+
+def _wanted_format(task: str) -> str | None:
+    """Which real Office file the user asked for: 'docx' | 'xlsx' | 'pptx' | None."""
+    t = " " + task.lower() + " "
+    for fmt, words in _FMT_HINTS:
+        if any(w in t for w in words):
+            return fmt
+    return None
 
 
 def _wants_file(task: str) -> bool:
-    """True when the user asked for an actual saved FILE (a .docx), not just text."""
-    t = task.lower()
-    return any(w in t for w in _FILE_WORDS)
+    return _wanted_format(task) is not None
+
+
+def _target_wordcount(task: str) -> int:
+    """A stated minimum word count: '400 words' / '300 מילים' → int (0 if none)."""
+    m = re.search(r"(\d{2,4})\s*(?:words?|מילים|מילה)", task.lower())
+    return int(m.group(1)) if m else 0
+
+
+def _doc_path(task: str, ext: str) -> Path:
+    base = re.sub(r"[^\w֐-׿ ]+", "", task)[:40].strip().replace(" ", "_") or "GIL_document"
+    docs = Path.home() / "Documents"
+    docs.mkdir(parents=True, exist_ok=True)
+    return docs / f"{base}.{ext}"
+
+
+def _verify_saved(out: Path, min_size: int = 200) -> str:
+    """Confirm the file is really on disk (non-trivial) — never report a fake save."""
+    if not out.exists() or out.stat().st_size < min_size:
+        raise RuntimeError(f"{out.suffix} save produced no real file")
+    return str(out)
 
 
 def _save_docx(text: str, task: str) -> str:
-    """Write `text` (markdown-ish) to a REAL .docx via python-docx and return the
-    saved absolute path. Verifies the file exists on disk before returning. Raises
-    on failure so the caller reports the truth instead of a fake 'file created'."""
+    """Markdown-ish prose → a REAL .docx (python-docx)."""
     from docx import Document
     doc = Document()
     for line in (text or "").splitlines():
         s = line.rstrip()
         if not s:
             continue
-        if s.startswith("### "):
-            doc.add_heading(s[4:].strip(), level=3)
-        elif s.startswith("## "):
-            doc.add_heading(s[3:].strip(), level=2)
-        elif s.startswith("# "):
-            doc.add_heading(s[2:].strip(), level=1)
+        if s.startswith("### "):   doc.add_heading(s[4:].strip(), level=3)
+        elif s.startswith("## "):  doc.add_heading(s[3:].strip(), level=2)
+        elif s.startswith("# "):   doc.add_heading(s[2:].strip(), level=1)
         elif s.lstrip().startswith(("- ", "* ", "• ")):
             doc.add_paragraph(s.lstrip()[2:].strip(), style="List Bullet")
         else:
             doc.add_paragraph(s)
-    # a safe, findable name in the user's Documents folder
-    base = re.sub(r"[^\w֐-׿ ]+", "", task)[:40].strip().replace(" ", "_") or "GIL_document"
-    docs = Path.home() / "Documents"
-    docs.mkdir(parents=True, exist_ok=True)
-    out = docs / f"{base}.docx"
+    out = _doc_path(task, "docx")
     doc.save(str(out))
-    if not out.exists() or out.stat().st_size < 200:
-        raise RuntimeError("docx save produced no real file")
-    return str(out)
+    return _verify_saved(out)
+
+
+def _save_xlsx(text: str, task: str) -> str:
+    """The markdown table(s) in `text` → a REAL .xlsx (openpyxl)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wb = Workbook(); ws = wb.active
+    header_done = False
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if not (s.startswith("|") and s.endswith("|")):
+            continue
+        cells = [c.strip().strip("*`") for c in s.strip("|").split("|")]
+        if cells and all(set(c) <= set("-: ") for c in cells if c):   # separator row
+            continue
+        ws.append(cells)
+        if not header_done:
+            for c in ws[ws.max_row]:
+                c.font = Font(bold=True)
+            header_done = True
+    if ws.max_row == 0:                    # no table found → one column of lines
+        for l in (text or "").splitlines():
+            if l.strip():
+                ws.append([re.sub(r"^[#\-*•]\s*|\*+", "", l).strip()])
+    for col in ws.columns:                 # sensible column widths
+        w = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(60, w + 2)
+    out = _doc_path(task, "xlsx")
+    wb.save(str(out))
+    return _verify_saved(out)
+
+
+def _save_pptx(text: str, task: str) -> str:
+    """Slide blocks in `text` → a REAL .pptx (python-pptx): each block becomes a
+    slide with a title, on-screen bullets, and any Speaker script as slide notes."""
+    from pptx import Presentation
+    prs = Presentation()
+    raw = re.sub(r"^\s*#{0,6}\s*SLIDE[^\n]*$", "---", text or "",
+                 flags=re.IGNORECASE | re.MULTILINE)
+    blocks = [b.strip() for b in re.split(r"\n-{3,}\n|\n(?=#{1,3}\s)", raw) if b.strip()]
+    if not blocks:
+        blocks = [text or ""]
+    for blk in blocks[:40]:
+        lines = [l.rstrip() for l in blk.splitlines() if l.strip()]
+        if not lines:
+            continue
+        title = re.sub(r"^#{1,6}\s*|\*+", "", lines[0]).strip()[:120] or "Slide"
+        bullets, notes, in_notes = [], [], False
+        for l in lines[1:]:
+            low = l.lower()
+            if any(k in low for k in ("speaker", "script", "notes", "דובר", "נאום")):
+                in_notes = True; continue
+            if any(k in low for k in ("visual", "layout", "directive", "עיצוב")):
+                continue
+            clean = re.sub(r"^[\-\*•>]\s*|\*+|`", "", l).strip()
+            if clean:
+                (notes if in_notes else bullets).append(clean)
+        slide = prs.slides.add_slide(prs.slide_layouts[1])   # Title + Content
+        slide.shapes.title.text = title
+        tf = slide.placeholders[1].text_frame
+        tf.text = bullets[0] if bullets else ""
+        for b in bullets[1:]:
+            tf.add_paragraph().text = b
+        if notes:
+            slide.notes_slide.notes_text_frame.text = "\n".join(notes)
+    out = _doc_path(task, "pptx")
+    prs.save(str(out))
+    return _verify_saved(out)
+
+
+_SAVERS = {"docx": _save_docx, "xlsx": _save_xlsx, "pptx": _save_pptx}
+_FMT_LABEL = {"docx": "Word", "xlsx": "Excel", "pptx": "PowerPoint"}
+
+
+def _save_document(text: str, task: str, fmt: str) -> str:
+    """Create the requested Office file, verified on disk; returns its real path."""
+    return _SAVERS[fmt](text, task)
 
 
 _VERIFY_SYSTEM = """You are a strict, independent verification agent. You are shown \
@@ -1433,6 +1535,18 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
 
     # ---- Build the work plan up front (the "designed, smart plan" GIL follows) ----
     content_task = _is_content_task(task)
+    # tell the model the exact structure to emit for Excel / PowerPoint so GIL can
+    # turn the `done` text into a real .xlsx / .pptx (Word/prose needs no hint).
+    _fmt_req = _wanted_format(task) if content_task else None
+    if _fmt_req == "xlsx":
+        messages[1]["content"] += ("\n\nEXCEL OUTPUT: put the data as ONE Markdown "
+            "table (header row + rows) as your `done` summary — that table becomes "
+            "the real spreadsheet. Rich, complete rows; no prose around it.")
+    elif _fmt_req == "pptx":
+        messages[1]["content"] += ("\n\nPOWERPOINT OUTPUT: emit one block per slide, "
+            "each starting with `## <Slide Title>`, then `- ` on-screen bullets, then "
+            "a line `Speaker script:` followed by 3-4 sentences (these become the "
+            "slide's speaker notes). 5-8 slides.")
     # a pure deliverable is one rich `done`, not a multi-step tool plan
     plan: list[str] = [] if content_task else (
         _make_plan(task, task_mode) if _should_plan(task) else [])
@@ -1565,19 +1679,31 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 # DELIVERABLE GUARD: a content task must ship the FULL text, not an
                 # empty / "file is ready, attached" closure. If the model short-
                 # circuits, reject it and force a real write (up to 2 retries).
-                if content_task and content_retries < 2 and len(summary) < 250:
-                    content_retries += 1
-                    activity.instant("code", "Empty deliverable — rewriting",
-                                     (summary or "(empty)")[:50], status="fail")
-                    messages.append({"role": "assistant", "content": json.dumps(action)})
-                    messages.append({"role": "user", "content":
-                        "RESULT:\nYour `done` summary was empty or just a closure line "
-                        "with NO document. You CANNOT attach or save a file — the TEXT is "
-                        "the deliverable. Write the COMPLETE document NOW as the `done` "
-                        "summary: title, `##` headings, full paragraphs, in the user's "
-                        "language, meeting or exceeding the requested length. Never say "
-                        "'attached' / 'file ready' / 'הקובץ מוכן' / 'מצורף'."})
-                    continue
+                if content_task and content_retries < 2:
+                    _words = len(summary.split())
+                    _target = _target_wordcount(task)
+                    _too_short = len(summary) < 250
+                    # only ONE expand-retry for a mild length shortfall (keeps latency
+                    # bounded under the TPM wall); always retry a truly-empty result.
+                    _undershoot = (_target and _words < int(_target * 0.7)
+                                   and content_retries < 1)
+                    if _too_short or _undershoot:
+                        content_retries += 1
+                        _why = ("empty / closure-only" if _too_short
+                                else f"only {_words} words vs the requested {_target}")
+                        activity.instant("code", "Deliverable too short — expanding",
+                                         _why[:50], status="fail")
+                        messages.append({"role": "assistant", "content": json.dumps(action)})
+                        messages.append({"role": "user", "content":
+                            "RESULT:\nYour deliverable is too short (" + _why + "). You "
+                            "CANNOT attach a file — the TEXT is the deliverable. Write the "
+                            "COMPLETE document NOW as the `done` summary: title, `##` "
+                            "headings, full paragraphs, in the user's language, and "
+                            + (f"AT LEAST {_target} words — over-shoot to about "
+                               f"{int(_target * 1.2)}. " if _target
+                               else "meeting the requested length. ")
+                            + "Never say 'attached' / 'file ready' / 'הקובץ מוכן' / 'מצורף'."})
+                        continue
                 summary = (summary or "Task finished.")[:8000]
 
                 # ── TRUTH CHECK (tool tasks): an independent agent compares the
@@ -1603,16 +1729,17 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                             + " Redo `done` truthfully now — if it FAILED, say so plainly."})
                         continue
 
-                # ── real .docx for a file request — actually create it and verify
-                # it on disk (python-docx), then report the REAL path (no lying). ──
+                # ── real Office file (Word / Excel / PowerPoint) — actually create
+                # it, verify it on disk, and report the REAL path (never a fake save). ──
                 file_note = ""
-                if content_task and ok and _wants_file(task):
+                _fmt = _wanted_format(task) if (content_task and ok) else None
+                if _fmt:
                     try:
-                        saved = _save_docx(summary, task)
-                        file_note = f"\n\n📄 Saved a real Word file → `{saved}`"
+                        saved = _save_document(summary, task, _fmt)
+                        file_note = f"\n\n📄 Saved a real {_FMT_LABEL[_fmt]} file → `{saved}`"
                     except Exception as exc:
-                        file_note = ("\n\n⚠️ I wrote the text above but could not save a "
-                                     f".docx ({exc}). Copy it into Word to save the file.")
+                        file_note = ("\n\n⚠️ I wrote the content above but could not save "
+                                     f"the {_FMT_LABEL[_fmt]} file ({exc}).")
 
                 activity.instant("code", "Agent finished",
                                  _speakable(summary)[:100], status="done" if ok else "fail")
