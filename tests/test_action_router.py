@@ -108,8 +108,25 @@ class TestDispatchAsync(unittest.TestCase):
         self.assertTrue(result)
 
     def test_build_website_returns_true(self):
-        result, _ = self._dispatch("build_website", target="coffee shop site")
+        # GUARD: webgen must NEVER really run in tests — real generation calls the
+        # LLM, writes an HTML file to ~/Documents/GIL_Websites, and opens a browser.
+        # Mock it, and run the dispatch thread inline so the mock is used
+        # deterministically (a daemon thread could otherwise call the real webgen
+        # after the patch exits).
+        class _InlineThread:
+            def __init__(self, target=None, args=(), **kw):
+                self._t, self._a = target, args
+            def start(self):
+                if self._t:
+                    self._t(*self._a)
+        with patch("action_router.threading.Thread", _InlineThread), \
+             patch("webgen.generate", return_value=("ok", None)) as wg, \
+             patch("webgen.generate_for_project", return_value=("ok", None)), \
+             patch("webgen._find_web_project", return_value=None), \
+             patch("ears.unmute", lambda *a, **k: None):
+            result, _ = self._dispatch("build_website", target="coffee shop site")
         self.assertTrue(result)
+        wg.assert_called_once()   # dispatch path exercised, but through the mock
 
     def test_look_returns_true(self):
         result, _ = self._dispatch("look")
