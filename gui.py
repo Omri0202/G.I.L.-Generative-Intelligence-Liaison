@@ -1072,20 +1072,30 @@ class _SpeakBubble(ctk.CTkToplevel):
         if self._fade_id:
             try: self.after_cancel(self._fade_id)
             except Exception: pass
+            self._fade_id = None
         self._step(target)
 
     def _step(self, target: float) -> None:
-        spd = 0.16 if target > self._alpha else 0.10
-        if abs(self._alpha - target) < 0.02:
-            self._alpha = target
+        # The window can be destroyed mid-fade (a queued `after` callback still
+        # fires) — touching a dead Tk path raises TclError: bad window path name.
+        # Bail out cleanly instead of crashing the Tkinter callback.
+        try:
+            if not self.winfo_exists():
+                self._fade_id = None
+                return
+            spd = 0.16 if target > self._alpha else 0.10
+            if abs(self._alpha - target) < 0.02:
+                self._alpha = target
+                self.attributes("-alpha", self._alpha)
+                if target == 0.0:
+                    self.withdraw()
+                return
+            self._alpha += (target - self._alpha) * spd
+            self._alpha  = max(0.0, min(1.0, self._alpha))
             self.attributes("-alpha", self._alpha)
-            if target == 0.0:
-                self.withdraw()
-            return
-        self._alpha += (target - self._alpha) * spd
-        self._alpha  = max(0.0, min(1.0, self._alpha))
-        self.attributes("-alpha", self._alpha)
-        self._fade_id = self.after(16, lambda: self._step(target))
+            self._fade_id = self.after(16, lambda: self._step(target))
+        except Exception:
+            self._fade_id = None   # window went away — stop the animation silently
 
 
 
