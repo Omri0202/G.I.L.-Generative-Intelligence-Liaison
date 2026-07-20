@@ -27,6 +27,8 @@ import threading
 import time
 from pathlib import Path
 
+import diff_hunks
+
 import requests
 
 from logger import get as _get_log
@@ -1092,6 +1094,55 @@ def _ask_approval(eng, description: str, diff: dict | None = None,
     return gate["approved"]
 
 
+def _edit_original_proposed(tool: str, args: dict):
+    """For an edit_file / write_file action, return (original_text, proposed_text,
+    Path) so the change can be diffed into hunks — or (None, None, None) if it
+    can't be cleanly previewed (missing file, ambiguous edit target)."""
+    try:
+        p = Path(args.get("path", ""))
+    except Exception:
+        return None, None, None
+    if not str(p):
+        return None, None, None
+    if tool == "write_file":
+        original = p.read_text(encoding="utf-8") if p.exists() else ""
+        return original, str(args.get("content", "")), p
+    if tool == "edit_file":
+        if not p.exists():
+            return None, None, None
+        try:
+            original = p.read_text(encoding="utf-8")
+        except Exception:
+            return None, None, None
+        old, new = args.get("old", ""), args.get("new", "")
+        # only preview an unambiguous single-match replacement — otherwise let the
+        # normal tool run and report the exact "not found / N matches" error.
+        if not old or original.count(old) != 1:
+            return None, None, None
+        return original, original.replace(old, new, 1), p
+    return None, None, None
+
+
+def _ask_hunk_review(eng, file: str, hunks: list, why: str):
+    """Post a hunk-by-hunk diff review and block until the user decides per hunk
+    (Feature #3). Returns the decision map {id: {action, text}}, or None if the
+    review was cancelled / timed out."""
+    gate = {"event": threading.Event(), "decisions": None, "cancelled": False}
+    eng._hunk_gate = gate
+    try:
+        eng.window.request_hunk_review({
+            "file": file, "why": why,
+            "summary": diff_hunks.summarize(hunks), "hunks": hunks})
+    except Exception:
+        eng._hunk_gate = None
+        return None
+    gate["event"].wait(_APPROVAL_TIMEOUT)
+    eng._hunk_gate = None
+    if getattr(eng, "_agent_cancel", False) or gate["cancelled"]:
+        return None
+    return gate["decisions"]
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def _known_locations() -> str:
@@ -2015,19 +2066,59 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     # the automated reviewer/precheck have already vetted this).
                     activity.instant("code", "Auto-approved", (why or tool)[:60], status="done")
                 else:
-                    aid = activity.start("code", f"Waiting for approval: {why}")
-                    approved = _ask_approval(
-                        eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
-                        diff=appr_diff, file=appr_file)
-                    if not approved:
-                        activity.fail(aid, "declined by user")
-                        rejected_flag = True   # reason harder on the retry
-                        messages.append({"role": "assistant", "content": json.dumps(action)})
-                        messages.append({"role": "user", "content":
-                                         "RESULT:\nUser DECLINED this change. Try a "
-                                         "different approach or finish with done."})
-                        continue
-                    activity.done(aid, "approved")
+                    # Feature #3: hunk-by-hunk diff review for file edits (web UI).
+                    # The user accepts / rejects / edits each hunk; we then apply
+                    # exactly the accepted subset as a whole-file write.
+                    reviewed = False
+                    if (tool in ("edit_file", "write_file")
+                            and hasattr(eng.window, "request_hunk_review")):
+                        _orig, _prop, _p = _edit_original_proposed(tool, args)
+                        if _p is not None and _orig != _prop:
+                            _hunks = diff_hunks.build_hunks(_orig, _prop)
+                            if _hunks:
+                                reviewed = True
+                                aid = activity.start(
+                                    "code", f"Reviewing {len(_hunks)} hunk(s): {why}")
+                                _dec = _ask_hunk_review(eng, str(_p), _hunks, why)
+                                if _dec is None:
+                                    activity.fail(aid, "review cancelled")
+                                    rejected_flag = True
+                                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                                    messages.append({"role": "user", "content":
+                                        "RESULT:\nUser cancelled the diff review without "
+                                        "applying it. Try a different approach or finish with done."})
+                                    continue
+                                _accepted = [
+                                    h for h in _hunks
+                                    if (_dec.get(h["id"]) or _dec.get(str(h["id"])) or {}
+                                        ).get("action") != "reject"]
+                                if not _accepted:
+                                    activity.fail(aid, "all hunks rejected")
+                                    rejected_flag = True
+                                    messages.append({"role": "assistant", "content": json.dumps(action)})
+                                    messages.append({"role": "user", "content":
+                                        "RESULT:\nUser rejected every hunk of this change. Do "
+                                        "not repeat it — try a different approach or finish with done."})
+                                    continue
+                                _newc = diff_hunks.apply_hunks(_orig, _prop, _dec)
+                                tool = "write_file"          # apply the accepted subset
+                                args = {"path": str(_p), "content": _newc}
+                                activity.done(
+                                    aid, f"applied {len(_accepted)}/{len(_hunks)} hunk(s)")
+                    if not reviewed:
+                        aid = activity.start("code", f"Waiting for approval: {why}")
+                        approved = _ask_approval(
+                            eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
+                            diff=appr_diff, file=appr_file)
+                        if not approved:
+                            activity.fail(aid, "declined by user")
+                            rejected_flag = True   # reason harder on the retry
+                            messages.append({"role": "assistant", "content": json.dumps(action)})
+                            messages.append({"role": "user", "content":
+                                             "RESULT:\nUser DECLINED this change. Try a "
+                                             "different approach or finish with done."})
+                            continue
+                        activity.done(aid, "approved")
 
             # Show exactly what GIL is touching — path/dir/pattern/command —
             # not just the reason, so the user sees where he is working (Claude-style).

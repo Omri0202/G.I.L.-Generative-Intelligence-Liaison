@@ -520,6 +520,13 @@ class WebChat:
                 gate["event"].set()
             except Exception:
                 pass
+        hgate = getattr(eng, "_hunk_gate", None)
+        if hgate:                      # unblock a pending hunk review too
+            try:
+                hgate["cancelled"] = True
+                hgate["event"].set()
+            except Exception:
+                pass
         return {"stopped": True}
 
     def request_approval(self, text: str, kind: str = "agent",
@@ -528,6 +535,26 @@ class WebChat:
         diff to the web UI."""
         self._push("gil.approval",
                    {"text": text, "kind": kind, "diff": diff, "file": file})
+
+    def request_hunk_review(self, payload: dict) -> None:
+        """Push a hunk-by-hunk diff review to the web UI (Feature #3). Each hunk
+        gets its own accept / reject / edit control; the user's decisions come
+        back through _rpc_hunk_review."""
+        self._push("gil.hunkReview", payload)
+
+    def _rpc_hunk_review(self, decisions=None, cancelled=False):
+        """The user finished (or cancelled) a hunk-by-hunk review — resolve the
+        code agent's review gate with their per-hunk decisions."""
+        eng = getattr(self._gil_window, "_engine", None)
+        gate = getattr(eng, "_hunk_gate", None) if eng else None
+        if gate:
+            gate["cancelled"] = bool(cancelled)
+            gate["decisions"] = decisions if isinstance(decisions, dict) else {}
+            try:
+                gate["event"].set()
+            except Exception:
+                pass
+        return {"ok": True}
 
     def tool_block(self, block: dict) -> None:
         """Push a Claude-Code-style tool-call block to the terminal UI."""

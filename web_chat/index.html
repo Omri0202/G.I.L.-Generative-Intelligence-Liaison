@@ -577,6 +577,54 @@ body.codemode .approval kbd{display:inline-block;min-width:14px;text-align:cente
   background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.09);}
 body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--muted);}
 
+/* ── Feature #3: hunk-by-hunk diff reviewer ── */
+.hunkreview{margin:6px 0 12px 20px;max-width:880px;border:1px solid var(--border);
+  border-left:2px solid var(--accent-cyan);background:var(--surf);border-radius:10px;
+  font-family:var(--cmfont);overflow:hidden;}
+.hunkreview .hrhead{display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+  padding:10px 14px 6px;font-size:12.5px;color:var(--txt);}
+.hunkreview .hrfile{color:var(--accent-cyan);}
+.hunkreview .hrsum{margin-inline-start:auto;color:var(--muted);font-size:11px;
+  font-variant-numeric:tabular-nums;}
+.hunkreview .hrwhy{padding:0 14px 8px;font-size:12px;color:var(--dim);font-style:italic;}
+.hunkreview .hunk{margin:0 12px 10px;background:#141416;border:1px solid #232429;
+  border-radius:7px;overflow:hidden;transition:opacity .15s;}
+.hunkreview .hunk.rejected{opacity:.5;}
+.hunkreview .hunk.rejected .hklines{filter:grayscale(.7);}
+.hunkreview .hkhd{display:flex;align-items:center;gap:8px;padding:5px 10px;
+  border-bottom:1px solid #232429;background:#17171B;}
+.hunkreview .hkloc{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;}
+.hunkreview .hkstate{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;}
+.hunkreview .hkstate.accept{color:#9BE3AE;} .hunkreview .hkstate.reject{color:#F0A19B;}
+.hunkreview .hkstate.edit{color:var(--accent);}
+.hunkreview .hkbtns{margin-inline-start:auto;display:flex;gap:5px;}
+.hunkreview .hkb{padding:2px 8px;font-size:11px;font-weight:600;border-radius:6px;
+  font-family:var(--cmfont);background:transparent;color:var(--muted);
+  border:1px solid var(--border);cursor:pointer;transition:all .12s;}
+.hunkreview .hkb:hover{color:var(--txt);border-color:var(--muted);}
+.hunkreview .hkb.y.on{background:rgba(34,197,94,.16);color:#9BE3AE;border-color:rgba(34,197,94,.42);}
+.hunkreview .hkb.n.on{background:rgba(239,68,68,.16);color:#F0A19B;border-color:rgba(239,68,68,.42);}
+.hunkreview .hkb.e.on{background:rgba(217,119,6,.16);color:var(--accent);border-color:rgba(217,119,6,.42);}
+.hunkreview .hkb kbd{background:none;border:none;padding:0;font-weight:700;}
+.hunkreview .hklines{font-size:12.5px;line-height:1.6;overflow-x:auto;max-height:320px;}
+.hunkreview .hkedit{display:block;width:calc(100% - 20px);margin:8px 10px 10px;
+  min-height:64px;background:#0F0F11;color:var(--txt);border:1px solid var(--accent);
+  border-radius:6px;padding:8px 10px;font-family:var(--cmfont);font-size:12.5px;
+  line-height:1.55;resize:vertical;white-space:pre;}
+.hunkreview .hrfoot{display:flex;align-items:center;gap:8px;padding:6px 14px 12px;}
+.hunkreview .hrfoot button{flex:0 0 auto;padding:5px 14px;font-size:11.5px;font-weight:600;
+  border-radius:7px;font-family:var(--cmfont);cursor:pointer;}
+.hunkreview .hrapply{background:rgba(217,119,6,.16);color:var(--accent);
+  border:1px solid rgba(217,119,6,.42);}
+.hunkreview .hrapply:hover{background:rgba(217,119,6,.26);}
+.hunkreview .hrapply.danger{background:rgba(239,68,68,.14);color:#F0A19B;
+  border-color:rgba(239,68,68,.4);}
+.hunkreview .hrcancel{background:transparent;color:var(--muted);border:1px solid var(--border);}
+.hunkreview .hrcancel:hover{color:var(--txt);border-color:var(--muted);}
+.hunkreview .chose{margin-inline-start:auto;font-size:11.5px;color:var(--muted);}
+.hunkreview.done{opacity:.85;border-left-color:var(--border);}
+.hunkreview.done button{cursor:default;opacity:.6;}
+
 /* approval card — clickable Approve / Reject (Claude-style) */
 .approval { margin:0 0 22px 37px; max-width:640px; background:var(--input);
   border:1px solid var(--accent); border-radius:15px; overflow:hidden;
@@ -1271,6 +1319,98 @@ const gil = {
     };
     d.querySelector(".yes").onclick = () => done(true);
     d.querySelector(".no").onclick  = () => done(false);
+    $("msgs").insertBefore(d, $("typing"));
+    scrollDown(true);
+  },
+
+  /* ── Feature #3: hunk-by-hunk interactive diff reviewer ── */
+  hunkReview(payload) {
+    this.hideTyping();
+    this._approvalOpen = true;          // keeps the work timer running
+    this.startTimer();
+    const hunks = (payload && payload.hunks) || [];
+    const decisions = {};
+    hunks.forEach(h => decisions[h.id] = {action: "accept", text: h.new_text || ""});
+    const d = document.createElement("div");
+    d.className = "hunkreview";
+    let inner =
+      `<div class="hrhead">🔍 <b>Review change</b>` +
+      (payload.file ? ` · <span class="hrfile">${esc(payload.file)}</span>` : "") +
+      `<span class="hrsum">${esc(payload.summary || "")}</span></div>` +
+      (payload.why ? `<div class="hrwhy">${esc(payload.why)}</div>` : "");
+    hunks.forEach(h => {
+      const body = (h.lines || []).map(l => {
+        const cls = l.tag === "+" ? "add" : l.tag === "-" ? "del" : "ctx";
+        return `<div class="dl ${cls}">${esc(l.tag + (l.text || "").replace(/\n$/, ""))}</div>`;
+      }).join("");
+      inner +=
+        `<div class="hunk" data-id="${h.id}">` +
+          `<div class="hkhd"><span class="hkloc">${esc(h.header)}</span>` +
+            `<span class="hkstate accept">accepted</span>` +
+            `<span class="hkbtns">` +
+              `<button class="hkb y on" data-a="accept" title="accept this hunk"><kbd>y</kbd></button>` +
+              `<button class="hkb n" data-a="reject" title="reject this hunk"><kbd>n</kbd></button>` +
+              `<button class="hkb e" data-a="edit" title="edit this hunk"><kbd>e</kbd></button>` +
+            `</span></div>` +
+          `<div class="diff hklines">${body}</div>` +
+          `<textarea class="hkedit" spellcheck="false" style="display:none">${esc(h.new_text || "")}</textarea>` +
+        `</div>`;
+    });
+    inner +=
+      `<div class="hrfoot"><button class="hrapply"></button>` +
+      `<button class="hrcancel">cancel</button><span class="chose"></span></div>`;
+    d.innerHTML = inner;
+
+    const applyBtn = d.querySelector(".hrapply");
+    const refresh = () => {
+      const acc = hunks.filter(h => decisions[h.id].action !== "reject").length;
+      applyBtn.textContent = acc ? `apply ${acc}/${hunks.length}` : "reject all";
+      applyBtn.classList.toggle("danger", acc === 0);
+    };
+    d.querySelectorAll(".hunk").forEach(hk => {
+      const id = +hk.dataset.id;
+      const state = hk.querySelector(".hkstate");
+      const ta = hk.querySelector(".hkedit");
+      hk.querySelectorAll(".hkb").forEach(btn => {
+        btn.onclick = () => {
+          const a = btn.dataset.a;
+          decisions[id].action = a;
+          hk.querySelectorAll(".hkb").forEach(b => b.classList.remove("on"));
+          btn.classList.add("on");
+          hk.classList.toggle("rejected", a === "reject");
+          hk.classList.toggle("editing", a === "edit");
+          state.className = "hkstate " + a;
+          state.textContent = a === "accept" ? "accepted" : a === "reject" ? "rejected" : "edited";
+          ta.style.display = a === "edit" ? "block" : "none";
+          if (a === "edit") ta.focus();
+          refresh();
+        };
+      });
+    });
+    const finish = (cancelled) => {
+      this._approvalOpen = false;
+      d.classList.add("done");
+      d.querySelectorAll("button").forEach(b => b.disabled = true);
+      if (cancelled) {
+        d.querySelector(".chose").textContent = "✕ Cancelled";
+        api("hunk_review", {}, true);
+        this.scheduleStop();
+        return;
+      }
+      d.querySelectorAll(".hunk").forEach(hk => {   // capture edited text
+        const id = +hk.dataset.id;
+        if (decisions[id].action === "edit")
+          decisions[id].text = hk.querySelector(".hkedit").value;
+      });
+      const acc = hunks.filter(h => decisions[h.id].action !== "reject").length;
+      d.querySelector(".chose").textContent =
+        acc ? `✓ Applied ${acc}/${hunks.length}` : "✕ Rejected all";
+      api("hunk_review", decisions, false);
+      this.showTyping();
+    };
+    applyBtn.onclick = () => finish(false);
+    d.querySelector(".hrcancel").onclick = () => finish(true);
+    refresh();
     $("msgs").insertBefore(d, $("typing"));
     scrollDown(true);
   },

@@ -3923,6 +3923,13 @@ class GILWindow(ctk.CTk):
         if callable(fn):
             fn(text, kind, diff, file)
 
+    def request_hunk_review(self, payload: dict) -> None:
+        """Push a hunk-by-hunk diff review to the web chat (Feature #3)."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "request_hunk_review", None)
+        if callable(fn):
+            fn(payload)
+
     def tool_block(self, block: dict) -> None:
         """Push a Claude-Code-style tool-call block to the web terminal."""
         win = getattr(self, "_chat_win", None)
