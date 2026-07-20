@@ -36,6 +36,7 @@ log = _get_log("agent")
 _GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions"
 _MAX_STEPS = 20
 _APPROVAL_TIMEOUT = 240   # seconds to wait for the user's yes/no
+_CTX_BUDGET = 128000      # gpt-oss-120b usable context window (tokens) — gauge denominator
 
 # Commands that run without approval — genuinely read-only or verification.
 _FREE_RUN = (
@@ -1660,6 +1661,16 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 # (no file dumps) so this stays under the 8k-TPM ceiling.
                 prof = {"effort": "medium", "max_tokens": 5000, "ctx": 8000}
             _cap_context(messages, prof["ctx"])   # profile-sized payload under the TPM cap
+            # Live token-budget gauge: estimate the working-context size (~4 chars
+            # per token) and push it to the diagnostic bar so the user can see how
+            # full GIL's context is and when `/compact` would help.
+            if hasattr(window, "token_usage"):
+                try:
+                    _tok = sum(len(str(m.get("content", ""))) for m in messages) // 4
+                    window.token_usage({"tokens": _tok, "budget": _CTX_BUDGET,
+                                        "step": step, "max": _MAX_STEPS})
+                except Exception:
+                    pass
             # Second-to-last step: tell GIL to land the plane himself now — a clean
             # self-authored `done` beats the forced finalize we'd otherwise do.
             if step == _MAX_STEPS - 1:

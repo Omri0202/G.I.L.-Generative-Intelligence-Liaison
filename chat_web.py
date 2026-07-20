@@ -288,6 +288,7 @@ class WebChat:
                 "- `/code <task>` — write or fix code (I ask before each change)\n"
                 "- `/remember <fact>` — save something for me to recall (no search)\n"
                 "- `/approve ask|auto|readonly` — set the code-agent permission policy\n"
+                "- `/compact` — summarize the chat so far & free up context\n"
                 "- `/stop` — stop what I'm doing · `/voice` — toggle voice · "
                 "`/clear` — new chat", "gil")
             return
@@ -353,6 +354,38 @@ class WebChat:
                 return
             self._save_cfg("agent_approval_mode", mode)
             self.add_message(f"**Approval mode → `{mode}`** — {valid[mode]}.", "gil")
+            return
+
+        if name in ("compact", "compress"):
+            # Feature #2: summarize the conversation so far into a condensed memory
+            # and drop the verbose frames — frees context and resets the gauge.
+            brain = getattr(eng, "brain", None)
+            if brain is None or not hasattr(brain, "compact"):
+                self.add_message("Nothing to compact yet.", "gil")
+                return
+            self._push("gil.showTyping")
+            try:
+                res = brain.compact()
+            except Exception:
+                res = {"ok": False, "reason": "Compaction hit an error — nothing changed."}
+            self._push("gil.hideTyping")
+            if not res.get("ok"):
+                self.add_message(res.get("reason", "Nothing to compact yet."), "gil")
+                return
+            before, after = res.get("before", 0), res.get("after", 0)
+            saved = max(0, before - after)
+            removed = res.get("removed", 0)
+            msg = (f"**Compacted.** Summarized {removed} message"
+                   f"{'s' if removed != 1 else ''} — context ~{before:,} → ~{after:,} "
+                   f"tokens (freed ~{saved:,}).")
+            if res.get("reason"):
+                msg += f"\n\n_{res['reason']}_"
+            self.add_message(msg, "gil")
+            # refresh the live gauge to the new (smaller) context size
+            try:
+                self.token_usage({"tokens": after, "budget": 128000})
+            except Exception:
+                pass
             return
 
         if name == "remember":
@@ -581,6 +614,9 @@ class WebChat:
 
     # self-healing badge — a failed tool → GIL auto-corrects (Feature #9)
     def self_heal(self, info: dict) -> None: self._push("gil.selfHeal", info)
+
+    # live token-budget gauge — context fullness per step (Feature #2)
+    def token_usage(self, info: dict) -> None: self._push("gil.tokenUsage", info)
 
     def add_image_message(self, path) -> None:
         p = str(path)

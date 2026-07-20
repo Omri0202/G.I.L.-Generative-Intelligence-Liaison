@@ -891,6 +891,76 @@ class GILBrain:
 
         return parsed
 
+    def compact(self) -> dict:
+        """Summarize the conversation history into a single condensed memory turn
+        and drop the verbose frames — frees context and resets the gauge (Feature
+        #2). Returns {ok, before, after, removed, summary, reason}."""
+        hist = [m for m in self.history if isinstance(m.get("content"), str)]
+        before_tok = sum(len(m["content"]) for m in hist) // 4
+        if len(hist) < 4:
+            return {"ok": False, "before": before_tok, "after": before_tok,
+                    "removed": 0, "summary": "",
+                    "reason": "The conversation is already compact — nothing to summarize yet."}
+        transcript = "\n".join(
+            f"{'You' if m['role'] == 'user' else 'GIL'}: {m['content']}" for m in hist)
+        payload = {
+            "model": GROQ_MODEL,
+            "messages": [
+                {"role": "system", "content":
+                 "Condense this conversation into a tight briefing GIL can use to "
+                 "keep going with full continuity. Capture what the user is working "
+                 "on, decisions made, open threads, and any facts/names/paths that "
+                 "matter. Terse third-person bullet-style prose, no preamble, under "
+                 "200 words."},
+                {"role": "user", "content": transcript[:12000]},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 400,
+        }
+        if "gpt-oss" in GROQ_MODEL:
+            payload["reasoning_effort"] = "low"
+        summary = ""
+        for key in GROQ_KEYS:
+            try:
+                hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                r = _session.post(GROQ_URL, json=payload, headers=hdrs, timeout=20)
+                r.raise_for_status()
+                summary = (r.json()["choices"][0]["message"]["content"] or "").strip()
+                if summary:
+                    break
+            except Exception:
+                continue
+        # Only commit the summary if it actually shrinks the context — for a short
+        # conversation the summary can be longer than the original, which would
+        # inflate context instead of freeing it.
+        if summary:
+            summ_hist = [{"role": "assistant",
+                          "content": "[EARLIER CONVERSATION — condensed]\n" + summary}]
+            summ_tok = sum(len(m["content"]) for m in summ_hist) // 4
+            if summ_tok < before_tok:
+                self.history = summ_hist
+                try:
+                    from session_memory import save as _save_mem
+                    _save_mem(self.history)
+                except Exception:
+                    pass
+                return {"ok": True, "before": before_tok, "after": summ_tok,
+                        "removed": len(hist), "summary": summary}
+        # Summary was empty or no smaller than the original: fall back to dropping
+        # the oldest turns, but only if that genuinely reduces the context.
+        trimmed = hist[-4:]
+        trim_tok = sum(len(m["content"]) for m in trimmed) // 4
+        if trim_tok < before_tok:
+            self.history = trimmed
+            reason = ("Trimmed to the latest turns (the summary service was unreachable)."
+                      if not summary else
+                      "Kept the latest turns — a summary wouldn't have been any smaller.")
+            return {"ok": True, "before": before_tok, "after": trim_tok,
+                    "removed": len(hist) - len(trimmed), "summary": "", "reason": reason}
+        return {"ok": False, "before": before_tok, "after": before_tok,
+                "removed": 0, "summary": "",
+                "reason": "The conversation is already compact — nothing to free up yet."}
+
     def proactive_query(self) -> dict | None:
         """
         Call this from a background timer (e.g. every 5â€“10 minutes) to let G.I.L.

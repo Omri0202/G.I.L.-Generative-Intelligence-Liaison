@@ -298,6 +298,21 @@ body.codemode #cmdiag{display:flex;}
 #cmdiag .diagtime{font-weight:400;}
 #cmdiag .diaghint{margin-inline-start:auto;color:#5C5D66;flex:0 1 auto;
   overflow:hidden;text-overflow:ellipsis;}
+/* ── Feature #2: live token-budget gauge ── */
+#cmdiag .diaggauge{display:none;align-items:center;gap:6px;
+  flex:0 0 auto;color:var(--muted);white-space:nowrap;}
+#cmdiag .diaggauge.show{display:inline-flex;}
+#cmdiag .diaggauge .glabel{color:#5C5D66;letter-spacing:.3px;}
+#cmdiag .diaggauge .gbar{width:56px;height:6px;border-radius:3px;background:#2A2B33;
+  overflow:hidden;flex:0 0 auto;}
+#cmdiag .diaggauge .gbar i{display:block;height:100%;width:0;background:var(--accent-cyan);
+  border-radius:3px;transition:width .35s ease;}
+#cmdiag .diaggauge .gpct{color:var(--accent-cyan);font-weight:600;
+  font-variant-numeric:tabular-nums;}
+#cmdiag .diaggauge.warn .gbar i,#cmdiag .diaggauge.hot .gbar i{background:var(--warn,#E8B84B);}
+#cmdiag .diaggauge.warn .gpct{color:var(--warn,#E8B84B);}
+#cmdiag .diaggauge.hot .gbar i{background:#E5484D;}
+#cmdiag .diaggauge.hot .gpct{color:#E5484D;}
 
 /* ── Feature #1: task inspector drawer (click the status row / Esc to stop) ── */
 #main{position:relative;}
@@ -1287,6 +1302,7 @@ const gil = {
         `<span class="diagarrow">▶▶</span>` +
         `<span class="diagverb">ready</span>` +
         `<span class="diagmeta"></span>` +
+        `<span class="diaggauge" title="context budget"></span>` +
         `<span class="diaghint">↵ send &nbsp;·&nbsp; /chat leave &nbsp;·&nbsp; ctrl+o expand &nbsp;·&nbsp; esc stop</span>`;
       // clicking the status row opens the task inspector drawer (Feature #1)
       diag.querySelector(".diaghint").addEventListener("click", (e) => e.stopPropagation());
@@ -1414,6 +1430,28 @@ const gil = {
       `</div>`;
     $("msgs").insertBefore(d, $("typing"));
     scrollDown();
+  },
+  /* ── Feature #2: live token-budget gauge (context fullness per step) ── */
+  tokenUsage(info) {
+    if (!info) return;
+    this._tok = info;
+    const g = document.querySelector("#cmdiag .diaggauge");
+    if (!g) return;
+    const tokens = Math.max(0, info.tokens || 0);
+    const budget = info.budget || 128000;
+    const pct = Math.max(0, Math.min(100, Math.round(tokens / budget * 100)));
+    const k = tokens >= 1000
+      ? (tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1) + "k"
+      : String(tokens);
+    g.classList.toggle("warn", pct >= 60 && pct < 85);
+    g.classList.toggle("hot", pct >= 85);
+    g.innerHTML =
+      `<span class="glabel">ctx</span>` +
+      `<span class="gbar"><i style="width:${pct}%"></i></span>` +
+      `<span class="gpct">${pct}%</span>`;
+    g.classList.add("show");
+    g.title = `Context ≈ ${tokens.toLocaleString()} of ${budget.toLocaleString()} ` +
+      `tokens (${pct}%). Type /compact to summarize history and free space.`;
   },
   toolBlock(b) {
     this.clearShimmer();       // the narration that led to this tool settles
@@ -1649,6 +1687,7 @@ const gil = {
     {cmd: "/codemode", desc: "Enter the developer terminal (Claude-Code style)", kind: "arg"},
     {cmd: "/remember", desc: "Tell GIL a fact to remember (not search)",  kind: "arg"},
     {cmd: "/approve",  desc: "Permission policy: ask · auto · readonly",  kind: "arg"},
+    {cmd: "/compact",  desc: "Summarize the chat so far & free context",  kind: "meta"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
     {cmd: "/clear",    desc: "Start a new conversation",                  kind: "meta"},

@@ -3958,6 +3958,13 @@ class GILWindow(ctk.CTk):
         if callable(fn):
             fn(info)
 
+    def token_usage(self, info: dict) -> None:
+        """Push the live token-budget gauge to the web terminal (#2)."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "token_usage", None)
+        if callable(fn):
+            fn(info)
+
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
             self._float_btn = _FloatingChatButton(self, self._open_chat_window)
