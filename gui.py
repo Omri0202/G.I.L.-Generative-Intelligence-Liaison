@@ -3951,6 +3951,13 @@ class GILWindow(ctk.CTk):
         if callable(fn):
             fn()
 
+    def self_heal(self, info: dict) -> None:
+        """Push a self-healing 'auto-correcting' badge to the web terminal (#9)."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "self_heal", None)
+        if callable(fn):
+            fn(info)
+
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
             self._float_btn = _FloatingChatButton(self, self._open_chat_window)

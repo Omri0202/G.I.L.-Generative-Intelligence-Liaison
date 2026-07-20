@@ -554,6 +554,9 @@ class WebChat:
     def stream_thought(self, delta: str) -> None: self._push("gil.streamThought", delta)
     def stream_thought_end(self) -> None: self._push("gil.streamThoughtEnd")
 
+    # self-healing badge — a failed tool → GIL auto-corrects (Feature #9)
+    def self_heal(self, info: dict) -> None: self._push("gil.selfHeal", info)
+
     def add_image_message(self, path) -> None:
         p = str(path)
         threading.Thread(target=self._persist, args=(f"[IMAGE:{p}]", "gil"),

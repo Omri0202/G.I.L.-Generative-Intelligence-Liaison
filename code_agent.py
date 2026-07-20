@@ -1601,6 +1601,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     rejected_flag = False           # a change got bounced → reason harder next step
     content_retries = 0             # empty/closure-only deliverable → force a rewrite
     verify_retries = 0              # answer failed the truth check → force a redo
+    heal_counts: Counter = Counter()  # per-target failure count → self-heal badge (#9)
     speed_mode = _agent_speed_mode()
     if code_mode and speed_mode != "auto":
         activity.instant("brain", f"Speed mode: {speed_mode}",
@@ -1958,6 +1959,21 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             # Rich Claude-Code-style tool block for the /codemode terminal:
             # header + output/diff + language, so the UI can colour it.
             _emit_tool_block(window, tool, args, result, ok)
+
+            # Self-healing visibility (#9): a failed run/edit means GIL will read the
+            # error and auto-correct next step — surface that as a badge with the
+            # attempt count (the thrash guard caps repeats at 3, then it pivots).
+            if not ok and tool in ("run", "edit_file", "write_file"):
+                _sig = _action_sig(action)
+                heal_counts[_sig] += 1
+                _reason = result[6:].strip() if result.startswith("ERROR") else result
+                _reason = " ".join(_reason.split())[:110] or "an error"
+                if hasattr(window, "self_heal"):
+                    try:
+                        window.self_heal({"attempt": heal_counts[_sig], "max": 3,
+                                          "reason": _reason})
+                    except Exception:
+                        pass
 
             messages.append({"role": "assistant", "content": json.dumps(action)})
             messages.append({"role": "user", "content": f"RESULT:\n{result[:2200]}"})

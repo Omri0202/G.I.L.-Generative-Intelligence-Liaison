@@ -370,6 +370,18 @@ body.codemode #histsearch .hspanel{font-family:var(--cmfont);border-radius:8px;}
 #histsearch .hsrow.sel,#histsearch .hsrow:hover{background:var(--hover);color:var(--txt);}
 #histsearch .hsempty{padding:14px;color:var(--muted);font-size:12.5px;}
 
+/* ── Feature #9: self-healing attempt badge ── */
+@keyframes spin{to{transform:rotate(360deg);}}
+.msg.gil.healbadge{margin:2px 0 6px 20px;}
+.heal{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border-radius:8px;
+  font-family:"Cascadia Code","JetBrains Mono",Consolas,monospace;font-size:12.5px;
+  background:rgba(217,119,6,.10);border:1px solid rgba(217,119,6,.32);color:var(--dim);}
+body.codemode .heal{font-family:var(--cmfont);}
+.heal b{color:#D9A15E;font-weight:700;}
+.heal .healspin{color:#D9A15E;display:inline-block;animation:spin 1.1s linear infinite;}
+.heal .healreason{color:var(--muted);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:340px;}
+
 /* ── GIL narration → terminal bullet line (amber dot) ── */
 body.codemode .msg.gil{margin:0 0 3px 0;}
 body.codemode .msg.gil .head,body.codemode .msg.gil .actions{display:none;}
@@ -1389,6 +1401,19 @@ const gil = {
   toggleShortcuts() {
     const sc = document.getElementById("shortcuts");
     if (sc && sc.classList.contains("show")) this.hideShortcuts(); else this.showShortcuts();
+  },
+  /* ── Feature #9: self-healing attempt badge (a failed tool → auto-correcting) ── */
+  selfHeal(info) {
+    this.clearShimmer(); this.hideTyping();
+    const a = (info && info.attempt) || 1, m = (info && info.max) || 3;
+    const d = document.createElement("div");
+    d.className = "msg gil healbadge";
+    d.innerHTML = `<div class="heal"><span class="healspin">⟳</span>` +
+      `<b>Attempt ${a}/${m}</b> · auto-correcting` +
+      (info && info.reason ? ` — <span class="healreason">${esc(info.reason)}</span>` : "") +
+      `</div>`;
+    $("msgs").insertBefore(d, $("typing"));
+    scrollDown();
   },
   toolBlock(b) {
     this.clearShimmer();       // the narration that led to this tool settles
