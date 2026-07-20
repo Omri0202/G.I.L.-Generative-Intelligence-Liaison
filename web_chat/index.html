@@ -323,6 +323,33 @@ body.codemode #taskdrawer.show{display:block;animation:rise .16s ease both;}
 #taskdrawer .tdstop:hover{background:rgba(239,68,68,.26);}
 #taskdrawer .tdempty{padding:11px;color:var(--muted);font-size:12px;}
 
+/* ── Feature #4: keyboard-shortcut help overlay (? / Ctrl+H, works in both modes) ── */
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+#shortcuts{display:none;position:fixed;inset:0;z-index:100;
+  background:rgba(0,0,0,.5);align-items:center;justify-content:center;}
+#shortcuts.show{display:flex;animation:fadein .15s ease both;}
+#shortcuts .scpanel{width:min(520px,92vw);max-height:82vh;overflow:auto;
+  background:var(--surf);border:1px solid var(--border);border-radius:14px;
+  box-shadow:0 22px 64px rgba(0,0,0,.55);
+  font-family:"Cascadia Code","JetBrains Mono",Consolas,monospace;animation:rise .18s ease both;}
+body.codemode #shortcuts .scpanel{font-family:var(--cmfont);border-radius:8px;}
+#shortcuts .schead{display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;color:var(--txt);}
+#shortcuts .scx{color:var(--muted);font-size:15px;padding:0 6px;}
+#shortcuts .scx:hover{color:var(--accent);}
+#shortcuts .scbody{padding:8px 10px;}
+#shortcuts .scsec{padding:9px 12px 4px;font-size:11px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);}
+#shortcuts .scrow{display:flex;align-items:center;gap:14px;padding:7px 12px;border-radius:8px;font-size:13px;}
+#shortcuts .scrow:hover{background:var(--hover);}
+#shortcuts .sckeys{flex:0 0 44%;display:flex;gap:6px;flex-wrap:wrap;}
+#shortcuts kbd{display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;
+  background:var(--code-bg);border:1px solid var(--border);color:var(--dim);font-family:inherit;}
+#shortcuts .scdesc{color:var(--muted);flex:1;}
+#shortcuts .scfoot{padding:11px 18px;border-top:1px solid var(--border);
+  font-size:11.5px;color:var(--muted);text-align:center;}
+#shortcuts .scfoot b{color:var(--dim);}
+
 /* ── GIL narration → terminal bullet line (amber dot) ── */
 body.codemode .msg.gil{margin:0 0 3px 0;}
 body.codemode .msg.gil .head,body.codemode .msg.gil .actions{display:none;}
@@ -694,6 +721,16 @@ body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--
       </div>
       <div id="hint">Type <b>/</b> for commands · G.I.L. shows every tool he uses, live.</div>
     </div>
+  </div>
+</div>
+
+<!-- Feature #4 — keyboard shortcut help overlay (? or Ctrl+H) -->
+<div id="shortcuts" onclick="if(event.target===this)gil.hideShortcuts()">
+  <div class="scpanel" role="dialog" aria-label="Keyboard shortcuts">
+    <div class="schead"><span>⌨  Keyboard shortcuts</span>
+      <button class="scx" onclick="gil.hideShortcuts()" aria-label="Close">✕</button></div>
+    <div class="scbody"></div>
+    <div class="scfoot"><b>?</b> or <b>Ctrl+H</b> toggles this · <b>Esc</b> closes</div>
   </div>
 </div>
 
@@ -1280,6 +1317,41 @@ const gil = {
         `<button class="tdstop" onclick="gil.stopTask()">◼ Stop</button></div>`
       : `<div class="tdempty">No tasks running.</div>`;
   },
+  /* ── Feature #4: keyboard-shortcut help overlay ── */
+  showShortcuts() {
+    const sc = document.getElementById("shortcuts");
+    if (!sc) return;
+    if (!sc.dataset.built) {
+      // [ [section, [ [keys[], desc], … ] ], … ] — grouped, scannable
+      const GROUPS = [
+        ["Messaging", [
+          [["Enter"], "Send message"],
+          [["Shift", "Enter"], "New line in the message"],
+          [["/"], "Open the command menu"],
+          [["↑"], "Previous message you sent"]]],
+        ["Coding terminal", [
+          [["Esc"], "Interrupt / stop the running task"],
+          [["Ctrl", "O"], "Expand a truncated tool output"],
+          [["click", "status row"], "Open the task inspector"],
+          [["/codemode", "/chat"], "Switch terminal ⇄ chat"]]],
+        ["General", [
+          [["?"], "Show this help (when not typing)"],
+          [["Ctrl", "H"], "Show this help"]]],
+      ];
+      sc.querySelector(".scbody").innerHTML = GROUPS.map(([sec, rows]) =>
+        `<div class="scsec">${sec}</div>` + rows.map(([keys, desc]) =>
+          `<div class="scrow"><span class="sckeys">` +
+          keys.map(k => `<kbd>${esc(k)}</kbd>`).join("") +
+          `</span><span class="scdesc">${esc(desc)}</span></div>`).join("")).join("");
+      sc.dataset.built = "1";
+    }
+    sc.classList.add("show");
+  },
+  hideShortcuts() { document.getElementById("shortcuts")?.classList.remove("show"); },
+  toggleShortcuts() {
+    const sc = document.getElementById("shortcuts");
+    if (sc && sc.classList.contains("show")) this.hideShortcuts(); else this.showShortcuts();
+  },
   toolBlock(b) {
     this.clearShimmer();       // the narration that led to this tool settles
     this.clearThought();       // and the live reasoning line clears for the tool
@@ -1534,13 +1606,21 @@ $("inp").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); gil.send(); }
 });
 
-/* Feature #1 — Esc interrupts a running agent (dispatches a cancel to the backend
-   state machine); also closes the task drawer if it's open. */
+/* Global shortcuts — Feature #1 (Esc interrupt) + Feature #4 (help overlay). */
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
+  const el = document.activeElement;
+  const typing = el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
+  if (e.key === "Escape") {                       // close overlays, else interrupt
+    const sc = document.getElementById("shortcuts");
+    if (sc && sc.classList.contains("show")) { gil.hideShortcuts(); return; }
     const dr = document.getElementById("taskdrawer");
     if (dr && dr.classList.contains("show")) { gil.closeTaskDrawer(); return; }
     if (gil._working) { e.preventDefault(); gil.stopTask(); }
+    return;
+  }
+  if (e.ctrlKey && (e.key === "h" || e.key === "H")) { e.preventDefault(); gil.toggleShortcuts(); return; }
+  if (e.key === "?" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault(); gil.toggleShortcuts();
   }
 });
 
