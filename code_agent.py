@@ -254,6 +254,29 @@ def _agent_speed_mode() -> str:
     return "auto"
 
 
+def _approval_policy() -> str:
+    """Permission policy for DESTRUCTIVE ops (Feature #5). Reads (read/list/search)
+    are always free; this only governs writes, edits, and non-safe shell commands:
+      'ask'      — gate each one for the user's yes/no (default)
+      'auto'     — auto-approve them (power mode; the safety blocklist + the
+                   reviewer/precheck still run)
+      'readonly' — refuse them entirely (investigate-only)
+    Env wins (GIL_APPROVAL_MODE), then gil_config.json (agent_approval_mode)."""
+    v = (os.getenv("GIL_APPROVAL_MODE") or "").strip().lower()
+    if not v:
+        try:
+            cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")
+                             .read_text(encoding="utf-8"))
+            v = str(cfg.get("agent_approval_mode", "")).strip().lower()
+        except Exception:
+            v = ""
+    if v in ("auto", "yolo", "auto-approve", "trust"):
+        return "auto"
+    if v in ("readonly", "read-only", "plan", "none"):
+        return "readonly"
+    return "ask"
+
+
 def _step_profile(mode: str, deep_phase: bool) -> dict:
     """Per-step reasoning profile. In auto mode we reason fast while investigating
     and switch to deep once real changes are on the table. An explicit
@@ -1898,19 +1921,35 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 appr_diff = {"old": "", "new": str(args.get("content", ""))[:1600]}
 
             if needs_approval:
-                aid = activity.start("code", f"Waiting for approval: {why}")
-                approved = _ask_approval(
-                    eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
-                    diff=appr_diff, file=appr_file)
-                if not approved:
-                    activity.fail(aid, "declined by user")
-                    rejected_flag = True   # reason harder on the retry (auto mode)
+                policy = _approval_policy()          # Feature #5: permission policy
+                if policy == "readonly":
+                    # investigate-only — refuse the destructive op, keep reading.
+                    activity.instant("code", "Blocked · read-only mode",
+                                     (why or tool)[:60], status="fail")
                     messages.append({"role": "assistant", "content": json.dumps(action)})
                     messages.append({"role": "user", "content":
-                                     "RESULT:\nUser DECLINED this change. Try a "
-                                     "different approach or finish with done."})
+                        "RESULT:\nREAD-ONLY MODE is on — file writes, edits and shell "
+                        "commands are disabled. Investigate with read/list/search only, "
+                        "then finish with `done` reporting exactly what you WOULD change."})
                     continue
-                activity.done(aid, "approved")
+                if policy == "auto":
+                    # power mode — auto-approve (the destructive-command blocklist and
+                    # the automated reviewer/precheck have already vetted this).
+                    activity.instant("code", "Auto-approved", (why or tool)[:60], status="done")
+                else:
+                    aid = activity.start("code", f"Waiting for approval: {why}")
+                    approved = _ask_approval(
+                        eng, f"*{why}*" + (f"\n\n{desc}" if desc else ""),
+                        diff=appr_diff, file=appr_file)
+                    if not approved:
+                        activity.fail(aid, "declined by user")
+                        rejected_flag = True   # reason harder on the retry
+                        messages.append({"role": "assistant", "content": json.dumps(action)})
+                        messages.append({"role": "user", "content":
+                                         "RESULT:\nUser DECLINED this change. Try a "
+                                         "different approach or finish with done."})
+                        continue
+                    activity.done(aid, "approved")
 
             # Show exactly what GIL is touching — path/dir/pattern/command —
             # not just the reason, so the user sees where he is working (Claude-style).

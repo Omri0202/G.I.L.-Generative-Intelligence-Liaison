@@ -287,6 +287,7 @@ class WebChat:
                 "- `/image <description>` — generate an image\n"
                 "- `/code <task>` — write or fix code (I ask before each change)\n"
                 "- `/remember <fact>` — save something for me to recall (no search)\n"
+                "- `/approve ask|auto|readonly` — set the code-agent permission policy\n"
                 "- `/stop` — stop what I'm doing · `/voice` — toggle voice · "
                 "`/clear` — new chat", "gil")
             return
@@ -316,6 +317,8 @@ class WebChat:
             return
 
         if name == "stop":
+            if eng and getattr(eng, "_agent_running", False):
+                self._rpc_stop_task()          # cancel a running coding agent too
             try:
                 import autonomous
                 if eng and autonomous.is_running(eng):
@@ -328,6 +331,28 @@ class WebChat:
             except Exception:
                 pass
             self.add_message("Stopped.", "gil")
+            return
+
+        if name in ("approve", "approvals", "permissions"):
+            # Feature #5: configure the destructive-op permission policy.
+            valid = {"ask": "ask before writes, edits & shell commands (default)",
+                     "auto": "auto-approve writes, edits & safe commands (power mode)",
+                     "readonly": "read-only — refuse all writes, edits & commands"}
+            mode = arg.lower().strip().replace("read-only", "readonly").replace("plan", "readonly")
+            try:
+                import code_agent
+                cur = code_agent._approval_policy()
+            except Exception:
+                cur = "ask"
+            if mode not in valid:
+                self.add_message(
+                    f"**Approval mode** is `{cur}`. Reads (read/list/search) are always "
+                    "free. Change it with `/approve ask`, `/approve auto`, or "
+                    "`/approve readonly`:\n"
+                    + "\n".join(f"- `{k}` — {v}" for k, v in valid.items()), "gil")
+                return
+            self._save_cfg("agent_approval_mode", mode)
+            self.add_message(f"**Approval mode → `{mode}`** — {valid[mode]}.", "gil")
             return
 
         if name == "remember":
