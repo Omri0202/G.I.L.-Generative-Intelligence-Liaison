@@ -417,6 +417,21 @@ class WebChat:
         if not approved:
             self.add_message("Skipped that change.", "gil")
 
+    def _rpc_stop_task(self):
+        """Esc / Stop button — cancel the running coding agent (Feature #1)."""
+        eng = getattr(self._gil_window, "_engine", None)
+        if not eng or not getattr(eng, "_agent_running", False):
+            return {"stopped": False}
+        eng._agent_cancel = True
+        gate = getattr(eng, "_agent_gate", None)
+        if gate:                       # unblock a pending approval wait
+            try:
+                gate["approved"] = False
+                gate["event"].set()
+            except Exception:
+                pass
+        return {"stopped": True}
+
     def request_approval(self, text: str, kind: str = "agent",
                          diff: dict | None = None, file: str | None = None) -> None:
         """Push an approval request with clickable buttons + optional unified

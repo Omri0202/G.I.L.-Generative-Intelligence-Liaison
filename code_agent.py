@@ -996,6 +996,8 @@ def _ask_approval(eng, description: str, diff: dict | None = None,
             pass
     gate["event"].wait(_APPROVAL_TIMEOUT)
     eng._agent_gate = None
+    if getattr(eng, "_agent_cancel", False):
+        return False              # Esc/Stop fired while we were waiting → decline
     return gate["approved"]
 
 
@@ -1604,8 +1606,19 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         activity.instant("brain", f"Speed mode: {speed_mode}",
                          "medium reasoning" if speed_mode == "fast" else "deep reasoning",
                          status="done")
+    eng._agent_cancel = False     # cleared at the start of every run (Feature #1)
     try:
         for step in range(1, _MAX_STEPS + 1):
+            # ── user interrupt (Esc / Stop): settle the state machine to idle and
+            # report cleanly, instead of finishing the task. ──
+            if getattr(eng, "_agent_cancel", False):
+                _end_thought()
+                activity.instant("code", "Task stopped", "cancelled by user", status="fail")
+                window.add_chat_message(
+                    "**Stopped** — cancelled by you." +
+                    (f"\n\n({edits_made} change{'s' if edits_made != 1 else ''} already applied)"
+                     if edits_made else ""), "gil")
+                return
             _refresh_plan_view()     # keep the plan checklist current every turn
             # Adaptive reasoning: investigation steps run fast (medium effort,
             # trimmed context → no 429 backoff); once real changes are on the

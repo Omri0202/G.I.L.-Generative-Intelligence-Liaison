@@ -299,6 +299,30 @@ body.codemode #cmdiag{display:flex;}
 #cmdiag .diaghint{margin-inline-start:auto;color:#5C5D66;flex:0 1 auto;
   overflow:hidden;text-overflow:ellipsis;}
 
+/* ── Feature #1: task inspector drawer (click the status row / Esc to stop) ── */
+#main{position:relative;}
+body.codemode #cmdiag{cursor:pointer;}
+body.codemode #cmdiag:hover .diagverb{color:var(--accent);}
+#taskdrawer{display:none;position:absolute;left:16px;bottom:100px;z-index:20;width:min(460px,80vw);
+  background:#141416;border:1px solid #2A2B30;border-radius:8px;
+  box-shadow:0 12px 34px rgba(0,0,0,.55);font-family:var(--cmfont);overflow:hidden;}
+body.codemode #taskdrawer.show{display:block;animation:rise .16s ease both;}
+#taskdrawer .tdhead{display:flex;align-items:center;justify-content:space-between;
+  padding:9px 13px;border-bottom:1px solid #2A2B30;font-size:12px;color:var(--dim);}
+#taskdrawer .tddur{color:var(--accent-cyan);font-variant-numeric:tabular-nums;}
+#taskdrawer .tdx{color:var(--muted);font-size:13px;padding:0 5px;}
+#taskdrawer .tdx:hover{color:var(--fail);}
+#taskdrawer .tdbody{padding:5px 7px;}
+#taskdrawer .tdrow{display:flex;align-items:center;gap:9px;padding:8px;font-size:12.5px;}
+#taskdrawer .tddot{width:8px;height:8px;border-radius:50%;background:var(--accent);
+  animation:busyPulse 1.3s ease-in-out infinite;flex-shrink:0;}
+#taskdrawer .tdname{color:var(--txt);}  #taskdrawer .tdname b{color:var(--accent);font-weight:600;}
+#taskdrawer .tdtime{margin-inline-start:auto;color:var(--accent-cyan);font-variant-numeric:tabular-nums;}
+#taskdrawer .tdstop{padding:4px 12px;border-radius:6px;font-size:11.5px;font-weight:600;
+  background:rgba(239,68,68,.14);color:#F0A19B;border:1px solid rgba(239,68,68,.42);}
+#taskdrawer .tdstop:hover{background:rgba(239,68,68,.26);}
+#taskdrawer .tdempty{padding:11px;color:var(--muted);font-size:12px;}
+
 /* ── GIL narration → terminal bullet line (amber dot) ── */
 body.codemode .msg.gil{margin:0 0 3px 0;}
 body.codemode .msg.gil .head,body.codemode .msg.gil .actions{display:none;}
@@ -655,6 +679,11 @@ body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--
       </div>
       <div id="typing"><span class="busy"></span><i></i><i></i><i></i><span id="worktimer"></span></div>
     </div></div>
+    <div id="taskdrawer">
+      <div class="tdhead"><span>Active tasks · <span class="tddur">0 active</span></span>
+        <button class="tdx" onclick="gil.closeTaskDrawer()">✕</button></div>
+      <div class="tdbody"></div>
+    </div>
     <div id="composer">
       <div id="jumpdown" onclick="gil.jumpDown()">↓ jump to latest</div>
       <div id="slashmenu"></div>
@@ -1167,11 +1196,15 @@ const gil = {
     if (on && !document.getElementById("cmdiag")) {
       const diag = document.createElement("div");
       diag.id = "cmdiag";
+      diag.title = "Active tasks — click to inspect · Esc to stop";
       diag.innerHTML =
         `<span class="diagarrow">▶▶</span>` +
         `<span class="diagverb">ready</span>` +
         `<span class="diagmeta"></span>` +
-        `<span class="diaghint">↵ send &nbsp;·&nbsp; /chat leave &nbsp;·&nbsp; ctrl+o expand</span>`;
+        `<span class="diaghint">↵ send &nbsp;·&nbsp; /chat leave &nbsp;·&nbsp; ctrl+o expand &nbsp;·&nbsp; esc stop</span>`;
+      // clicking the status row opens the task inspector drawer (Feature #1)
+      diag.querySelector(".diaghint").addEventListener("click", (e) => e.stopPropagation());
+      diag.addEventListener("click", () => gil.toggleTaskDrawer());
       main.appendChild(diag);
     }
     // flat "↵ send" badge in codemode, the round ↑ arrow otherwise
@@ -1211,6 +1244,41 @@ const gil = {
     verbEl.textContent = word;
     verbEl.classList.toggle("busy", busy);
     metaEl.innerHTML = meta;
+    if (document.getElementById("taskdrawer")?.classList.contains("show"))
+      this.updateTaskDrawer();
+  },
+  /* ── Feature #1: interrupt + task inspector drawer ── */
+  stopTask() {
+    if (!this._working) return;
+    api("stop_task");
+    const v = document.querySelector("#cmdiag .diagverb");
+    if (v) { v.textContent = "stopping…"; v.classList.add("busy"); }
+    this.closeTaskDrawer();
+  },
+  toggleTaskDrawer() {
+    const dr = document.getElementById("taskdrawer");
+    if (!dr) return;
+    if (dr.classList.contains("show")) return this.closeTaskDrawer();
+    this.updateTaskDrawer();
+    dr.classList.add("show");
+  },
+  closeTaskDrawer() {
+    document.getElementById("taskdrawer")?.classList.remove("show");
+  },
+  updateTaskDrawer() {
+    const dr = document.getElementById("taskdrawer");
+    if (!dr) return;
+    const running = this.running ? this.running.size : 0;
+    const active = running + ((this._working && running === 0) ? 1 : 0);
+    const secs = this._timerStart ? Math.round((Date.now() - this._timerStart) / 1000) : 0;
+    const verb = this._working ? (running > 0 ? "running" : "thinking") : "idle";
+    dr.querySelector(".tddur").textContent = active + " active";
+    dr.querySelector(".tdbody").innerHTML = active
+      ? `<div class="tdrow"><span class="tddot"></span>` +
+        `<span class="tdname">Coding agent · <b>${verb}</b></span>` +
+        `<span class="tdtime">${secs}s</span>` +
+        `<button class="tdstop" onclick="gil.stopTask()">◼ Stop</button></div>`
+      : `<div class="tdempty">No tasks running.</div>`;
   },
   toolBlock(b) {
     this.clearShimmer();       // the narration that led to this tool settles
@@ -1464,6 +1532,16 @@ $("inp").addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); gil.slashPick(); return; }
   }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); gil.send(); }
+});
+
+/* Feature #1 — Esc interrupts a running agent (dispatches a cancel to the backend
+   state machine); also closes the task drawer if it's open. */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    const dr = document.getElementById("taskdrawer");
+    if (dr && dr.classList.contains("show")) { gil.closeTaskDrawer(); return; }
+    if (gil._working) { e.preventDefault(); gil.stopTask(); }
+  }
 });
 
 /* ═══════════ Python → browser push (Server-Sent Events) ═══════════ */
