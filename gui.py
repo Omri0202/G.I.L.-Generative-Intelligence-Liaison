@@ -4050,8 +4050,20 @@ class GILWindow(ctk.CTk):
         if state == "speaking" and said is not None:
             self._said_text = said
             self.canvas.itemconfig(self._c_txt, text=said)
+            # Suppress the floating desktop speak-bubble while the chat window is
+            # open — the reply is already visible there, so the blue bubble is just
+            # redundant noise. It still appears for voice-only (no chat) replies.
+            chat_open = False
+            try:
+                cw = getattr(self, "_chat_win", None)
+                chat_open = bool(cw) and cw.winfo_exists()
+            except Exception:
+                chat_open = False
             if self._speak_bubble:
-                self._speak_bubble.show(said)
+                if chat_open:
+                    self._speak_bubble.hide()
+                else:
+                    self._speak_bubble.show(said)
         elif state != "speaking" and self._speak_bubble:
             self._speak_bubble.hide()
 
