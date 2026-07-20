@@ -289,6 +289,7 @@ class WebChat:
                 "- `/remember <fact>` — save something for me to recall (no search)\n"
                 "- `/approve ask|auto|readonly` — set the code-agent permission policy\n"
                 "- `/compact` — summarize the chat so far & free up context\n"
+                "- `/checkpoint [name]` — save a restore point · `/undo` — roll back to it\n"
                 "- `/stop` — stop what I'm doing · `/voice` — toggle voice · "
                 "`/clear` — new chat", "gil")
             return
@@ -386,6 +387,37 @@ class WebChat:
                 self.token_usage({"tokens": after, "budget": 128000})
             except Exception:
                 pass
+            return
+
+        if name in ("checkpoint", "ckpt", "save"):
+            # Feature #8: seal current edits as a named restore point.
+            try:
+                import code_agent
+                res = code_agent.create_checkpoint(arg)
+            except Exception:
+                self.add_message("Couldn't create a checkpoint right now.", "gil")
+                return
+            n = res["files"]
+            if n:
+                self.add_message(
+                    f"**Checkpoint saved** → “{res['label']}” · {n} file"
+                    f"{'s' if n != 1 else ''} locked in. `/undo` rolls back to here. "
+                    f"({res['total']} checkpoint{'s' if res['total'] != 1 else ''} total)", "gil")
+            else:
+                self.add_message(
+                    f"**Checkpoint “{res['label']}” set** — no file changes since the "
+                    "last one, so there's nothing new to roll back to yet.", "gil")
+            return
+
+        if name in ("undo", "rollback"):
+            # Feature #8: instant LIFO revert to the last checkpoint.
+            try:
+                import code_agent
+                result = code_agent.undo_last_changes()
+            except Exception:
+                self.add_message("Undo hit an error — check data/agent_backups.", "gil")
+                return
+            self.add_message(result, "gil")
             return
 
         if name == "remember":

@@ -167,3 +167,73 @@ def test_brain_prompt_still_formats_with_all_placeholders():
     out = gil_brain._SYSTEM.format(**{f: "X" for f in fields})
     assert "REPORT FIELD" in out                      # written-report spec present
     assert "1-3 plain spoken sentences" in out        # speech stays TTS-safe
+
+
+# ── Feature #8: layered session checkpoints & instant LIFO undo ───────────────
+
+def _fresh_ckpt_state():
+    ca._session_backups.clear()
+    ca._checkpoint_stack.clear()
+    ca._ckpt_gen = 0
+
+
+def _edit(p, content):
+    ca._checkpoint(p)            # exactly what write_file/edit_file do first
+    p.write_text(content, encoding="utf-8")
+
+
+def test_undo_is_lifo_to_last_checkpoint():
+    _fresh_ckpt_state()
+    d = Path(tempfile.mkdtemp())
+    a, c = d / "a.txt", d / "c.txt"
+    a.write_text("A0", encoding="utf-8")          # pre-existing; c is created
+    _edit(a, "A1"); _edit(c, "C1")                # batch 1
+    ca.create_checkpoint("first")
+    _edit(a, "A2")                                # batch 2 (active)
+
+    # re-editing a file after a checkpoint must not clobber the earlier backup:
+    # the sealed (gen 0) and active (gen 1) layers point to distinct backups.
+    key = str(a.resolve())
+    sealed = ca._checkpoint_stack[0]["files"][key]
+    active = ca._session_backups[key]
+    assert sealed != active and sealed.exists() and active.exists()
+    assert sealed.name.startswith("g0_") and active.name.startswith("g1_")
+
+    ca.undo_last_changes()                        # revert batch 2 only
+    assert a.read_text(encoding="utf-8") == "A1"
+    assert c.read_text(encoding="utf-8") == "C1"  # untouched by this undo
+
+    ca.undo_last_changes()                        # pop checkpoint 'first'
+    assert a.read_text(encoding="utf-8") == "A0"
+    assert not c.exists()                          # created file removed
+    assert "Nothing to undo" in ca.undo_last_changes()
+
+
+def test_undo_all_restores_session_start():
+    _fresh_ckpt_state()
+    d = Path(tempfile.mkdtemp())
+    a, c = d / "a.txt", d / "c.txt"
+    a.write_text("A0", encoding="utf-8")
+    _edit(a, "A1"); _edit(c, "C1")
+    ca.create_checkpoint("cp1")
+    _edit(a, "A2")
+    ca.create_checkpoint("cp2")
+    _edit(a, "A3")                                # spread across three layers
+
+    ca.undo_all_changes()
+    assert a.read_text(encoding="utf-8") == "A0"  # oldest backup wins
+    assert not c.exists()
+    st = ca.checkpoint_status()
+    assert st["pending"] == 0 and st["checkpoints"] == [] and not st["can_undo"]
+
+
+def test_checkpoint_status_tracks_pending_and_points():
+    _fresh_ckpt_state()
+    d = Path(tempfile.mkdtemp())
+    a = d / "a.txt"; a.write_text("x", encoding="utf-8")
+    assert ca.checkpoint_status()["can_undo"] is False
+    _edit(a, "y")
+    assert ca.checkpoint_status()["pending"] == 1
+    ca.create_checkpoint("cp")
+    st = ca.checkpoint_status()
+    assert st["pending"] == 0 and st["checkpoints"] == ["cp"] and st["can_undo"]

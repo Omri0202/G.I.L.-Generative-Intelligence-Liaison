@@ -681,11 +681,19 @@ def _t_run(cmd: str) -> str:
 # ── Checkpoints — every file the agent touches is backed up first ─────────────
 
 _BACKUP_ROOT = Path(__file__).parent / "data" / "agent_backups"
-_session_backups: dict[str, Path] = {}   # original path -> backup copy
+# Layered checkpoint model (Feature #8):
+#   _session_backups   — the ACTIVE layer: files touched since the last checkpoint.
+#   _checkpoint_stack  — sealed named restore points, oldest → newest.
+#   _ckpt_gen          — generation counter so each layer's on-disk backups are
+#                        uniquely named (a re-edit after a checkpoint must not
+#                        clobber the earlier layer's backup).
+_session_backups: dict[str, Path] = {}      # original path -> backup copy (active layer)
+_checkpoint_stack: list[dict] = []          # [{"label": str, "files": {orig: backup}}]
+_ckpt_gen = 0
 
 
 def _checkpoint(p: Path) -> None:
-    """Save the pre-edit version of a file (once per session per file)."""
+    """Save the pre-edit version of a file (once per active layer per file)."""
     key = str(p.resolve())
     if key in _session_backups:
         return
@@ -693,27 +701,36 @@ def _checkpoint(p: Path) -> None:
         import shutil, hashlib
         _BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
         tag = hashlib.md5(key.encode()).hexdigest()[:10]
-        dest = _BACKUP_ROOT / f"{tag}_{p.name}"
+        dest = _BACKUP_ROOT / f"g{_ckpt_gen}_{tag}_{p.name}"
         if p.exists():
             shutil.copy2(str(p), str(dest))
         else:
-            dest = _BACKUP_ROOT / f"{tag}_{p.name}.NEW"   # marks a created file
+            dest = _BACKUP_ROOT / f"g{_ckpt_gen}_{tag}_{p.name}.NEW"   # marks a created file
             dest.write_text("", encoding="utf-8")
         _session_backups[key] = dest
     except Exception:
         log.debug("checkpoint failed for %s", p, exc_info=True)
 
 
-def undo_last_changes() -> str:
-    """Restore every file the agent modified since GIL started. Deletes files
-    the agent created. Called by the 'undo your changes' fast path."""
-    if not _session_backups:
-        return "Nothing to undo — I haven't changed any files this session."
+def create_checkpoint(label: str = "") -> dict:
+    """Seal the active change-layer as a named restore point and open a fresh one
+    (Feature #8). Returns {label, files, total} — files in this point, total points."""
+    global _ckpt_gen
+    files = dict(_session_backups)
+    label = (label or "").strip() or f"checkpoint {len(_checkpoint_stack) + 1}"
+    _checkpoint_stack.append({"label": label, "files": files})
+    _session_backups.clear()
+    _ckpt_gen += 1
+    return {"label": label, "files": len(files), "total": len(_checkpoint_stack)}
+
+
+def _restore_layer(files: dict) -> tuple[int, int, int]:
+    """Write each backed-up file back to disk (delete the ones we created)."""
     import shutil
-    restored, removed, failed = 0, 0, 0
-    for orig, backup in list(_session_backups.items()):
+    restored = removed = failed = 0
+    for orig, backup in files.items():
         try:
-            if backup.name.endswith(".NEW"):
+            if str(backup).endswith(".NEW"):
                 Path(orig).unlink(missing_ok=True)
                 removed += 1
             else:
@@ -721,16 +738,66 @@ def undo_last_changes() -> str:
                 restored += 1
         except Exception:
             failed += 1
-    _session_backups.clear()
+    return restored, removed, failed
+
+
+def _fmt_undo(restored: int, removed: int, failed: int, label: str | None) -> str:
     parts = []
     if restored:
         parts.append(f"restored {restored} file{'s' if restored != 1 else ''}")
     if removed:
         parts.append(f"deleted {removed} file{'s' if removed != 1 else ''} I had created")
-    msg = "Undone — " + " and ".join(parts) + "." if parts else "Nothing restored."
+    if not parts:
+        return "Nothing to restore."
+    head = "Undone" + (f" to “{label}”" if label else "")
+    msg = f"{head} — " + " and ".join(parts) + "."
     if failed:
         msg += f" ({failed} failed — check the backups in data/agent_backups)"
     return msg
+
+
+def checkpoint_status() -> dict:
+    """Snapshot for the UI/commands: pending (uncommitted) edits + saved points."""
+    return {"pending": len(_session_backups),
+            "checkpoints": [c["label"] for c in _checkpoint_stack],
+            "can_undo": bool(_session_backups or _checkpoint_stack)}
+
+
+def undo_last_changes() -> str:
+    """LIFO instant-undo (Feature #8): revert the most recent change-layer — the
+    edits made since the last checkpoint, or, if there are none pending, the last
+    saved checkpoint itself. Repeated calls walk further back."""
+    global _ckpt_gen
+    if _session_backups:
+        files = dict(_session_backups)
+        _session_backups.clear()
+        label = None
+    elif _checkpoint_stack:
+        layer = _checkpoint_stack.pop()
+        files, label = layer["files"], layer["label"]
+        _ckpt_gen = max(0, _ckpt_gen - 1)
+    else:
+        return "Nothing to undo — I haven't changed any files this session."
+    restored, removed, failed = _restore_layer(files)
+    return _fmt_undo(restored, removed, failed, label)
+
+
+def undo_all_changes() -> str:
+    """Restore EVERY file the agent touched this session, back to session start —
+    flattens all layers (oldest backup wins). The 'undo your changes' fast path."""
+    global _ckpt_gen
+    layers = [c["files"] for c in _checkpoint_stack] + [_session_backups]
+    merged: dict[str, Path] = {}
+    for files in layers:                        # oldest → newest
+        for orig, backup in files.items():
+            merged.setdefault(orig, backup)      # oldest-wins = session-start original
+    if not merged:
+        return "Nothing to undo — I haven't changed any files this session."
+    restored, removed, failed = _restore_layer(merged)
+    _session_backups.clear()
+    _checkpoint_stack.clear()
+    _ckpt_gen = 0
+    return _fmt_undo(restored, removed, failed, None)
 
 
 def _t_edit_file(args: dict) -> str:

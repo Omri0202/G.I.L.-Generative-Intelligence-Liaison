@@ -1054,7 +1054,7 @@ def _undo_agent(text: str, lower: str, eng) -> bool:
                                     "undo what you did", "restore the files")):
         return False
     import code_agent
-    result = code_agent.undo_last_changes()
+    result = code_agent.undo_all_changes()
     eng.window.add_chat_message(result, "gil")
     eng.window.set_state("speaking", said=result)
     eng._speak(result)
