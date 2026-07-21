@@ -601,7 +601,23 @@ class WebChat:
         """Esc / Stop button — cancel the running coding agent (Feature #1)."""
         eng = getattr(self._gil_window, "_engine", None)
         if not eng or not getattr(eng, "_agent_running", False):
-            return {"stopped": False}
+            # No coding agent running — Stop/Esc must still do something useful
+            # (silence speech, halt an autonomous run) instead of nothing at all.
+            stopped = False
+            try:
+                from voice import stop_speaking
+                stop_speaking()
+                stopped = True
+            except Exception:
+                pass
+            try:
+                import autonomous
+                if eng and autonomous.is_running(eng):
+                    autonomous.stop(eng)
+                    stopped = True
+            except Exception:
+                pass
+            return {"stopped": stopped}
         eng._agent_cancel = True
         gate = getattr(eng, "_agent_gate", None)
         if gate:                       # unblock a pending approval wait

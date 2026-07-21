@@ -258,6 +258,34 @@ def _agent_speed_mode() -> str:
 
 
 _policy_local = threading.local()   # per-thread approval override (Feature #10)
+_cancel_local = threading.local()   # per-thread "should I stop?" probe
+
+
+def set_thread_cancel_check(fn) -> None:
+    """Install a callable this thread's long waits poll to abort early. Without
+    it, Stop/Esc only lands between steps — i.e. after a 60s stream and a 30s
+    rate-limit sleep — which reads as a dead button."""
+    _cancel_local.check = fn
+
+
+def _cancelled() -> bool:
+    fn = getattr(_cancel_local, "check", None)
+    if not fn:
+        return False
+    try:
+        return bool(fn())
+    except Exception:
+        return False
+
+
+def _interruptible_sleep(seconds: float, step: float = 0.25) -> bool:
+    """Sleep in slices, bailing the moment a cancel lands. True if cancelled."""
+    end = time.time() + max(0.0, seconds)
+    while time.time() < end:
+        if _cancelled():
+            return True
+        time.sleep(min(step, max(0.0, end - time.time())))
+    return _cancelled()
 
 
 def set_thread_policy(mode: str | None) -> None:
@@ -378,6 +406,9 @@ def _stream_groq(payload: dict, headers: dict, on_thought) -> tuple:
     parts: list[str] = []
     try:
         for line in r.iter_lines(decode_unicode=True):
+            # Stop/Esc must land mid-stream, not 60s later at the next step.
+            if _cancelled():
+                break
             if not line or not line.startswith("data:"):
                 continue
             data = line[5:].strip()
@@ -494,7 +525,8 @@ def _llm_json(messages: list, must_have: str = "tool",
         if rate_limited and sweep < 3:
             wait = min(max(retry_after, 6.0), 30.0)
             log.warning("agent llm: all models rate-limited — waiting %.1fs then retrying", wait)
-            time.sleep(wait)
+            if _interruptible_sleep(wait):    # Stop pressed during the backoff
+                return None
             continue
         break
     return None
@@ -1872,6 +1904,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                          "medium reasoning" if speed_mode == "fast" else "deep reasoning",
                          status="done")
     eng._agent_cancel = False     # cleared at the start of every run (Feature #1)
+    # let the long waits inside this thread (streaming call, rate-limit backoff)
+    # see a Stop the instant it arrives instead of at the next step boundary
+    set_thread_cancel_check(lambda: getattr(eng, "_agent_cancel", False))
     try:
         for step in range(1, _MAX_STEPS + 1):
             # ── user interrupt (Esc / Stop): settle the state machine to idle and
@@ -1920,6 +1955,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             action = _llm(messages, on_thought=thought_cb,
                           effort=prof["effort"], max_tokens=prof["max_tokens"])
             _end_thought()           # settle the live thought line for this step
+            # A Stop that landed during the call must not still run this tool.
+            if getattr(eng, "_agent_cancel", False):
+                continue             # loop top reports the clean stop and returns
             if not action or "tool" not in action:
                 # Don't give up on one malformed reply — nudge the model back
                 # onto the JSON rails and retry a couple of times first.
@@ -2325,6 +2363,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     finally:
         import activity as _a
         _a.clear_group()
+        set_thread_cancel_check(None)   # never leak the probe into the next run
         eng._agent_gate = None
         eng._agent_running = False
         if hasattr(window, "set_working"):
