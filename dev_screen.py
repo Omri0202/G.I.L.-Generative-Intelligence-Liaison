@@ -26,7 +26,7 @@ log = _get_log("dev.screen")
 # ── Config ────────────────────────────────────────────────────────────────────
 _INTERVAL    = 30       # seconds between screen checks
 _COOLDOWN    = 90       # don't re-alert for same issue within N seconds
-_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+              # vision model: see vision_model.py (single source of truth)
 _GROQ_URL    = "https://api.groq.com/openai/v1/chat/completions"
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -79,32 +79,24 @@ def _analyse(image_bytes: bytes) -> dict | None:
         return None
 
     b64 = base64.b64encode(image_bytes).decode()
-    payload = {
-        "model": _VISION_MODEL,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text",      "text": _SYSTEM_PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ],
-        }],
-        "max_tokens": 150,
-        "temperature": 0.1,
-    }
-
+    # Shared vision provider. It strips the model's <think> block, which matters
+    # here: the current vision model reasons before answering, and that prose
+    # would otherwise sit in front of the JSON this function must parse. It also
+    # needs real headroom — the old 150-token budget is spent thinking, so the
+    # JSON never arrives at all.
+    import vision_model
+    ok, raw, err = vision_model.chat(
+        vision_model.image_message(_SYSTEM_PROMPT, b64),
+        max_tokens=1400, temperature=0.1, timeout=45)
+    if not ok:
+        log.debug("vision analysis failed: %s", err)
+        return None
     try:
-        resp = requests.post(
-            _GROQ_URL,
-            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-            json=payload, timeout=15,
-        )
-        resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        m   = re.search(r"\{.*\}", raw, re.DOTALL)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             return json.loads(m.group())
     except Exception as exc:
-        log.debug("vision analysis failed: %s", exc)
+        log.debug("vision JSON parse failed: %s", exc)
     return None
 
 

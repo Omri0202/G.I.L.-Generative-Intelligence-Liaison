@@ -1,7 +1,7 @@
 """
 eyes.py — Project G.I.L.
 Camera vision: live preview (subprocess) + Groq vision LLM for identification.
-Uses meta-llama/llama-4-scout-17b-16e-instruct (multimodal, free on Groq).
+Vision runs through vision_model.py (the single source of truth for the model).
 
 CameraWindow launches camera_viewer.py as a subprocess — pure OpenCV, no tkinter.
 Frames are shared via a temp JPEG file written by the viewer every 0.4 s.
@@ -17,10 +17,8 @@ import time
 import requests
 from pathlib import Path
 
-_VISION_MODELS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.2-11b-vision-preview",
-]
+# The vision model lives in vision_model.py — one place, so the next Groq
+# decommission is a one-line change instead of three silent outages.
 _GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 _VIEWER       = Path(__file__).parent / "camera_viewer.py"
 _FRAME_FILE   = Path(tempfile.gettempdir()) / "gil_cam_frame.jpg"
@@ -83,39 +81,17 @@ def analyze_frame(image_bytes: bytes, question: str = "", groq_keys: list = None
         if question.strip() else _DEFAULT_PROMPT
     )
 
-    payload = {
-        "model": _VISION_MODELS[0],
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "image_url",
-                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                {"type": "text", "text": prompt},
-            ],
-        }],
-        "max_tokens": 250,
-        "temperature": 0.2,
-    }
-
-    last_error = "unknown error"
-    for model in _VISION_MODELS:
-        payload["model"] = model
-        for key in groq_keys:
-            try:
-                hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-                resp = requests.post(_GROQ_URL, json=payload, headers=hdrs, timeout=20)
-                if resp.status_code == 429:
-                    last_error = "rate limited"; continue
-                if resp.status_code == 400:
-                    last_error = f"model {model} rejected request"; break  # try next model
-                resp.raise_for_status()
-                result = resp.json()["choices"][0]["message"]["content"].strip()
-                print(f"[G.I.L. EYES] Vision OK via {model}")
-                return result
-            except Exception as exc:
-                last_error = str(exc); continue
-
-    return f"Vision analysis failed — {last_error}."
+    # Delegates to the single shared vision provider, which owns the model id,
+    # key rotation and reasoning-block stripping. This module previously pinned
+    # its own model list; when Groq decommissioned it, camera vision died with
+    # no visible signal beyond a generic failure string.
+    import vision_model
+    ok, answer, err = vision_model.chat(
+        vision_model.image_message(prompt, b64), max_tokens=900, timeout=45)
+    if ok:
+        print(f"[G.I.L. EYES] Vision OK via {vision_model.MODEL}")
+        return answer
+    return f"Vision analysis failed — {err}."
 
 
 def look(question: str = "", groq_keys: list = None) -> str:

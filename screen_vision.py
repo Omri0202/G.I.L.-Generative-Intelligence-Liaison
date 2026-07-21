@@ -19,11 +19,18 @@ from logger import get as _get_log
 
 log = _get_log("scrvis")
 
-_GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
-_GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# The model now lives in vision_model.py — see that module for why. Hardcoding it
+# in three separate files is what let a single Groq decommission kill every
+# vision feature at once, silently.
 
 
-def _capture_b64(max_w: int = 1400) -> str | None:
+def _capture_b64(max_w: int = 0) -> str | None:
+    # default follows vision_model.SEND_WIDTH — a full-size grab exceeds the
+    # 8000 TPM ceiling on image tokens alone and every call 429s
+    if not max_w:
+        import vision_model
+        max_w = vision_model.SEND_WIDTH
     try:
         from PIL import ImageGrab, Image
         img = ImageGrab.grab()
@@ -54,30 +61,15 @@ def describe(question: str = "") -> str:
     except Exception:
         aid = None
 
-    result = None   # Groq vision only (Anthropic removed - paid)
-
-    if result is None:
-        keys = [k for k in (os.getenv("GROQ_API_KEY", ""),
-                            os.getenv("GROQ_API_KEY_2", "")) if k]
-        for key in keys:
-            try:
-                r = requests.post(
-                    _GROQ_URL,
-                    json={"model": _GROQ_MODEL, "max_tokens": 500,
-                          "messages": [{"role": "user", "content": [
-                              {"type": "text", "text": ask},
-                              {"type": "image_url", "image_url": {"url":
-                               f"data:image/jpeg;base64,{b64}"}}]}]},
-                    headers={"Authorization": f"Bearer {key}",
-                             "Content-Type": "application/json"},
-                    timeout=30)
-                if r.status_code == 429:
-                    continue
-                r.raise_for_status()
-                result = r.json()["choices"][0]["message"]["content"].strip()
-                break
-            except Exception as exc:
-                log.warning("Groq vision failed: %s", exc)
+    # One shared vision provider (vision_model.py) — it owns the model id, key
+    # rotation and reasoning-block stripping. This module used to hardcode the
+    # model, which is why it died silently when Groq decommissioned it.
+    import vision_model
+    ok, answer, err = vision_model.chat(
+        vision_model.image_message(ask, b64), max_tokens=1600, timeout=45)
+    result = answer if ok else None
+    if not ok:
+        log.warning("screen vision failed: %s", err)
 
     if aid is not None:
         try:
