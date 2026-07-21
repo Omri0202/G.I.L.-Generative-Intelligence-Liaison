@@ -567,12 +567,28 @@ def _cap_context(messages: list, max_chars: int = 16000) -> None:
     while total() > max_chars and len(messages) > 8:
         del messages[2]
     # Still too big: shrink the largest remaining bodies.
+    #
+    # Every pass here MUST strictly reduce a body, or this loop never ends. The
+    # old version truncated to [:400] and then appended a 28-char marker, giving
+    # 428 chars — still over the 400 threshold, so the same message was picked
+    # and "trimmed" to 428 again forever. It could only escape via total() <=
+    # max_chars, but messages[0:2] (system + task) are never trimmed, so whenever
+    # those two alone exceeded the cap the agent spun at 100% CPU until it was
+    # killed. That was the real cause of `/goal` hanging for 15+ minutes.
+    _MARK = "\n…[trimmed to save context]"
+    _FLOOR = 400
     while total() > max_chars:
-        biggest = max((m for m in messages[2:] if len(m.get("content", "")) > 400),
+        biggest = max((m for m in messages[2:] if len(m.get("content", "")) > _FLOOR),
                       key=lambda m: len(m["content"]), default=None)
         if biggest is None:
             break
-        biggest["content"] = biggest["content"][:400] + "\n…[trimmed to save context]"
+        before = len(biggest["content"])
+        # keep the marker INSIDE the floor so the result is <= _FLOOR and the
+        # message stops being a candidate on the next pass
+        trimmed = biggest["content"][:max(0, _FLOOR - len(_MARK))] + _MARK
+        if len(trimmed) >= before:
+            break          # can't shrink any further — system+task exceed the cap
+        biggest["content"] = trimmed
 
 
 def _extract_action(raw: str) -> dict | None:
@@ -609,7 +625,12 @@ def _is_free_command(cmd: str) -> bool:
 
 _SEARCH_SKIP_DIRS = ("__pycache__", ".git", ".github", "node_modules", "dist",
                      "build", "venv", ".venv", ".pytest_cache", "agent_backups",
-                     "_web_profile", ".claude")
+                     "_web_profile", ".claude",
+                     # Runtime state / browser profiles / generated assets. These
+                     # hold thousands of files and no source: searching the project
+                     # root spent 51s and 17s inside them on a single /goal run.
+                     "whatsapp_profile", "generated_images", "3d_projects",
+                     "face_db", "learning_projects", "screenshots", "site-packages")
 _SEARCH_SKIP_EXT = (".exe", ".dll", ".pyd", ".zip", ".jpg", ".jpeg", ".png",
                     ".gif", ".db", ".ico", ".pyc", ".spec", ".bin", ".pdf",
                     ".log")   # logs are pure noise for a code search
@@ -1772,6 +1793,88 @@ def _assemble_report_from_transcript(messages: list, task: str) -> str:
     return "\n".join(out)
 
 
+# ── Early convergence & step budgeting ────────────────────────────────────────
+# A broad goal ("look at the gil project for improvements") used to burn all 20
+# steps re-reading the same files, and with reasoning latency plus 8k-TPM backoff
+# that ran past 15 minutes without ever producing a report. The agent now stops
+# as soon as it has stopped LEARNING, and hard-caps wall-clock time either way.
+
+_READ_TOOLS = ("read_file", "list_dir", "search")
+_ACTION_TOOLS = ("edit_file", "write_file", "run")
+_DRY_LIMIT = 3
+
+
+def _time_budget(task_mode: str) -> float:
+    """Wall-clock ceiling for one agent run, in seconds (0 disables)."""
+    raw = (os.getenv("GIL_AGENT_TIME_BUDGET") or "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    # investigation should feel like a query, not a build; changes get longer
+    return 300.0 if task_mode == "investigate" else 600.0
+
+
+class _Convergence:
+    """Tracks whether the run is still learning anything.
+
+    An ACTION (edit/write/run) is always progress. A READ counts as progress
+    only when it returns something genuinely new — a repeat of a result already
+    seen, an error, or a near-empty body is 'dry'. `_DRY_LIMIT` dry reads in a
+    row means the agent is circling, so we synthesize the report and stop rather
+    than spend the remaining steps and the user's patience.
+    """
+
+    def __init__(self, dry_limit: int = _DRY_LIMIT, time_budget: float = 0.0,
+                 now=time.time):
+        self.dry = 0
+        self.dry_limit = dry_limit
+        self.seen: set[str] = set()
+        self.progress = 0
+        self._now = now
+        self.deadline = (now() + time_budget) if time_budget else 0.0
+
+    @staticmethod
+    def _digest(text: str) -> str:
+        import hashlib
+        norm = re.sub(r"\s+", " ", text or "").strip().lower()
+        return hashlib.md5(norm.encode("utf-8", "replace")).hexdigest()
+
+    def record(self, tool: str, result: str) -> None:
+        if tool in _ACTION_TOOLS:
+            self.dry = 0                       # real work happened
+            self.progress += 1
+            return
+        if tool not in _READ_TOOLS:
+            return                             # plan_next/done are bookkeeping
+        text = (result or "").strip()
+        barren = (not text or text.upper().startswith("ERROR") or len(text) < 40)
+        digest = self._digest(text)
+        if barren or digest in self.seen:
+            self.dry += 1
+        else:
+            self.seen.add(digest)
+            self.dry = 0
+            self.progress += 1
+
+    def out_of_time(self) -> bool:
+        return bool(self.deadline and self._now() > self.deadline)
+
+    def stalled(self) -> bool:
+        return self.dry >= self.dry_limit
+
+    def should_conclude(self) -> bool:
+        return self.stalled() or self.out_of_time()
+
+    def reason(self) -> str:
+        if self.stalled():
+            return f"{self.dry} reads in a row with nothing new"
+        if self.out_of_time():
+            return "time budget reached"
+        return ""
+
+
 def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, bool]:
     """Out of steps / stuck → never a blank fallback. First ask the model to
     compile whatever it found into the real engineering report (one shot, riding
@@ -1907,6 +2010,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     # let the long waits inside this thread (streaming call, rate-limit backoff)
     # see a Stop the instant it arrives instead of at the next step boundary
     set_thread_cancel_check(lambda: getattr(eng, "_agent_cancel", False))
+    conv = _Convergence(time_budget=_time_budget(task_mode))
     try:
         for step in range(1, _MAX_STEPS + 1):
             # ── user interrupt (Esc / Stop): settle the state machine to idle and
@@ -1918,6 +2022,21 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     "**Stopped** — cancelled by you." +
                     (f"\n\n({edits_made} change{'s' if edits_made != 1 else ''} already applied)"
                      if edits_made else ""), "gil")
+                return
+            # ── early convergence: stop when we've stopped learning ──
+            # Either the reads have gone dry or the wall-clock budget is spent.
+            # Compile what we actually found instead of burning the rest of the
+            # steps (and 15 minutes) rediscovering it.
+            if conv.should_conclude():
+                _end_thought()
+                _why_stop = conv.reason()
+                activity.instant("code", "Converged early", _why_stop, status="done")
+                summary, ok = _finalize_report(messages, task, edits_made)
+                window.add_chat_message(
+                    ("**Solved** ✓ — " if ok else "**Here's what I found** — ") + summary +
+                    (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
+                     if edits_made else "") +
+                    f"\n\n_Wrapped up after {step - 1} steps — {_why_stop}._", "gil")
                 return
             _refresh_plan_view()     # keep the plan checklist current every turn
             # Adaptive reasoning: investigation steps run fast (medium effort,
@@ -2343,6 +2462,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     except Exception:
                         pass
 
+            conv.record(tool, result)   # did this step actually teach us anything?
             messages.append({"role": "assistant", "content": json.dumps(action)})
             messages.append({"role": "user", "content": f"RESULT:\n{result[:2200]}"})
             # keep context bounded: system + task + last 16 exchanges

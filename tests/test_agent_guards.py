@@ -237,3 +237,102 @@ def test_checkpoint_status_tracks_pending_and_points():
     ca.create_checkpoint("cp")
     st = ca.checkpoint_status()
     assert st["pending"] == 0 and st["checkpoints"] == ["cp"] and st["can_undo"]
+
+
+# ── /goal convergence: _cap_context must always terminate ────────────────────
+
+def test_cap_context_terminates_when_system_and_task_exceed_the_cap():
+    """The old trim produced 400+28=428 chars, which stayed above the 400-char
+    candidate threshold, so the same message was 'trimmed' forever. Because
+    messages[0:2] are never trimmed, any run whose system+task exceeded the cap
+    spun at 100% CPU until killed — the real cause of /goal hanging for 15+ min."""
+    import threading
+    msgs = [{"role": "system", "content": "S" * 9000},
+            {"role": "user", "content": "T" * 500}]
+    for i in range(6):
+        msgs.append({"role": "user", "content": ("R%d" % i) * 300})
+    done = []
+    t = threading.Thread(target=lambda: (ca._cap_context(msgs, 8000), done.append(True)),
+                         daemon=True)
+    t.start(); t.join(10)
+    assert done, "_cap_context did not terminate — infinite loop regression"
+    # every trimmable body settled at or under the floor
+    assert all(len(m["content"]) <= 400 for m in msgs[2:])
+
+
+def test_cap_context_still_caps_a_normal_transcript():
+    msgs = [{"role": "system", "content": "S" * 500},
+            {"role": "user", "content": "T" * 200}]
+    for _ in range(20):
+        msgs.append({"role": "user", "content": "X" * 3000})
+    ca._cap_context(msgs, 8000)
+    assert sum(len(m["content"]) for m in msgs) <= 8000
+
+
+def test_cap_context_leaves_a_small_transcript_alone():
+    msgs = [{"role": "system", "content": "a" * 100},
+            {"role": "user", "content": "b" * 100}]
+    before = [m["content"] for m in msgs]
+    ca._cap_context(msgs, 8000)
+    assert [m["content"] for m in msgs] == before
+
+
+def test_search_skips_runtime_noise_dirs():
+    # browser-profile / generated-asset trees hold thousands of files and no
+    # source; walking them cost 51s on one /goal run
+    for noisy in ("whatsapp_profile", "generated_images", "learning_projects",
+                  "face_db", "node_modules", "__pycache__"):
+        assert noisy in ca._SEARCH_SKIP_DIRS
+
+
+# ── /goal convergence: stop once the run stops learning ──────────────────────
+
+def test_convergence_stalls_after_three_barren_reads():
+    c = ca._Convergence()
+    big = "x" * 200
+    c.record("read_file", big)              # novel → a real finding
+    assert not c.stalled() and c.progress == 1
+    for _ in range(3):
+        c.record("read_file", big)          # same content → nothing learned
+    assert c.stalled() and "nothing new" in c.reason()
+
+
+def test_convergence_resets_on_new_content_or_an_action():
+    big, other = "x" * 200, "y" * 200
+    c = ca._Convergence()
+    c.record("read_file", big); c.record("read_file", big)
+    c.record("read_file", other)            # genuinely new → reset
+    assert not c.stalled()
+    c2 = ca._Convergence()
+    for _ in range(3):
+        c2.record("read_file", big)
+    c2.record("edit_file", "OK — edited f.py")   # concrete action → reset
+    assert not c2.stalled()
+
+
+def test_convergence_treats_errors_and_empty_reads_as_barren():
+    c = ca._Convergence()
+    c.record("search", "ERROR: nothing found")
+    c.record("read_file", "")
+    c.record("list_dir", "ok")              # too short to be a finding
+    assert c.stalled()
+
+
+def test_convergence_ignores_bookkeeping_tools():
+    c = ca._Convergence()
+    c.record("read_file", "x" * 200)
+    for _ in range(5):
+        c.record("plan_next", "advanced")   # not a read, not an action
+    assert c.dry == 0 and not c.stalled()
+
+
+def test_convergence_enforces_a_wall_clock_budget():
+    now = [1000.0]
+    c = ca._Convergence(time_budget=300.0, now=lambda: now[0])
+    assert not c.should_conclude()
+    now[0] += 301
+    assert c.should_conclude() and c.reason() == "time budget reached"
+
+
+def test_investigation_budget_is_tighter_than_change_budget():
+    assert ca._time_budget("investigate") < ca._time_budget("change")
