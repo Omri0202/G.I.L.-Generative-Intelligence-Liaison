@@ -570,6 +570,115 @@ _SEARCH_SKIP_EXT = (".exe", ".dll", ".pyd", ".zip", ".jpg", ".jpeg", ".png",
                     ".log")   # logs are pure noise for a code search
 
 
+# ── @file mentioning & context pinning (Feature #6) ─────────────────────────────
+_file_cache: dict = {"root": None, "files": [], "ts": 0.0}
+# Runtime-state / browser-profile / generated-asset dirs that are pure noise in a
+# "which source file do you mean?" picker (on top of _SEARCH_SKIP_DIRS).
+_MENTION_SKIP_DIRS = _SEARCH_SKIP_DIRS + (
+    "whatsapp_profile", "generated_images", "3d_projects", "face_db",
+    "learning_projects", "_web_profile", "site-packages", "models", "tmp")
+
+
+def _all_project_files(base: Path) -> list[str]:
+    """All project-relative file paths under `base` (cached ~20s per root), with
+    vcs/build/binary/runtime noise skipped — the corpus for the @file autocomplete.
+    Dotfiles are excluded so secrets like .env can never be listed or pinned."""
+    now = time.time()
+    if _file_cache["root"] == str(base) and now - _file_cache["ts"] < 20:
+        return _file_cache["files"]
+    files: list[str] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames
+                           if d not in _MENTION_SKIP_DIRS and not d.startswith(".")]
+            rel_dir = os.path.relpath(dirpath, base)
+            depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
+            if depth > 8:
+                dirnames[:] = []
+                continue
+            for fn in filenames:
+                if fn.startswith("."):               # never list .env / dotfiles
+                    continue
+                if os.path.splitext(fn)[1].lower() in _SEARCH_SKIP_EXT:
+                    continue
+                rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
+                files.append(rel.replace("\\", "/"))
+                if len(files) > 6000:                # sanity cap on huge trees
+                    break
+            if len(files) > 6000:
+                break
+    except Exception:
+        log.debug("file walk failed for %s", base, exc_info=True)
+    _file_cache.update(root=str(base), files=files, ts=now)
+    return files
+
+
+def list_project_files(query: str = "", limit: int = 40, root=None) -> list[str]:
+    """Up to `limit` project files matching `query`, ranked name-first then by a
+    subsequence fallback. Powers the @file autocomplete."""
+    base = Path(root) if root else Path(os.getcwd())
+    q = (query or "").lower().strip()
+    scored = []
+    for rel in _all_project_files(base):
+        name, low = rel.rsplit("/", 1)[-1].lower(), rel.lower()
+        if not q:
+            rank = 0
+        elif name == q:
+            rank = 0
+        elif name.startswith(q):
+            rank = 1
+        elif q in name:
+            rank = 2
+        elif q in low:
+            rank = 3
+        else:
+            it = iter(low)                            # subsequence match
+            if all(c in it for c in q):
+                rank = 4
+            else:
+                continue
+        scored.append(((rank, len(rel), rel), rel))
+    scored.sort(key=lambda x: x[0])
+    return [rel for _, rel in scored[:limit]]
+
+
+def read_pinned_context(paths, cap_each: int = 6000, cap_total: int = 18000,
+                        root=None) -> str:
+    """Format pinned files as a context block for the model (Feature #6). Reads
+    project-relative or absolute paths; truncates per-file and overall so a fat
+    pin can't blow the token budget."""
+    if not paths:
+        return ""
+    base = Path(root) if root else Path(os.getcwd())
+    blocks, total = [], 0
+    for raw in paths:
+        rel = str(raw).strip()
+        if not rel:
+            continue
+        p = Path(rel)
+        if p.name.startswith("."):          # never expose .env / dotfiles
+            continue
+        if not p.is_absolute():
+            p = base / rel
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            blocks.append(f"### {rel}\n(could not read this file)")
+            continue
+        if len(body) > cap_each:
+            body = body[:cap_each] + "\n… [truncated]"
+        if total + len(body) > cap_total:
+            blocks.append(f"### {rel}\n(omitted — pinned context budget reached)")
+            break
+        total += len(body)
+        ext = p.suffix.lstrip(".") or ""
+        blocks.append(f"### {rel}\n```{ext}\n{body}\n```")
+    if not blocks:
+        return ""
+    return ("[PINNED CONTEXT — the user attached these files; use them as the "
+            "primary reference]\n\n" + "\n\n".join(blocks))
+
+
 def _did_you_mean(p: Path) -> str:
     """Suggest real filenames close to a guessed one — stops the model from
     chasing a file it invented (e.g. gil_eyes.py → eyes.py)."""

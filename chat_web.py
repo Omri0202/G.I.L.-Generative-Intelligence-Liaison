@@ -201,13 +201,33 @@ class WebChat:
         except Exception:
             return []
 
-    def _rpc_send(self, text=""):
+    def _rpc_list_files(self, query=""):
+        """@file autocomplete (Feature #6) — project files matching `query`."""
+        try:
+            import code_agent
+            return code_agent.list_project_files(query or "")
+        except Exception:
+            return []
+
+    def _rpc_send(self, text="", pinned=None):
         text = (text or "").strip()
         if not text:
             return
         threading.Thread(target=self._persist, args=(text, "user"),
                          daemon=True).start()
         eng = getattr(self._gil_window, "_engine", None)
+        # Feature #6: content of any pinned @files, prepended to the message ONLY
+        # at the real dispatch points below — so it never bloats the persisted
+        # message (kept clean above) nor the yes/no approval-gate detection.
+        def _with_pins(t):
+            if not pinned:
+                return t
+            try:
+                import code_agent
+                ctx = code_agent.read_pinned_context(pinned)
+                return (ctx + "\n\n---\n\n" + t) if ctx else t
+            except Exception:
+                return t
         # In /codemode every message goes straight to the coding agent — GIL
         # works like Claude Code, editing files and running commands with
         # per-change approval, rendered in the terminal.
@@ -232,13 +252,13 @@ class WebChat:
                 return
             try:
                 import code_agent
-                code_agent.run_async(eng, text)
+                code_agent.run_async(eng, _with_pins(text))
                 return
             except Exception:
                 pass
         fn = getattr(self._gil_window, "_chat_send_fn", None)
         if fn:
-            threading.Thread(target=fn, args=(text,), daemon=True,
+            threading.Thread(target=fn, args=(_with_pins(text),), daemon=True,
                              name="GIL-WebSend").start()
 
     def _rpc_new_chat(self):
