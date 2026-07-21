@@ -37,11 +37,31 @@ MODEL = "qwen/qwen3.6-27b"
 #: Tried in order if MODEL is unavailable (e.g. decommissioned again).
 FALLBACKS: list[str] = []
 
-#: Max width to downscale a capture to before sending. The account's 8000 TPM
-#: ceiling counts image tokens, and a full-screen grab blows it: measured on a
-#: 1920x1080 desktop, 1000px wide → 429, 760px wide → fine. Callers should keep
-#: any high-resolution copy for display and send a shrunk one to the model.
+#: Max width to downscale a FULL-SCREEN capture to before sending. The account's
+#: 8000 TPM ceiling counts image tokens: measured on a 1920x1080 desktop, 1000px
+#: wide → 429, 760px wide → fine. Callers should keep any high-resolution copy
+#: for display and send a shrunk one to the model.
 SEND_WIDTH = 760
+
+#: Image tokens scale with AREA, not width — so a budget in pixels is the honest
+#: model. 760x428 (the measured-safe full-screen size) is ~325k px; 350k leaves a
+#: little headroom. This is what makes region capture worth doing: a window
+#: cropped out of the desktop spends the same budget on far less content, so the
+#: text inside it lands several times larger.
+SEND_MAX_PIXELS = 350_000
+
+
+def fit_for_send(img):
+    """Downscale a PIL image to the token-safe pixel budget, preserving aspect.
+    Never upscales — a small window is sent at native resolution."""
+    from PIL import Image
+    import math
+    w, h = img.size
+    area = w * h
+    if area <= SEND_MAX_PIXELS or area <= 0:
+        return img
+    s = math.sqrt(SEND_MAX_PIXELS / area)
+    return img.resize((max(1, int(w * s)), max(1, int(h * s))), Image.LANCZOS)
 
 
 def keys() -> list[str]:

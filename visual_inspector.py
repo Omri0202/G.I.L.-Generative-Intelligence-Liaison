@@ -57,16 +57,67 @@ def _prune() -> None:
         pass
 
 
-def capture(max_w: int = 1600) -> dict:
-    """Grab the screen. Returns {ok, b64, path, w, h} — b64 for the frozen
-    overlay preview, path so the shot can be attached to the chat message."""
+def foreground_window() -> tuple:
+    """(bbox, title) of the active window, or (None, "") if it can't be resolved.
+
+    Uses DWM's extended frame bounds rather than GetWindowRect: the latter
+    includes the invisible resize border Windows pads around a window, which
+    would crop in slivers of whatever is behind it."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        hwnd = u.GetForegroundWindow()
+        if not hwnd:
+            return None, ""
+        rect = wintypes.RECT()
+        got = False
+        try:
+            # DWMWA_EXTENDED_FRAME_BOUNDS = 9
+            if ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                    wintypes.HWND(hwnd), ctypes.c_uint(9),
+                    ctypes.byref(rect), ctypes.sizeof(rect)) == 0:
+                got = True
+        except Exception:
+            pass
+        if not got:
+            u.GetWindowRect(hwnd, ctypes.byref(rect))
+        n = u.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(n + 1)
+        u.GetWindowTextW(hwnd, buf, n + 1)
+        box = (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
+        if box[2] - box[0] < 80 or box[3] - box[1] < 80:
+            return None, buf.value            # degenerate/minimised — use the screen
+        return box, buf.value
+    except Exception:
+        log.debug("foreground window lookup failed", exc_info=True)
+        return None, ""
+
+
+def capture(max_w: int = 1600, region=None, whole_screen: bool = False) -> dict:
+    """Grab the ACTIVE WINDOW by default (sharp text, fewer tokens), or an
+    explicit `region` bbox, or the whole desktop when asked.
+
+    Returns {ok, b64, preview_b64, path, w, h, title, scope}. `b64` is the
+    token-budgeted payload for the model; `preview_b64`/`path` stay crisp for
+    the chat thumbnail."""
     try:
         from PIL import ImageGrab, Image
     except Exception:
         return {"ok": False, "error": "Pillow isn't available, so I can't capture the screen."}
     try:
         import vision_model
-        img = ImageGrab.grab()
+        title, scope = "", "screen"
+        bbox = None
+        if region and len(region) == 4:
+            bbox, scope = tuple(int(v) for v in region), "region"
+        elif not whole_screen:
+            bbox, title = foreground_window()
+            if bbox:
+                scope = "window"
+        img = ImageGrab.grab(bbox=bbox) if bbox else ImageGrab.grab()
+        if img.width < 40 or img.height < 40:     # bad bbox → fall back
+            img, scope, bbox = ImageGrab.grab(), "screen", None
         full_w, full_h = img.size
 
         def _jpeg(im, width, quality):
@@ -77,17 +128,22 @@ def capture(max_w: int = 1600) -> dict:
             return buf.getvalue()
 
         # Two renditions on purpose: a crisp one the user sees in the chat, and a
-        # small one for the model — the 8000 TPM ceiling counts image tokens, so a
-        # full-resolution payload 429s every time.
+        # token-budgeted one for the model — the 8000 TPM ceiling counts image
+        # tokens, so a full-resolution payload 429s every time.
         preview = _jpeg(img, max_w, 78)
         _SHOT_DIR.mkdir(parents=True, exist_ok=True)
         path = _SHOT_DIR / f"shot_{int(time.time() * 1000)}.jpg"
         path.write_bytes(preview)
         _prune()
-        payload = _jpeg(img, vision_model.SEND_WIDTH, 70)
+        sized = vision_model.fit_for_send(img)
+        pbuf = io.BytesIO()
+        sized.convert("RGB").save(pbuf, format="JPEG", quality=82)
+        payload = pbuf.getvalue()
         return {"ok": True, "b64": base64.b64encode(payload).decode(),
                 "preview_b64": base64.b64encode(preview).decode(),
-                "path": str(path), "w": full_w, "h": full_h}
+                "path": str(path), "w": full_w, "h": full_h,
+                "sent_w": sized.size[0], "sent_h": sized.size[1],
+                "title": title, "scope": scope}
     except Exception as exc:
         log.error("screen capture failed", exc_info=True)
         return {"ok": False, "error": f"Screen capture failed: {exc}"}
@@ -166,16 +222,20 @@ def build_task(reading: str, user_text: str, shot_path: str = "") -> str:
     return "\n".join(parts)
 
 
-def inspect(user_text: str, b64: str = "", shot_path: str = "") -> dict:
+def inspect(user_text: str, b64: str = "", shot_path: str = "",
+            title: str = "") -> dict:
     """Full read step: capture if needed, then read the screen.
     Returns {ok, reading, path, task} ready to hand to the coding agent."""
     if not b64:
         shot = capture()
         if not shot.get("ok"):
             return {"ok": False, "error": shot.get("error", "capture failed")}
-        b64, shot_path = shot["b64"], shot["path"]
+        b64, shot_path, title = shot["b64"], shot["path"], shot.get("title", "")
     seen = read_screen(b64, user_text)
     if not seen.get("ok"):
         return {"ok": False, "error": seen.get("error", "vision failed"), "path": shot_path}
-    return {"ok": True, "reading": seen["reading"], "path": shot_path,
-            "task": build_task(seen["reading"], user_text, shot_path)}
+    reading = seen["reading"]
+    if title:
+        reading = f"(window: {title})\n{reading}"
+    return {"ok": True, "reading": reading, "path": shot_path,
+            "task": build_task(reading, user_text, shot_path)}

@@ -218,7 +218,8 @@ class ConversationEngine:
             keyboard.add_hotkey("ctrl+shift+c",
                                 lambda: self.window.after(0, self.window._open_chat_window),
                                 suppress=False)
-            log.info("hotkeys registered: Ctrl+Shift+G / Ctrl+Shift+C")
+            keyboard.add_hotkey("ctrl+shift+s", self._visual_inspect, suppress=False)
+            log.info("hotkeys registered: Ctrl+Shift+G / Ctrl+Shift+C / Ctrl+Shift+S")
         except Exception:
             log.warning("keyboard library unavailable — hotkeys disabled")
 
@@ -912,6 +913,24 @@ class ConversationEngine:
         return False
 
     # ── Manual activate ───────────────────────────────────────────────────────
+
+    def _visual_inspect(self) -> None:
+        """Ctrl+Shift+S — Visual Bug Inspector.
+
+        Order matters: the capture is taken FIRST, synchronously, while the
+        window the user is actually looking at is still in the foreground.
+        Opening GIL's chat first would make GIL's own window the capture
+        target."""
+        try:
+            win = getattr(self.window, "_chat_win", None)
+            if win is None or not hasattr(win, "open_visual_inspector"):
+                # chat isn't up yet — open it, then capture on the next tick
+                self.window.after(0, self.window._open_chat_window)
+                return
+            if win.open_visual_inspector():          # grabs the active window now
+                self.window.after(0, self.window._open_chat_window)   # then surface GIL
+        except Exception:
+            log.debug("visual inspect hotkey failed", exc_info=True)
 
     def _manual_activate(self) -> None:
         already_active = self.conv.active

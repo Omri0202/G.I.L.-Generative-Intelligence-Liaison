@@ -748,6 +748,54 @@ body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--
 #slashmenu .cmd b { color:var(--accent); font-weight:700; min-width:96px; }
 #slashmenu .cmd span { color:var(--muted); font-size:12px; }
 
+/* ── Visual Bug Inspector: frozen capture, scanlines, floating prompt ── */
+#vinspect{display:none;position:fixed;inset:0;z-index:80;
+  background:rgba(8,9,12,.72);backdrop-filter:blur(9px) saturate(.85);
+  align-items:center;justify-content:center;padding:34px;}
+#vinspect.on{display:flex;animation:vifade .18s ease both;}
+@keyframes vifade{from{opacity:0}to{opacity:1}}
+#vinspect .vipanel{width:min(1100px,94vw);max-height:92vh;display:flex;
+  flex-direction:column;gap:14px;}
+#vinspect .vishot{position:relative;flex:1 1 auto;min-height:0;border-radius:12px;
+  overflow:hidden;border:1px solid rgba(122,229,255,.34);
+  box-shadow:0 0 0 1px rgba(0,0,0,.5),0 18px 60px rgba(0,0,0,.6),
+             0 0 46px rgba(122,229,255,.13);animation:virise .22s ease both;}
+@keyframes virise{from{transform:translateY(9px) scale(.99);opacity:0}
+                  to{transform:none;opacity:1}}
+#vinspect .vishot img{display:block;width:100%;height:100%;max-height:66vh;
+  object-fit:contain;background:#0b0c10;}
+/* neon scanline sweep — pure CSS, no image work */
+#vinspect .viscan{position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(to bottom,
+    rgba(122,229,255,.055) 0 1px, transparent 1px 3px);}
+#vinspect .viscan::after{content:"";position:absolute;left:0;right:0;height:22%;
+  background:linear-gradient(to bottom,transparent,rgba(122,229,255,.16),transparent);
+  animation:visweep 2.6s linear infinite;}
+@keyframes visweep{from{top:-24%}to{top:102%}}
+@media (prefers-reduced-motion:reduce){
+  #vinspect .viscan::after{animation:none;display:none;}
+}
+#vinspect .vibar{display:flex;align-items:center;gap:10px;flex:0 0 auto;
+  background:var(--input);border:1px solid rgba(122,229,255,.3);border-radius:14px;
+  padding:10px 12px;box-shadow:0 10px 34px rgba(0,0,0,.5);}
+#vinspect .vimeta{display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  font-size:11.5px;color:var(--muted);max-width:210px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;}
+#vinspect .vidot{width:7px;height:7px;border-radius:50%;background:#7AE5FF;
+  box-shadow:0 0 8px #7AE5FF;flex:0 0 auto;animation:vipulse 1.7s ease-in-out infinite;}
+@keyframes vipulse{0%,100%{opacity:1}50%{opacity:.35}}
+#vinspect #viinput{flex:1 1 auto;min-width:0;background:transparent;border:none;
+  outline:none;color:var(--txt);font-size:14px;padding:6px 2px;}
+#vinspect #viinput::placeholder{color:var(--muted);}
+#vinspect #vigo{flex:0 0 auto;padding:8px 16px;border-radius:9px;font-size:13px;
+  font-weight:700;cursor:pointer;border:1px solid rgba(122,229,255,.5);
+  background:rgba(122,229,255,.14);color:#7AE5FF;}
+#vinspect #vigo:hover{background:rgba(122,229,255,.24);}
+#vinspect #vigo:disabled{opacity:.5;cursor:default;}
+#vinspect #vix{flex:0 0 auto;background:transparent;border:none;cursor:pointer;
+  color:var(--muted);font-size:14px;padding:6px 8px;border-radius:8px;}
+#vinspect #vix:hover{color:var(--txt);background:var(--hover);}
+
 /* ── Feature #6: @file autocomplete + pinned context chips ── */
 #atmenu { display:none; max-width:820px; margin:0 auto 8px; background:var(--input);
   border:1px solid var(--border); border-radius:14px; overflow:hidden auto;
@@ -847,6 +895,20 @@ body.codemode #pins { max-width:none; font-family:var(--cmfont); }
         <button id="send" onclick="gil.send()">↑</button>
       </div>
       <div id="hint">Type <b>/</b> for commands · <b>@</b> to attach a file · G.I.L. shows every tool he uses, live.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Visual Bug Inspector — frozen capture + floating prompt (Ctrl+Shift+S) -->
+<div id="vinspect" onclick="if(event.target===this)gil.viClose()">
+  <div class="vipanel" role="dialog" aria-label="Visual bug inspector">
+    <div class="vishot"><img id="viimg" alt="captured screen"><div class="viscan"></div></div>
+    <div class="vibar">
+      <div class="vimeta"><span class="vidot"></span><span id="vitarget">active window</span></div>
+      <input id="viinput" spellcheck="false" autocomplete="off"
+             placeholder="Describe what GIL should fix or change on this screen…">
+      <button id="vigo" onclick="gil.viSubmit()">Fix Screen</button>
+      <button id="vix" onclick="gil.viClose()" aria-label="Cancel">✕</button>
     </div>
   </div>
 </div>
@@ -1600,6 +1662,7 @@ const gil = {
           [["click", "status row"], "Open the task inspector"],
           [["/codemode", "/chat"], "Switch terminal ⇄ chat"]]],
         ["General", [
+          [["Ctrl", "Shift", "S"], "Visual inspector — capture a window & ask for a fix"],
           [["?"], "Show this help (when not typing)"],
           [["Ctrl", "H"], "Show this help"]]],
       ];
@@ -1932,6 +1995,62 @@ const gil = {
     else this.runCommand(c.cmd);
   },
 
+  /* ── Visual Bug Inspector: Ctrl+Shift+S → frozen capture → prompt → fix ── */
+  viOpen() {
+    if (this._viBusy) return;
+    this._viBusy = true;
+    api("visual_capture").then(r => {
+      this._viBusy = false;
+      if (!r || !r.ok) {
+        this.addMessage({sender: "gil",
+          text: (r && r.error) || "I couldn't capture the screen."});
+        return;
+      }
+      this.viShow(r);
+    });
+  },
+  /* the backend can also push a capture it already took (global hotkey path,
+     where the grab must happen before GIL's own window takes focus) */
+  visualOverlay(shot) { if (shot) this.viShow(shot); },
+  viShow(shot) {
+    const el = $("vinspect");
+    if (!el) return;
+    $("viimg").src = "data:image/jpeg;base64," + (shot.preview || "");
+    const scope = shot.scope === "window" ? (shot.title || "active window")
+                : shot.scope === "region" ? "selected region" : "full screen";
+    $("vitarget").textContent = scope;
+    $("vitarget").title = scope;
+    const go = $("vigo"); if (go) go.disabled = false;
+    $("viinput").value = "";
+    el.classList.add("on");
+    setTimeout(() => $("viinput").focus(), 40);
+  },
+  viClose(silent) {
+    const el = $("vinspect");
+    if (!el || !el.classList.contains("on")) return;
+    el.classList.remove("on");
+    $("viimg").src = "";
+    if (!silent) api("visual_cancel");
+  },
+  viActive() { return $("vinspect")?.classList.contains("on"); },
+  viSubmit() {
+    const text = $("viinput").value.trim();
+    const go = $("vigo"); if (go) go.disabled = true;
+    api("visual_submit", text).then(r => {
+      if (!r || !r.ok) {
+        if (go) go.disabled = false;
+        this.addMessage({sender: "gil",
+          text: (r && r.error) || "That capture expired — press Ctrl+Shift+S again."});
+        return;
+      }
+      this.viClose(true);                       // backend owns the shot now
+      this.addMessage({sender: "user",
+        text: text || "Fix what's on this screen."});
+      this.resetTimer();
+      this.showTyping();
+    });
+  },
+
   /* ── Feature #6: @file mentioning & context pinning ── */
   atUpdate() {
     const inp = $("inp");
@@ -2086,6 +2205,17 @@ $("inp").addEventListener("keydown", e => {
 document.addEventListener("keydown", (e) => {
   const el = document.activeElement;
   const typing = el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
+  // Visual Bug Inspector — capture whatever is on screen and ask for a fix
+  if (e.ctrlKey && e.shiftKey && (e.key === "S" || e.key === "s")) {
+    e.preventDefault();
+    if (gil.viActive()) gil.viClose(); else gil.viOpen();
+    return;
+  }
+  if (gil.viActive()) {                           // the overlay owns Enter/Esc
+    if (e.key === "Escape") { e.preventDefault(); gil.viClose(); return; }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); gil.viSubmit(); return; }
+    return;
+  }
   if (e.key === "Escape") {                       // close overlays, else interrupt
     const sc = document.getElementById("shortcuts");
     if (sc && sc.classList.contains("show")) { gil.hideShortcuts(); return; }

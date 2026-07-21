@@ -201,6 +201,69 @@ class WebChat:
         except Exception:
             return []
 
+    # ── Visual Bug Inspector (Ctrl+Shift+S): screen → chat → fix ──────────────
+    def _rpc_visual_capture(self, whole_screen=False):
+        """Grab the ACTIVE WINDOW (sharp text, fewer image tokens) and hand the
+        UI a preview to freeze behind the prompt bar. The model-sized payload
+        stays here — it never needs to cross the wire twice."""
+        try:
+            import visual_inspector as vi
+            shot = vi.capture(whole_screen=bool(whole_screen))
+        except Exception:
+            return {"ok": False, "error": "Screen capture failed."}
+        if not shot.get("ok"):
+            return {"ok": False, "error": shot.get("error", "capture failed")}
+        self._pending_shot = shot
+        return {"ok": True, "preview": shot["preview_b64"],
+                "title": shot.get("title", ""), "scope": shot.get("scope", ""),
+                "w": shot["w"], "h": shot["h"],
+                "sent_w": shot.get("sent_w"), "sent_h": shot.get("sent_h")}
+
+    def _rpc_visual_cancel(self):
+        self._pending_shot = None
+        return {"ok": True}
+
+    def _rpc_visual_submit(self, text=""):
+        """[Fix Screen] — read the capture, then hand it to the coding agent."""
+        shot = getattr(self, "_pending_shot", None)
+        if not shot:
+            return {"ok": False, "error": "Nothing captured — press Ctrl+Shift+S first."}
+        self._pending_shot = None
+        threading.Thread(target=self._visual_pipeline, args=(shot, text or ""),
+                         daemon=True, name="GIL-VisualInspect").start()
+        return {"ok": True}
+
+    def _visual_pipeline(self, shot: dict, text: str) -> None:
+        """vision read → chat → coding agent. Runs off the request thread."""
+        eng = getattr(self._gil_window, "_engine", None)
+        try:
+            self.add_image_message(shot["path"])       # thumbnail chip in chat
+        except Exception:
+            pass
+        self._push("gil.showTyping")
+        try:
+            import visual_inspector as vi
+            res = vi.inspect(text, shot["b64"], shot["path"], shot.get("title", ""))
+        except Exception:
+            res = {"ok": False, "error": "the vision pass crashed"}
+        if not res.get("ok"):
+            self._push("gil.hideTyping")
+            self.add_message(
+                f"I couldn't read that screen — {res.get('error', 'vision failed')}.", "gil")
+            return
+        self.add_message("**What I can see on that screen**\n\n" + res["reading"], "gil")
+        # Hand the reading to the coding agent so it actually FIXES it. Writes are
+        # still gated by the approval policy, so a screenshot can never silently
+        # rewrite files.
+        if eng is not None and not getattr(eng, "_agent_running", False):
+            try:
+                import code_agent
+                code_agent.run_async(eng, res["task"])
+                return
+            except Exception:
+                pass
+        self._push("gil.hideTyping")
+
     def _rpc_stop_subagent(self, aid=0):
         """Stop button on a background sub-agent row (Feature #10)."""
         try:
@@ -785,6 +848,26 @@ class WebChat:
 
     # background sub-agent roster — status chips + drawer rows (Feature #10)
     def subagents(self, rows: list) -> None: self._push("gil.subagents", rows)
+
+    # Visual Bug Inspector — open the frozen overlay with a capture already taken
+    def visual_overlay(self, shot: dict) -> None: self._push("gil.visualOverlay", shot)
+
+    def open_visual_inspector(self) -> bool:
+        """Global Ctrl+Shift+S: capture whatever the user is looking at RIGHT NOW
+        (before GIL's own window takes focus), then raise the prompt overlay."""
+        try:
+            import visual_inspector as vi
+            shot = vi.capture()
+            if not shot.get("ok"):
+                return False
+            self._pending_shot = shot
+            self.visual_overlay({"preview": shot["preview_b64"],
+                                 "title": shot.get("title", ""),
+                                 "scope": shot.get("scope", "")})
+            return True
+        except Exception:
+            log.debug("visual inspector hotkey failed", exc_info=True)
+            return False
 
     def add_image_message(self, path) -> None:
         p = str(path)
