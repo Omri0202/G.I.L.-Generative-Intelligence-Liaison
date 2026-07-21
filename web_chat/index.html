@@ -329,6 +329,9 @@ body.codemode #taskdrawer.show{display:block;animation:rise .16s ease both;}
 #taskdrawer .tdx:hover{color:var(--fail);}
 #taskdrawer .tdbody{padding:5px 7px;}
 #taskdrawer .tdrow{display:flex;align-items:center;gap:9px;padding:8px;font-size:12.5px;}
+/* Feature #10 — background sub-agent rows read as secondary to the live task */
+#taskdrawer .tdrow.bg .tddot{background:var(--accent-cyan);}
+#taskdrawer .tdrow.bg .tdname{color:var(--dim);}
 #taskdrawer .tddot{width:8px;height:8px;border-radius:50%;background:var(--accent);
   animation:busyPulse 1.3s ease-in-out infinite;flex-shrink:0;}
 #taskdrawer .tdname{color:var(--txt);}  #taskdrawer .tdname b{color:var(--accent);font-weight:600;}
@@ -1512,6 +1515,9 @@ const gil = {
     } else {
       word = "ready"; busy = false;
     }
+    // Feature #10: background sub-agents are visible even when the foreground is idle
+    const bg = (this._subagents || []).filter(r => r.status === "running").length;
+    if (bg) meta += ` &nbsp;·&nbsp; <b class="diagcount">${bg}</b> background`;
     verbEl.textContent = word;
     verbEl.classList.toggle("busy", busy);
     metaEl.innerHTML = meta;
@@ -1543,13 +1549,36 @@ const gil = {
     const active = running + ((this._working && running === 0) ? 1 : 0);
     const secs = this._timerStart ? Math.round((Date.now() - this._timerStart) / 1000) : 0;
     const verb = this._working ? (running > 0 ? "running" : "thinking") : "idle";
-    dr.querySelector(".tddur").textContent = active + " active";
-    dr.querySelector(".tdbody").innerHTML = active
+    // Feature #10: background sub-agents share the drawer with the foreground task
+    const bg = (this._subagents || []).filter(r => r.status === "running");
+    dr.querySelector(".tddur").textContent =
+      (active + bg.length) + " active" + (bg.length ? ` · ${bg.length} bg` : "");
+    let rows = active
       ? `<div class="tdrow"><span class="tddot"></span>` +
         `<span class="tdname">Coding agent · <b>${verb}</b></span>` +
         `<span class="tdtime">${secs}s</span>` +
         `<button class="tdstop" onclick="gil.stopTask()">◼ Stop</button></div>`
-      : `<div class="tdempty">No tasks running.</div>`;
+      : "";
+    rows += bg.map(r =>
+      `<div class="tdrow bg"><span class="tddot"></span>` +
+      `<span class="tdname">bg <b>#${r.id}</b> · ${esc((r.task || "").slice(0, 46))}</span>` +
+      `<span class="tdtime">${r.elapsed}s</span>` +
+      `<button class="tdstop" onclick="gil.stopSub(${r.id})">◼ Stop</button></div>`).join("");
+    dr.querySelector(".tdbody").innerHTML =
+      rows || `<div class="tdempty">No tasks running.</div>`;
+  },
+  /* ── Feature #10: background sub-agent roster ── */
+  subagents(rows) {
+    this._subagents = rows || [];
+    this.updateDiag();
+    if (document.getElementById("taskdrawer")?.classList.contains("show"))
+      this.updateTaskDrawer();
+  },
+  stopSub(id) {
+    api("stop_subagent", id);
+    this._subagents = (this._subagents || []).map(
+      r => r.id === id ? {...r, status: "cancelled"} : r);
+    this.updateTaskDrawer();
   },
   /* ── Feature #4: keyboard-shortcut help overlay ── */
   showShortcuts() {
@@ -1864,6 +1893,8 @@ const gil = {
     {cmd: "/compact",  desc: "Summarize the chat so far & free context",  kind: "meta"},
     {cmd: "/checkpoint", desc: "Save a restore point of GIL's file edits", kind: "arg"},
     {cmd: "/undo",     desc: "Instantly roll back to the last checkpoint", kind: "meta"},
+    {cmd: "/spawn",    desc: "Run a task in the background (read-only)",   kind: "arg"},
+    {cmd: "/tasks",    desc: "Status of background tasks",                kind: "meta"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
     {cmd: "/clear",    desc: "Start a new conversation",                  kind: "meta"},
@@ -1987,7 +2018,7 @@ const gil = {
     }
     // these run even with no argument (/approve with no arg shows the current mode).
     const noArgOk = (cmd === "/study" || cmd === "/codemode" || cmd === "/approve"
-                     || cmd === "/checkpoint");
+                     || cmd === "/checkpoint" || cmd === "/spawn");
     if (known.kind === "arg" && !arg && !noArgOk) { $("inp").value = cmd + " "; this.grow(); return; }
     $("inp").value = ""; this.grow();
     if (arg) this.addMessage({sender: "user", text: cmd + " " + arg});

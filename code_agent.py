@@ -257,6 +257,14 @@ def _agent_speed_mode() -> str:
     return "auto"
 
 
+_policy_local = threading.local()   # per-thread approval override (Feature #10)
+
+
+def set_thread_policy(mode: str | None) -> None:
+    """Force the approval policy for THIS thread only (background sub-agents)."""
+    _policy_local.mode = (mode or "")
+
+
 def _approval_policy() -> str:
     """Permission policy for DESTRUCTIVE ops (Feature #5). Reads (read/list/search)
     are always free; this only governs writes, edits, and non-safe shell commands:
@@ -264,8 +272,13 @@ def _approval_policy() -> str:
       'auto'     — auto-approve them (power mode; the safety blocklist + the
                    reviewer/precheck still run)
       'readonly' — refuse them entirely (investigate-only)
-    Env wins (GIL_APPROVAL_MODE), then gil_config.json (agent_approval_mode)."""
-    v = (os.getenv("GIL_APPROVAL_MODE") or "").strip().lower()
+    A thread-local override wins first — a background sub-agent (Feature #10) must
+    be able to run read-only WITHOUT flipping the policy for the main agent, which
+    a process-global env var would do. Then env (GIL_APPROVAL_MODE), then
+    gil_config.json (agent_approval_mode)."""
+    v = (getattr(_policy_local, "mode", "") or "").strip().lower()
+    if not v:
+        v = (os.getenv("GIL_APPROVAL_MODE") or "").strip().lower()
     if not v:
         try:
             cfg = json.loads((Path(__file__).parent / "data" / "gil_config.json")

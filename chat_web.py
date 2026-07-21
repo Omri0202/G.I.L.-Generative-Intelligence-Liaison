@@ -201,6 +201,16 @@ class WebChat:
         except Exception:
             return []
 
+    def _rpc_stop_subagent(self, aid=0):
+        """Stop button on a background sub-agent row (Feature #10)."""
+        try:
+            import subagents
+            ok = subagents.stop(int(aid))
+            self._push("gil.subagents", subagents.status())
+            return {"stopped": ok}
+        except Exception:
+            return {"stopped": False}
+
     def _rpc_list_files(self, query=""):
         """@file autocomplete (Feature #6) — project files matching `query`."""
         try:
@@ -310,6 +320,7 @@ class WebChat:
                 "- `/approve ask|auto|readonly` — set the code-agent permission policy\n"
                 "- `/compact` — summarize the chat so far & free up context\n"
                 "- `/checkpoint [name]` — save a restore point · `/undo` — roll back to it\n"
+                "- `/spawn <task>` — work it in the background · `/tasks` — background status\n"
                 "- `/stop` — stop what I'm doing · `/voice` — toggle voice · "
                 "`/clear` — new chat", "gil")
             return
@@ -345,6 +356,13 @@ class WebChat:
                 import autonomous
                 if eng and autonomous.is_running(eng):
                     autonomous.stop(eng)
+            except Exception:
+                pass
+            try:                            # background sub-agents too (Feature #10)
+                import subagents
+                for r in subagents.status():
+                    if r["status"] == "running":
+                        subagents.stop(r["id"])
             except Exception:
                 pass
             try:
@@ -427,6 +445,58 @@ class WebChat:
                 self.add_message(
                     f"**Checkpoint “{res['label']}” set** — no file changes since the "
                     "last one, so there's nothing new to roll back to yet.", "gil")
+            return
+
+        if name in ("spawn", "background", "bg"):
+            # Feature #10: run a task in a detached sub-agent, read-only unless
+            # the user explicitly opts into a writing one.
+            mode, body = "readonly", arg
+            first = arg.split(None, 1)
+            if first and first[0].lower() in ("auto", "write", "--auto"):
+                mode = "auto"
+                body = first[1] if len(first) > 1 else ""
+            if not body.strip():
+                self.add_message(
+                    "**/spawn `<task>`** runs a task in the background while we keep "
+                    "talking — I'll report back when it's done.\n\n"
+                    "It runs **read-only** (it investigates and reports; it won't "
+                    "change files, since nobody's there to approve). Use "
+                    "`/spawn auto <task>` to let it make changes. `/tasks` shows "
+                    "what's running.", "gil")
+                return
+            try:
+                import subagents
+                res = subagents.spawn(eng, body, mode)
+            except Exception:
+                self.add_message("Couldn't start a background task right now.", "gil")
+                return
+            if not res.get("ok"):
+                self.add_message(res.get("error", "Couldn't start that."), "gil")
+                return
+            self.add_message(
+                f"**Background task #{res['id']} started** ({res['mode']}) — _{body}_\n\n"
+                "I'll report back here when it's done. `/tasks` for status.", "gil")
+            try:
+                self.subagents(subagents.status())
+            except Exception:
+                pass
+            return
+
+        if name in ("tasks", "jobs"):
+            try:
+                import subagents
+                rows = subagents.status()
+            except Exception:
+                rows = []
+            if not rows:
+                self.add_message(
+                    "No background tasks yet — start one with `/spawn <task>`.", "gil")
+                return
+            icon = {"running": "◐", "done": "✓", "failed": "✕", "cancelled": "⊘"}
+            lines = [f"- {icon.get(r['status'], '·')} **#{r['id']}** "
+                     f"`{r['status']}` · {r['elapsed']}s · {r['mode']} — {r['task']}"
+                     for r in rows]
+            self.add_message("**Background tasks**\n" + "\n".join(lines), "gil")
             return
 
         if name in ("undo", "rollback"):
@@ -696,6 +766,9 @@ class WebChat:
 
     # live token-budget gauge — context fullness per step (Feature #2)
     def token_usage(self, info: dict) -> None: self._push("gil.tokenUsage", info)
+
+    # background sub-agent roster — status chips + drawer rows (Feature #10)
+    def subagents(self, rows: list) -> None: self._push("gil.subagents", rows)
 
     def add_image_message(self, path) -> None:
         p = str(path)

@@ -164,7 +164,22 @@ def in_group() -> bool:
     return bool(_group[0])
 
 
+_muted = threading.local()   # per-thread publish mute (background sub-agents)
+
+
+def mute_thread() -> None:
+    """Silence activity events raised on THIS thread — a background sub-agent
+    must not interleave its tool cards into the main conversation's feed."""
+    _muted.on = True
+
+
+def unmute_thread() -> None:
+    _muted.on = False
+
+
 def _publish(entry: dict) -> None:
+    if getattr(_muted, "on", False):
+        return
     with _lock:
         subs = list(_subscribers)
     for fn in subs:
