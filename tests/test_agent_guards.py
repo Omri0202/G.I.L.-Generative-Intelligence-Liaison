@@ -336,3 +336,54 @@ def test_convergence_enforces_a_wall_clock_budget():
 
 def test_investigation_budget_is_tighter_than_change_budget():
     assert ca._time_budget("investigate") < ca._time_budget("change")
+
+
+# ── /goal Phase 1.5: survey phrasing, tool caps, no suite runs while exploring ──
+
+def test_survey_phrasing_is_investigate_not_change():
+    """"look at X for improvements" asks WHAT to improve — the action word is the
+    subject of a survey, not an imperative. Scoring it 'change' silently unlocked
+    the long time budget, the 240s command cap and the verify-with-pytest
+    playbook, which is how that exact task ran the suite twice and never
+    reported back."""
+    for t in ("look at the gil project for improvements",
+              "look at the gil project for things to improve",
+              "review the code for possible optimizations",
+              "check the project for bugs to fix"):
+        assert ca._task_mode(t) == "investigate", t
+    # a genuine imperative must still be a change
+    for t in ("find and fix the bug in main.py",
+              "look at main.py and fix the crash",
+              "check the config and enable voice",
+              "improve the code agent"):
+        assert ca._task_mode(t) == "change", t
+
+
+def test_investigation_playbook_forbids_running_the_suite():
+    inv = ca._playbook_block("look at the gil project for improvements")
+    assert "DO NOT RUN THE TEST SUITE" in inv
+    assert "python -m pytest" not in inv        # not offered as a first move either
+    # a change task still verifies with tests
+    assert "pytest" in ca._playbook_block("fix the voice bug in main.py")
+
+
+def test_run_timeout_is_thread_local_with_a_safe_default():
+    import threading
+    ca.set_thread_run_timeout(None)
+    assert ca._run_timeout() == 240.0
+    ca.set_thread_run_timeout(60)
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(ca._run_timeout()))
+    t.start(); t.join()
+    assert ca._run_timeout() == 60.0 and seen[0] == 240.0   # no cross-thread leak
+    ca.set_thread_run_timeout(None)
+
+
+def test_run_timeout_kills_a_slow_command_with_actionable_advice():
+    ca.set_thread_run_timeout(3)
+    try:
+        out = ca._t_run("Start-Sleep -Seconds 30")
+    finally:
+        ca.set_thread_run_timeout(None)
+    assert "exceeded the 3s limit" in out
+    assert "Do NOT run it again" in out          # steers it to a cheaper move

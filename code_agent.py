@@ -843,14 +843,39 @@ def _t_search(args: dict) -> str:
     return "No matches."
 
 
+_run_local = threading.local()   # per-thread subprocess time cap
+
+
+def set_thread_run_timeout(seconds) -> None:
+    """Cap how long ONE `run` command may take on this thread. An investigation
+    gets a short cap so a single slow command (a full pytest suite is ~133s)
+    cannot starve the run's wall-clock budget before it can converge."""
+    _run_local.timeout = seconds
+
+
+def _run_timeout() -> float:
+    try:
+        v = getattr(_run_local, "timeout", None)
+        return float(v) if v else 240.0
+    except (TypeError, ValueError):
+        return 240.0
+
+
 def _t_run(cmd: str) -> str:
+    limit = _run_timeout()
     try:
         p = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-            capture_output=True, text=True, timeout=240,
+            capture_output=True, text=True, timeout=limit,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = ((p.stdout or "") + (p.stderr or "")).strip()
         return f"[exit {p.returncode}]\n{out[-1800:]}" if out else f"[exit {p.returncode}] (no output)"
+    except subprocess.TimeoutExpired:
+        # Tell the model plainly, so it picks a cheaper move instead of retrying
+        # the same long command and burning the rest of the budget.
+        return (f"ERROR: command exceeded the {int(limit)}s limit and was killed. "
+                "Do NOT run it again — use a faster, narrower command (target one "
+                "test file or one module), or answer from reading the code instead.")
     except Exception as exc:
         return f"ERROR: {exc}"
 
@@ -1397,14 +1422,24 @@ def _task_mode(task: str) -> str:
     approval). Looking/finding/reviewing without an action verb is read-only."""
     t = task.lower()
     look = ("look for", "look at", "look into", "find ", "what bug", "any bug",
-            "are there", "review", "audit", "check for", "diagnose", "investigate",
+            "are there", "review", "audit", "check ", "diagnose", "investigate",
             "what's wrong", "whats wrong", "analyse", "analyze", "report",
             "list the", "explore", "examine", "understand", "tell me", "show me",
             "how does", "what does", "what is", "whats in", "what's in")
     do = ("fix", "change", "add ", "implement", "refactor", "update", "make ",
           "create", "write", "rename", "remove", "delete", "enable", "disable",
           "set ", "install", "build ", "improve", "upgrade", "polish", "redesign")
-    if any(w in t for w in look) and not any(w in t for w in do):
+    # "…for improvements" / "…for things to fix": here the action word is the
+    # SUBJECT of a survey, not an imperative — the user is asking WHAT could be
+    # improved, not ordering an edit. Drop those phrases before looking for a
+    # command verb, otherwise "look at the gil project for improvements" scores
+    # as 'change' and silently unlocks the long time budget, the 240s command
+    # cap and the "verify with pytest" playbook — which is exactly how that task
+    # ended up running the full suite twice and never reporting back.
+    intent = re.sub(r"\bfor\s+(?:\w+\s+){0,3}"
+                    r"(?:improv|enhanc|optimi|fix|better|clean|refactor|polish)\w*",
+                    " ", t)
+    if any(w in t for w in look) and not any(w in intent for w in do):
         return "investigate"
     return "change"
 
@@ -1417,16 +1452,29 @@ def _playbook_block(task: str) -> str:
         if any(w in t for w in words):
             key = k
             break
-    moves = "\n".join("  • " + m for m in _PLAYBOOK[key])
+    investigating = _task_mode(task) == "investigate"
+    moves_list = list(_PLAYBOOK[key])
+    if investigating:
+        # An exploratory pass must not run the suite. It costs ~133s here, teaches
+        # a survey nothing that reading the code won't, and the agent used to run
+        # it repeatedly — which is what actually exhausted the step budget.
+        moves_list = [m for m in moves_list
+                      if "pytest" not in m and "npm test" not in m]
+    moves = "\n".join("  • " + m for m in moves_list)
     block = ("INVESTIGATOR'S TOOLKIT — proven first moves for this task (adapt the "
              "patterns to the ACTUAL subject; these are read-only and free):\n" + moves +
              "\nAlways OPEN and read the code before claiming anything — never trust a "
              "filename or a single search hit on its own.")
-    if _task_mode(task) == "investigate":
+    if investigating:
         block += ("\n\nMODE — INVESTIGATE ONLY: do NOT edit or write any files. Use "
                   "read-only tools, then finish with `done` whose summary is a findings "
                   "LIST — for each item: file:line, why it's a problem, and the fix you'd "
-                  "suggest. Change code only if the user explicitly asks you to fix it.")
+                  "suggest. Change code only if the user explicitly asks you to fix it."
+                  "\n\nDO NOT RUN THE TEST SUITE. `pytest`, `npm test` and other "
+                  "whole-project runs take minutes and tell a survey nothing that "
+                  "reading the code won't. Investigate with list_dir, search and "
+                  "read_file. Run tests only if the user explicitly asked for test "
+                  "results, or to verify a change you were asked to make.")
     else:
         block += ("\n\nMODE — CHANGE: after investigating, make the smallest correct "
                   "change, then VERIFY with pytest/py_compile before `done`.")
@@ -2011,6 +2059,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
     # see a Stop the instant it arrives instead of at the next step boundary
     set_thread_cancel_check(lambda: getattr(eng, "_agent_cancel", False))
     conv = _Convergence(time_budget=_time_budget(task_mode))
+    # one slow command must not eat the whole budget before we can converge
+    set_thread_run_timeout(60.0 if task_mode == "investigate" else 240.0)
     try:
         for step in range(1, _MAX_STEPS + 1):
             # ── user interrupt (Esc / Stop): settle the state machine to idle and
@@ -2484,6 +2534,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         import activity as _a
         _a.clear_group()
         set_thread_cancel_check(None)   # never leak the probe into the next run
+        set_thread_run_timeout(None)    # nor the tool time cap
         eng._agent_gate = None
         eng._agent_running = False
         if hasattr(window, "set_working"):
