@@ -437,3 +437,60 @@ def test_is_coding_task_catches_info_and_lookup_phrasings():
     for t in ("info about whales", "give me info on sharks",
               "translate that to spanish"):
         assert ca.is_coding_task(t) is False, t
+
+
+# ── self-investigation: report GIL's own tooling as a bug, invent findings ────
+
+def test_search_filters_gil_own_tooling_but_keeps_real_matches(tmp_path):
+    """The hall of mirrors: GIL searched its own project for TODO / '== None' /
+    mutable-defaults and matched the literal strings that DEFINE those searches
+    (the investigator playbook + activity labels), then reported them as 3 bugs.
+    The filter must drop the tooling lines but keep genuine occurrences."""
+    (tmp_path / "playbook.py").write_text(
+        '_PLAYBOOK = {\n'
+        '    "bugs": [\n'
+        '        r\'search {"pattern":"TODO|FIXME|HACK|XXX"}  — risky spots\',\n'
+        '        r\'search {"pattern":"==\\s*None|!=\\s*None"}  — use is\',\n'
+        '    ],\n'
+        '}\n', encoding="utf-8")
+    (tmp_path / "labels.py").write_text(
+        '_ACTIONS = {\n'
+        '    "find_todos": ("code", "Finding TODOs"),\n'
+        '}\n', encoding="utf-8")
+    (tmp_path / "real.py").write_text(
+        "# TODO: wire this up\n"
+        "def handler():\n"
+        "    if value == None:\n"
+        "        return\n", encoding="utf-8")
+
+    out = ca._t_search({"pattern": "TODO|FIXME|HACK|XXX", "dir": str(tmp_path)})
+    assert "real.py" in out                       # the genuine TODO is reported
+    assert "playbook.py" not in out               # the search-pattern string is not
+    assert "labels.py" not in out                 # the activity label is not
+    assert "skipped" in out                       # transparency note present
+
+
+def test_is_search_tooling_leaves_real_defects_alone():
+    # real defects must NOT be mistaken for tooling — GIL must still find them
+    assert not ca._is_search_tooling("    if x == None:")
+    assert not ca._is_search_tooling("# TODO: implement caching")
+    assert not ca._is_search_tooling("def f(items=[]):")
+    # …but its own tool definitions are tooling
+    assert ca._is_search_tooling('        r\'search {"pattern":"TODO"}\',')
+    assert ca._is_search_tooling('    "find_todos": ("code", "Finding TODOs"),')
+
+
+def test_investigate_report_cannot_claim_quality_fixes_it_never_made():
+    rep = ("I looked at the project. **2 findings**:\n\n1. **Foo** — bar.\n\n"
+           "**Plus 1 quality fix:**\n- Removed comments and whitespace in code_agent.py")
+    grounded = ca._ground_report(rep, edits_made=0, task_mode="investigate")
+    assert "quality fix" not in grounded.lower()
+    assert "Removed comments" not in grounded
+    assert "2 findings" in grounded and "Foo" in grounded     # findings preserved
+
+
+def test_ground_report_keeps_quality_fixes_when_changes_were_made():
+    rep = "Fixed it. **Plus 2 quality fixes:**\n- Tidied imports"
+    assert "quality fix" in ca._ground_report(rep, edits_made=2, task_mode="change").lower()
+    # investigate but with edits (rare) also keeps it — a real change happened
+    assert "quality fix" in ca._ground_report(rep, edits_made=1, task_mode="investigate").lower()

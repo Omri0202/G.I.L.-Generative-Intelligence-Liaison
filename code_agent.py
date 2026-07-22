@@ -790,6 +790,22 @@ def _t_list_dir(args: dict) -> str:
     return "\n".join(items) or "(empty)"
 
 
+_SELF_TOOLING_RE = re.compile(r'^"[\w]+":\s*\("[a-z_]+",')   # activity-label tuple
+
+
+def _is_search_tooling(line: str) -> bool:
+    """True if this source line DEFINES one of GIL's own bug-hunt searches or an
+    activity label, rather than containing a real occurrence — so searching GIL's
+    own project doesn't report its own machinery. Matches:
+      • investigator-playbook search definitions  ( ...{"pattern":"TODO|..."}... )
+      • inline `search {...}` playbook examples
+      • activity registry labels  ( "find_todos": ("code", "Finding TODOs") )
+    """
+    s = line.strip()
+    return ('"pattern":' in s or "search {" in s
+            or bool(_SELF_TOOLING_RE.match(s)))
+
+
 def _t_search(args: dict) -> str:
     pattern = args.get("pattern", "")
     root = Path(args.get("dir", ".") or ".")
@@ -808,7 +824,7 @@ def _t_search(args: dict) -> str:
         return (not f.is_file() or f.suffix.lower() in _SEARCH_SKIP_EXT
                 or any(part in _SEARCH_SKIP_DIRS for part in f.parts))
 
-    hits, total, DISPLAY, SCAN_CAP = [], 0, 40, 600
+    hits, total, filtered, DISPLAY, SCAN_CAP = [], 0, 0, 40, 600
     for f in root.rglob("*"):
         if _skip(f):
             continue
@@ -817,6 +833,17 @@ def _t_search(args: dict) -> str:
         except Exception:
             continue
         for m in rx.finditer(text):
+            ls = text.rfind("\n", 0, m.start()) + 1
+            le = text.find("\n", m.start())
+            line = text[ls:le if le != -1 else len(text)]
+            # When GIL searches its OWN source, its bug-hunt patterns (TODO
+            # markers, None-equality, the mutable-default regex) match the literal
+            # strings that DEFINE those very patterns — the investigator playbook
+            # and the activity labels. Reporting those as findings is the "hall of
+            # mirrors" that produced 3 invented bugs. Drop GIL's own tooling lines.
+            if _is_search_tooling(line):
+                filtered += 1
+                continue
             total += 1
             if len(hits) < DISPLAY:
                 ln = text.count("\n", 0, m.start()) + 1
@@ -827,6 +854,9 @@ def _t_search(args: dict) -> str:
     if hits:
         more = (f"\n[{total}+ matches — showing first {len(hits)}; narrow the pattern "
                 f"to see the rest]" if total > len(hits) else f"\n[{total} match(es)]")
+        if filtered:
+            more += (f"\n[{filtered} match(es) skipped — GIL's own search patterns / "
+                     "activity labels, not real occurrences]")
         return "\n".join(hits) + more
     # No text matched — maybe they meant a FILE by that name (a common mixup).
     import difflib
@@ -840,6 +870,10 @@ def _t_search(args: dict) -> str:
     if near:
         return ("No text matches. NOTE: `search` looks INSIDE files. To open a file "
                 "use read_file. Files whose NAME is similar:\n" + "\n".join(near[:8]))
+    if filtered:
+        return (f"No real matches. ({filtered} match(es) were GIL's own search "
+                "patterns / activity labels — tooling, not findings. Do NOT report "
+                "these as bugs.)")
     return "No matches."
 
 
@@ -1529,6 +1563,17 @@ def _playbook_block(task: str) -> str:
                   "read-only tools, then finish with `done` whose summary is a findings "
                   "LIST — for each item: file:line, why it's a problem, and the fix you'd "
                   "suggest. Change code only if the user explicitly asks you to fix it."
+                  "\n\nYOU CHANGED NOTHING. Never write that you removed, fixed, changed, "
+                  "cleaned up, refactored or improved anything, and NEVER include a "
+                  "'Plus N quality fixes' section — that section is for changes actually "
+                  "made, and you made none. Describe only what you FOUND and what you "
+                  "WOULD change."
+                  "\n\nA FINDING MUST BE A REAL DEFECT you read in actual logic. A keyword "
+                  "that appears INSIDE a search pattern, a regex string, a `\"pattern\":` "
+                  "value, or a UI/label string is GIL's OWN tooling — NOT a finding. If a "
+                  "search result is a self-match of your own investigator patterns, ignore "
+                  "it. Do not invent findings to have something to report — 'no issues "
+                  "found' is a valid, honest result."
                   "\n\nDO NOT RUN THE TEST SUITE. `pytest`, `npm test` and other "
                   "whole-project runs take minutes and tell a survey nothing that "
                   "reading the code won't. Investigate with list_dir, search and "
@@ -1982,7 +2027,20 @@ class _Convergence:
         return ""
 
 
-def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, bool]:
+def _ground_report(summary: str, edits_made: int, task_mode: str) -> str:
+    """Deterministic anti-fabrication backstop. In investigate mode GIL changed
+    NOTHING, so a 'Plus N quality fixes' section (which describes work done) can
+    only be invented — the exact bug where GIL claimed it 'removed comments and
+    whitespace' during a read-only run. Cut it."""
+    if not summary or edits_made > 0 or task_mode != "investigate":
+        return summary
+    cut = re.split(r"\n+\**\s*Plus\s+\d*\s*quality\s+fix",
+                   summary, maxsplit=1, flags=re.IGNORECASE)
+    return cut[0].rstrip() if len(cut) > 1 else summary
+
+
+def _finalize_report(messages: list, task: str, edits_made: int,
+                     task_mode: str = "change") -> tuple[str, bool]:
     """Out of steps / stuck → never a blank fallback. First ask the model to
     compile whatever it found into the real engineering report (one shot, riding
     the same 429/413 backoff). If even that can't be reached, fall back to a
@@ -2003,8 +2061,10 @@ def _finalize_report(messages: list, task: str, edits_made: int) -> tuple[str, b
     except Exception:
         obj = None
     if obj and str(obj.get("summary", "")).strip():
-        return str(obj["summary"])[:8000], bool(obj.get("success", True))
-    return _assemble_report_from_transcript(messages, task), False
+        return (_ground_report(str(obj["summary"])[:8000], edits_made, task_mode),
+                bool(obj.get("success", True)))
+    return _ground_report(_assemble_report_from_transcript(messages, task),
+                          edits_made, task_mode), False
 
 
 def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
@@ -2140,7 +2200,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 _end_thought()
                 _why_stop = conv.reason()
                 activity.instant("code", "Converged early", _why_stop, status="done")
-                summary, ok = _finalize_report(messages, task, edits_made)
+                summary, ok = _finalize_report(messages, task, edits_made, task_mode)
                 window.add_chat_message(
                     ("**Solved** ✓ — " if ok else "**Here's what I found** — ") + summary +
                     (f"\n\n({edits_made} file change{'s' if edits_made != 1 else ''} applied)"
@@ -2211,7 +2271,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 # Don't leave a blank "keep going" line — compile whatever GIL
                 # gathered so far into the real report before stopping.
                 _end_thought()
-                summary, ok = _finalize_report(messages, task, edits_made)
+                summary, ok = _finalize_report(messages, task, edits_made, task_mode)
                 activity.instant("code", "Compiled findings", _speakable(summary)[:90],
                                  status="done" if ok else "fail")
                 window.add_chat_message(
@@ -2230,6 +2290,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                 # instead of under `args` — the `done` signature invites both.
                 summary = str(args.get("summary") or action.get("summary") or "").strip()
                 ok = bool(args.get("success", action.get("success", True)))
+                # anti-fabrication: an investigation that changed nothing cannot
+                # have "quality fixes" — strip a claimed-changes section (#trust)
+                summary = _ground_report(summary, edits_made, task_mode)
                 # DELIVERABLE GUARD: a content task must ship the FULL text, not an
                 # empty / "file is ready, attached" closure. If the model short-
                 # circuits, reject it and force a real write (up to 2 retries).
@@ -2582,7 +2645,7 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         # and compile the findings so far into the report, instead of a bare
         # "keep going" line the user can't act on.
         _end_thought()
-        summary, ok = _finalize_report(messages, task, edits_made)
+        summary, ok = _finalize_report(messages, task, edits_made, task_mode)
         activity.instant("code", "Compiled findings at step limit",
                          _speakable(summary)[:90], status="done" if ok else "fail")
         window.add_chat_message(
