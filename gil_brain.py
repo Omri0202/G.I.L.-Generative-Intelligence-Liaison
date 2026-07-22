@@ -104,7 +104,11 @@ _session.headers.update({"Content-Type": "application/json"})
 
 # Fallback models tried in order when all keys are 429'd on the primary model.
 # Each model has its own independent rate-limit quota on Groq.
-_FALLBACK_MODELS = ["gemma2-9b-it", "llama-3.3-70b-versatile"]
+# NOTE: these MUST be models the account actually serves. gemma2-9b-it was
+# decommissioned by Groq and now 400s — and the fallback loop was accepting that
+# 400 as a "success", so a rate-limited Hebrew query dead-ended with no answer.
+_FALLBACK_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+                    "openai/gpt-oss-20b"]
 
 
 def _load_model() -> str:
@@ -842,7 +846,7 @@ class GILBrain:
                     for fb_model in _FALLBACK_MODELS:
                         for key in GROQ_KEYS:
                             fb_payload = {**payload, "model": fb_model}
-                            # Llama/Gemma fallbacks reject reasoning_effort (400).
+                            # Non-gpt-oss models reject reasoning_effort (400).
                             if "gpt-oss" not in fb_model:
                                 fb_payload.pop("reasoning_effort", None)
                             hdrs = {"Authorization": f"Bearer {key}",
@@ -850,12 +854,20 @@ class GILBrain:
                             try:
                                 r = _session.post(GROQ_URL, json=fb_payload,
                                                   headers=hdrs, timeout=15)
-                                if r.status_code != 429:
-                                    fallback_resp = r
-                                    log.info("Groq fallback succeeded on %s", fb_model)
-                                    break
                             except Exception:
                                 continue
+                            if r.status_code == 200:
+                                fallback_resp = r
+                                log.info("Groq fallback succeeded on %s", fb_model)
+                                break
+                            if r.status_code == 429:
+                                continue          # this key limited → try next key
+                            # 400/404 (model unavailable) or 413 (too large): this
+                            # model won't work — don't accept the error as a reply
+                            # (that's what dead-ended the query); skip to the next.
+                            log.warning("fallback %s returned %d — skipping model",
+                                        fb_model, r.status_code)
+                            break
                         if fallback_resp is not None:
                             break
                     if fallback_resp is None:
@@ -1195,6 +1207,15 @@ def _parse_json(raw: str) -> dict:
             print("[G.I.L. BRAIN] Partial parse â€” salvaged speech/report.")
             return {"speech": (m.group(1) if m else ""), "action": None,
                     "target": None, "report": report, "extra_actions": []}
+        # Last resort: the model ignored the JSON envelope and just answered in
+        # prose (common on the smaller fallback models when the primary is rate-
+        # limited). That is a perfectly good answer — don't drop it to empty
+        # (which surfaced as "Say that again?"); use the prose as the reply.
+        prose = cleaned.strip()
+        if prose and not prose.startswith("{") and not prose.startswith("["):
+            log.warning("non-JSON reply — using raw prose as the answer")
+            return {"speech": prose[:6000], "action": None, "target": None,
+                    "report": None, "extra_actions": []}
         log.error("JSON parse failed. Raw: %s", raw[:120])
         return {"speech": "", "action": None, "target": None, "report": None, "extra_actions": []}
 
