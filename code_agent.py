@@ -1417,6 +1417,52 @@ _PLAYBOOK_KEYS = (
 )
 
 
+# A message only reaches the coding agent because the user is in /codemode, where
+# EVERY message is dispatched here. But "do research on whales" is not a coding
+# task — the agent can only think in terms of THIS project, so it spent 15 minutes
+# grepping the codebase for "whale". These signals let the caller route such a
+# request to the normal brain (which does web research, answers questions, etc.)
+# instead of forcing it through the code agent.
+_CODE_SIGNALS = (
+    ".py", ".js", ".ts", ".html", ".css", ".json", ".md ", ".txt", ".yml",
+    " file", " files", " code", " codebase", " repo", " project", " function",
+    " method", " class ", " module", " script", " variable", " import",
+    " bug", " crash", " traceback", " exception", " stack trace", " error",
+    " test", " pytest", " refactor", " implement", " compile", " syntax",
+    " endpoint", " database", " query", " commit", " git ", " branch",
+    " build ", " deploy", " debug", " gil", " agent", " brain", " def ",
+    " runtime", " directory", " folder", " the path", " config", " feature",
+)
+_NONCODE_SIGNALS = (
+    " research ", "research on", "research about", " look up ", " google ",
+    "search the web", "search the internet", " what is ", " what are ",
+    " what's ", " what was", " what were", " who is ", " who was", " who were",
+    " when did", " when was",
+    " where is", " where are", "tell me about", " weather", " the news",
+    "write a poem", "write a story", "write a song", "write me a poem",
+    " translate ", " recipe", "history of", "facts about", "information about",
+    "meaning of", " capital of",
+    # NOTE: deliberately NOT "why does" / "how do" / "how many" — in a developer
+    # terminal those overwhelmingly introduce debugging questions ("why does the
+    # stop button not work"), so they stay coding by default.
+)
+
+
+def is_coding_task(task: str) -> bool:
+    """True if this belongs to the coding agent (about code / files / this
+    project); False for general research / knowledge / creative requests that
+    only landed here because the user happens to be in /codemode.
+
+    Code signals win ties: "research how the approval flow works in the code"
+    stays a coding task, while "research whales" does not."""
+    t = " " + (task or "").lower().strip() + " "
+    if any(s in t for s in _CODE_SIGNALS):
+        return True
+    if any(s in t for s in _NONCODE_SIGNALS):
+        return False
+    return True                 # ambiguous → they ARE in codemode, treat as code
+
+
 def _task_mode(task: str) -> str:
     """'investigate' → report findings and change nothing; 'change' → edit (with
     approval). Looking/finding/reviewing without an action verb is read-only."""

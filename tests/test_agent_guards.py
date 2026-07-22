@@ -387,3 +387,38 @@ def test_run_timeout_kills_a_slow_command_with_actionable_advice():
         ca.set_thread_run_timeout(None)
     assert "exceeded the 3s limit" in out
     assert "Do NOT run it again" in out          # steers it to a cheaper move
+
+
+# ── codemode routing: a non-coding request must NOT reach the code agent ──────
+
+def test_is_coding_task_routes_research_and_knowledge_to_the_brain():
+    """The reported bug: in /codemode "do research on whales" was force-fed to
+    the code agent, which can only think in terms of THIS project — so it grepped
+    the codebase for "whale" for 15 minutes. These must read as non-coding."""
+    for t in ("do research on whales", "research whales",
+              "what is the capital of France", "who is the president of Brazil",
+              "what was the cold war", "tell me about the roman empire",
+              "write a poem about the sea", "look up the weather in Tokyo",
+              "translate hola to english", "research the best pasta recipe"):
+        assert ca.is_coding_task(t) is False, t
+
+
+def test_is_coding_task_keeps_real_coding_work_in_the_agent():
+    for t in ("fix the bug in main.py", "look at the gil project for improvements",
+              "refactor the code agent", "add a dark theme toggle",
+              "run the tests", "why does the stop button not work",
+              "debug the crash in gui.py", "implement caching for the brain",
+              "what is broken in chat_web.py", "how do I run the build"):
+        assert ca.is_coding_task(t) is True, t
+
+
+def test_is_coding_task_lets_code_signals_win_ties():
+    # "research" + a code reference is still a coding task, not web research
+    assert ca.is_coding_task("research how the approval flow works in the code")
+    assert ca.is_coding_task("research the codebase for silent excepts")
+
+
+def test_is_coding_task_defaults_to_coding_when_ambiguous():
+    # they explicitly entered the developer terminal — no signal either way stays code
+    assert ca.is_coding_task("make the thing better") is True
+    assert ca.is_coding_task("") is True

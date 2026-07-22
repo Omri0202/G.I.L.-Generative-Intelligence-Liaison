@@ -323,8 +323,21 @@ class WebChat:
                 self.add_message("I'm still working on the previous task — "
                                  "one moment, then send the next one.", "gil")
                 return
+            # Not every message in codemode is a coding task. "do research on
+            # whales" is a question for the brain, not the code agent — which
+            # would otherwise grep the project for "whale" for 15 minutes. Route
+            # a clearly non-coding request through the normal chat path instead.
             try:
                 import code_agent
+                if not code_agent.is_coding_task(text):
+                    self.add_message(
+                        "That's not a coding task, so I'm answering it normally "
+                        "(still in the terminal — `/chat` to leave it).", "gil")
+                    fn = getattr(self._gil_window, "_chat_send_fn", None)
+                    if fn:
+                        threading.Thread(target=fn, args=(_with_pins(text),),
+                                         daemon=True, name="GIL-WebSend").start()
+                        return
                 code_agent.run_async(eng, _with_pins(text))
                 return
             except Exception:
