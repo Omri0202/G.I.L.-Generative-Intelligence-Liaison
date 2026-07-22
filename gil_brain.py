@@ -52,6 +52,45 @@ def _detect_response_language(text: str) -> str:
     return "English"
 
 
+# Short "redo my last answer differently" directives. Kept language-agnostic
+# where it matters: a bare language name in its own script (Hebrew "בעברית",
+# "עברית") counts, as do the common English transform words.
+_FOLLOWUP_RE = re.compile(
+    r"^\s*(?:"
+    r"in\s+(?:hebrew|english|spanish|french|german|arabic|russian|chinese|"
+    r"italian|portuguese)"
+    r"|(?:write|say|translate|put|redo|do)\s+(?:it|that|this)?\s*"
+    r"(?:again|in\s+\w+|shorter|longer|simpler)?"
+    r"|make\s+(?:it|that|this)\s+(?:shorter|longer|simpler|clearer|briefer)"
+    r"|translate(?:\s+(?:it|that|this))?"
+    r"|again|shorter|longer|simpler|summari[sz]e(?:\s+it|\s+that)?"
+    r"|more\s+deta\w+|in\s+more\s+detail|expand(?:\s+(?:it|that))?"
+    r"|בעברית|עברית|באנגלית|תכתוב\s+בעברית|תרגם(?:\s+.*)?|שוב|קצר\s+יותר"
+    r")\s*[.!?]*\s*$",
+    re.IGNORECASE)
+
+
+def _is_followup_directive(text: str) -> bool:
+    """A short message that transforms GIL's previous answer rather than starting
+    a new topic. Only fires on brief messages so a real question that happens to
+    start with 'translate the docstring in gui.py' is never swallowed."""
+    t = (text or "").strip()
+    if not t or len(t.split()) > 6:
+        return False
+    return bool(_FOLLOWUP_RE.match(t))
+
+
+def _last_assistant_answer(history: list) -> str:
+    """The most recent substantive assistant turn, so a follow-up has something
+    to transform. Skips tiny acks ('Ready, Omri.')."""
+    for m in reversed(history or []):
+        if m.get("role") == "assistant":
+            c = str(m.get("content", "")).strip()
+            if len(c) > 40 and not c.startswith("{"):
+                return c
+    return ""
+
+
 GROQ_KEYS = [k for k in [
     os.getenv("GROQ_API_KEY", ""),
     os.getenv("GROQ_API_KEY_2", ""),
@@ -700,6 +739,19 @@ class GILBrain:
         detected_lang = _detect_response_language(user_input)
         system += f"\n\nHARD LANGUAGE OVERRIDE: User just wrote in {detected_lang}. Your ENTIRE response MUST be in {detected_lang}. No exceptions."
 
+        # Terse follow-up directive ("בעברית", "in Spanish", "translate that",
+        # "make it shorter", "again") — the message carries almost no content of
+        # its own; it asks GIL to RE-EXPRESS his previous answer. gpt-oss handled
+        # this inconsistently (sometimes a bare "sure", sometimes an empty reply
+        # → "Say that again?"), so we make the intent explicit against the history.
+        if _is_followup_directive(user_input) and _last_assistant_answer(self.history):
+            system += (
+                "\n\nFOLLOW-UP: this short message is NOT a new topic — it asks you "
+                "to redo YOUR PREVIOUS ANSWER with a change (a different language, "
+                "shorter, more detail, etc.). Reproduce that previous answer IN FULL, "
+                "transformed as asked. Do NOT merely acknowledge, and do NOT reply "
+                "with an empty or one-line message.")
+
         # â”€â”€ Multi-agent routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Detect intent type and append a specialized sub-prompt that sharpens
         # the brain's focus. This lets GIL behave like a specialist for that domain.
@@ -869,6 +921,23 @@ class GILBrain:
         except Exception:
             pass
         parsed = _parse_json(raw)
+
+        # A follow-up directive ("בעברית", "make it shorter") must not dead-end on
+        # an empty reply — gpt-oss intermittently emits only hidden reasoning with
+        # no content, which surfaced to the user as "Say that again?" and looked
+        # like GIL forgetting the conversation. Retry once; the empty is transient.
+        _empty = not (parsed.get("speech") or "").strip() \
+            and not (parsed.get("report") or "").strip() \
+            and not parsed.get("actions") and not parsed.get("action")
+        if (_empty and _retry < 2
+                and _is_followup_directive(user_input)
+                and _last_assistant_answer(self.history[:-1])):
+            if self.history and self.history[-1].get("role") == "user":
+                self.history.pop()             # drop this turn so the retry re-adds it
+            log.info("empty reply to a follow-up — retrying (%d)", _retry + 1)
+            return self.query(user_input, project_context=project_context,
+                              camera_state=camera_state, _retry=_retry + 1, mode=mode)
+
         # Store speech-only (not raw JSON) — cuts ~40% of every payload,
         # the root cause of the tokens-per-minute rate-limit failures.
         _speech_mem = parsed.get("speech") or raw[:200]

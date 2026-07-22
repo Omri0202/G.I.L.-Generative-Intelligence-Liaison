@@ -1437,15 +1437,26 @@ _NONCODE_SIGNALS = (
     " research ", "research on", "research about", " look up ", " google ",
     "search the web", "search the internet", " what is ", " what are ",
     " what's ", " what was", " what were", " who is ", " who was", " who were",
-    " when did", " when was",
-    " where is", " where are", "tell me about", " weather", " the news",
+    " when did", " when was", " where is", " where are", "tell me about",
+    " info about", " info on", "give me info", " weather", " the news",
     "write a poem", "write a story", "write a song", "write me a poem",
-    " translate ", " recipe", "history of", "facts about", "information about",
-    "meaning of", " capital of",
+    " translate ", " in hebrew", " in spanish", " in french", " recipe",
+    "history of", "facts about", "information about", "meaning of", " capital of",
     # NOTE: deliberately NOT "why does" / "how do" / "how many" — in a developer
     # terminal those overwhelmingly introduce debugging questions ("why does the
     # stop button not work"), so they stay coding by default.
 )
+
+
+def _mostly_non_ascii(t: str) -> bool:
+    """True if the message is largely non-Latin script (Hebrew, Arabic, Cyrillic,
+    CJK…). Source code and dev requests are ASCII, so this is natural language —
+    e.g. a bare 'בעברית' has no English signal and must not default to coding."""
+    letters = [c for c in t if c.isalpha()]
+    if not letters:
+        return False
+    non_ascii = sum(1 for c in letters if ord(c) > 127)
+    return non_ascii / len(letters) > 0.4
 
 
 def is_coding_task(task: str) -> bool:
@@ -1458,6 +1469,8 @@ def is_coding_task(task: str) -> bool:
     t = " " + (task or "").lower().strip() + " "
     if any(s in t for s in _CODE_SIGNALS):
         return True
+    if _mostly_non_ascii(t):
+        return False            # non-Latin natural language → the brain, not code
     if any(s in t for s in _NONCODE_SIGNALS):
         return False
     return True                 # ambiguous → they ARE in codemode, treat as code

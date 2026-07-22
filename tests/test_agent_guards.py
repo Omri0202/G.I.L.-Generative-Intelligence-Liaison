@@ -422,3 +422,18 @@ def test_is_coding_task_defaults_to_coding_when_ambiguous():
     # they explicitly entered the developer terminal — no signal either way stays code
     assert ca.is_coding_task("make the thing better") is True
     assert ca.is_coding_task("") is True
+
+
+def test_is_coding_task_routes_non_latin_natural_language_to_the_brain():
+    # a Hebrew message has no English signal and must not default to coding —
+    # this is the exact case ("בעברית") that still hit the code agent
+    for t in ("בעברית", "תכתוב בעברית", "מה זה לוויתן", "ספר לי על לווייתנים"):
+        assert ca.is_coding_task(t) is False, t
+    # …unless it explicitly names code — a Hebrew bug report about main.py stays code
+    assert ca.is_coding_task("תקן את הבאג ב main.py") is True
+
+
+def test_is_coding_task_catches_info_and_lookup_phrasings():
+    for t in ("info about whales", "give me info on sharks",
+              "translate that to spanish"):
+        assert ca.is_coding_task(t) is False, t
