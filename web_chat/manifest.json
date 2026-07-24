@@ -1,0 +1,14 @@
+{
+  "name": "G.I.L.",
+  "short_name": "GIL",
+  "description": "Generative Intelligence Liaison",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#15161B",
+  "background_color": "#15161B",
+  "icons": [
+    { "src": "/gil_icon.png", "sizes": "256x256", "type": "image/png", "purpose": "any" },
+    { "src": "/gil_icon.png", "sizes": "128x128", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.ico", "sizes": "16x16 32x32 48x48 256x256", "type": "image/x-icon" }
+  ]
+}

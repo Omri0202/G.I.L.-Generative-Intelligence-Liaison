@@ -85,6 +85,10 @@ class WebChat:
             _png_bytes = (_icon_dir / "gil_icon.png").read_bytes()
         except Exception:
             _png_bytes = b""
+        try:
+            _manifest_bytes = (_icon_dir / "manifest.json").read_bytes()
+        except Exception:
+            _manifest_bytes = b""
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence console spam
@@ -119,6 +123,14 @@ class WebChat:
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
                     self.wfile.write(_png_bytes)
+                elif self.path.startswith("/manifest.json"):
+                    if not _manifest_bytes:
+                        self.send_response(404); self.end_headers(); return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/manifest+json")
+                    self.send_header("Content-Length", str(len(_manifest_bytes)))
+                    self.end_headers()
+                    self.wfile.write(_manifest_bytes)
                 elif self.path == "/events":
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
@@ -188,6 +200,17 @@ class WebChat:
         ):
             try:
                 data_dir = Path(__file__).parent / "data" / "_web_profile"
+                # Chromium caches an --app window's TASKBAR icon in the profile's
+                # "Web Applications" folder. This profile was first created before
+                # GIL served any icon, so it cached the Edge fallback. Clear that
+                # cache (icons only — safe, regenerated on demand) so Chromium
+                # re-derives GIL's icon from the manifest on this launch.
+                try:
+                    import shutil
+                    for wa in data_dir.rglob("Web Applications"):
+                        shutil.rmtree(wa, ignore_errors=True)
+                except Exception:
+                    pass
                 subprocess.Popen(
                     [exe, f"--app={url}", "--window-size=1180,860",
                      f"--user-data-dir={data_dir}",
