@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>G.I.L.</title>
+<!-- GIL's own mark (the ◈ diamond) as an inline favicon, so the Edge --app
+     window shows GIL's logo instead of a default/cached icon from another app. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%23191A21'/%3E%3Cpath%20d='M16%204.4L27.6%2016%2016%2027.6%204.4%2016Z'%20fill='none'%20stroke='%2358C4DD'%20stroke-width='2.2'%20stroke-linejoin='round'/%3E%3Cpath%20d='M16%2010.4L21.6%2016%2016%2021.6%2010.4%2016Z'%20fill='%2358C4DD'/%3E%3C/svg%3E">
 <style>
 /* ═══════════ G.I.L. 4.0 — web-rendered chat ═══════════ */
 :root, [data-theme="dark"] {
@@ -827,8 +830,8 @@ body.codemode #pins { max-width:none; font-family:var(--cmfont); }
   font-variant-numeric:tabular-nums; }
 #box {
   max-width:820px; margin:0 auto; background:var(--input);
-  border:1px solid var(--border); border-radius:18px; padding:6px 8px 6px 18px;
-  display:flex; align-items:flex-end; gap:8px;
+  border:1px solid var(--border); border-radius:18px; padding:6px 8px;
+  display:flex; align-items:flex-end; gap:6px;
   transition:border-color .2s, box-shadow .2s;
   box-shadow:0 2px 14px var(--shadow);
 }
@@ -847,6 +850,28 @@ body.codemode #pins { max-width:none; font-family:var(--cmfont); }
 }
 #send.ready { opacity:1; }
 #send.ready:hover { transform:translateY(-2px) scale(1.05); }
+/* while GIL is working, the round send arrow becomes a stop square (click = stop) */
+#send.stop { opacity:1; background:var(--accent); color:var(--page); border-radius:9px;
+  font-size:12px; cursor:pointer; }
+#send.stop:hover { filter:brightness(1.08); transform:none; }
+/* paperclip attach button (photos + files) */
+#attach { width:32px; height:32px; border-radius:50%; flex-shrink:0; margin-bottom:5px;
+  display:flex; align-items:center; justify-content:center; color:var(--muted);
+  background:none; border:none; cursor:pointer; transition:color .15s, background .15s; }
+#attach:hover { color:var(--accent); background:var(--hover); }
+#attach svg { width:19px; height:19px; }
+body.codemode #attach { display:none; }   /* codemode uses @file for project files */
+/* drag-and-drop overlay over the chat */
+#dropzone { display:none; position:absolute; inset:0; z-index:60; align-items:center;
+  justify-content:center; background:rgba(20,22,30,.82); backdrop-filter:blur(3px);
+  border:2px dashed var(--accent); border-radius:12px; margin:10px; }
+#dropzone.on { display:flex; }
+#dropzone .dzinner { display:flex; flex-direction:column; align-items:center; gap:12px;
+  color:var(--txt); font-size:16px; font-weight:600; text-align:center; pointer-events:none; }
+#dropzone .dzinner span { color:var(--muted); font-size:13px; font-weight:400; }
+#dropzone .dzicon { width:56px; height:56px; border-radius:50%; display:flex;
+  align-items:center; justify-content:center; font-size:30px; color:var(--accent);
+  border:2px solid var(--accent); background:rgba(88,196,221,.12); }
 #hint { max-width:820px; margin:7px auto 0; text-align:center; font-size:11px;
   color:var(--muted); }
 </style>
@@ -890,12 +915,19 @@ body.codemode #pins { max-width:none; font-family:var(--cmfont); }
       <div id="atmenu"></div>
       <div id="pins"></div>
       <div id="box">
+        <button id="attach" title="Attach a photo or file" onclick="$('fileinp').click()"></button>
+        <input id="fileinp" type="file" multiple
+          accept="image/*,.txt,.md,.py,.js,.ts,.json,.csv,.html,.css,.log,.yml,.yaml"
+          style="display:none">
         <textarea id="inp" rows="1" spellcheck="true"
           placeholder="Message G.I.L.  —  Enter sends, Shift+Enter for a new line, / for commands"></textarea>
-        <button id="send" onclick="gil.send()">↑</button>
+        <button id="send" onclick="gil.sendOrStop()">↑</button>
       </div>
       <div id="hint">Type <b>/</b> for commands · <b>@</b> to attach a file · G.I.L. shows every tool he uses, live.</div>
     </div>
+    <!-- drag-and-drop a photo or file anywhere over the chat -->
+    <div id="dropzone"><div class="dzinner"><div class="dzicon">＋</div>
+      <div>Drop a photo or file<br><span>GIL will read it</span></div></div></div>
   </div>
 </div>
 
@@ -1080,6 +1112,7 @@ const _P = {
   trash:  '<line x1="4.5" y1="7" x2="19.5" y2="7"/><path d="M6.5 7l1 13h9l1-13"/><path d="M9.5 7V4h5v3"/><line x1="10.5" y1="10.5" x2="10.5" y2="16.5"/><line x1="13.5" y1="10.5" x2="13.5" y2="16.5"/>',
   copy:   '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M4 15.5V5a1 1 0 0 1 1-1h10.5"/>',
   chev:   '<polyline points="9 6 15 12 9 18"/>',
+  clip:   '<path d="M20 11.5l-8.4 8.4a4.5 4.5 0 0 1-6.4-6.4l8.6-8.6a3 3 0 0 1 4.3 4.3l-8.6 8.6a1.5 1.5 0 0 1-2.2-2.2l7.9-7.9"/>',
 };
 function svg(name, size) {
   return `<svg width="${size||14}" height="${size||14}" viewBox="0 0 24 24" fill="none" ` +
@@ -1216,12 +1249,34 @@ const gil = {
     nextBlock();
   },
 
-  showTyping() { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); scrollDown(true); },
+  showTyping() { $("welcome").style.display="none"; $("typing").classList.add("on"); this.startTimer(); this.updateSendButton(); scrollDown(true); },
   hideTyping() {
     // While an agent is working, the spinner + timer stay pinned to the bottom
     // even as narration/tool blocks stream in (each of those calls hideTyping).
     if (!this._working) $("typing").classList.remove("on");
+    this.updateSendButton();
     this.scheduleStop();
+  },
+  /* the round send arrow ⇄ a stop square, driven by whether GIL is busy. In the
+     regular chat there was no way to see (or interrupt) that GIL is working. */
+  updateSendButton() {
+    if (document.body.classList.contains("codemode")) return;  // codemode owns its own label
+    const b = $("send"); if (!b) return;
+    const busy = this.busy();
+    b.classList.toggle("stop", busy);
+    b.textContent = busy ? "■" : "↑";
+    b.title = busy ? "Stop" : "";
+  },
+  stopChat() {
+    // best-effort: silence speech / halt an autonomous run, and settle the UI.
+    // (A plain brain reply can't be cancelled mid-flight, but the square must do
+    // something and stop the perpetual "working" look.)
+    api("stop_task");
+    this._working = false;
+    document.body.classList.remove("working");
+    $("typing").classList.remove("on");
+    this.stopTimer && this.stopTimer();
+    this.updateSendButton();
   },
   // sticky working state — Python raises it for the whole coding-agent run
   _working: false,
@@ -1237,6 +1292,7 @@ const gil = {
         notifyDone("Finished in " + Math.round((Date.now()-this._workStart)/1000) + "s — click to view.");
       this._workStart = 0;
     }
+    this.updateSendButton();
     this.updateDiag();   // refresh the live status/task telemetry
   },
   clearShimmer() {
@@ -1859,6 +1915,11 @@ const gil = {
   },
   setVersion(v) { $("ver").textContent = "G.I.L. v" + v; },
 
+  // the send button: stop when it's showing the square, otherwise send.
+  sendOrStop() {
+    if (this.busy() && !document.body.classList.contains("codemode")) return this.stopChat();
+    this.send();
+  },
   send() {
     const t = $("inp").value.trim();
     if (!t) return;
@@ -2152,11 +2213,63 @@ const gil = {
   },
   jumpDown() { const sc = $("scroll"); sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
     setTimeout(updateJump, 380); },
+
+  /* ---- attach a photo or file (drop / paste / paperclip) ---- */
+  attachFiles(files) {
+    const list = Array.from(files || []).slice(0, 6);
+    if (!list.length) return;
+    let text = $("inp").value.trim();     // typed text becomes the question for it
+    if (text) { $("inp").value = ""; this.grow(); }
+    list.forEach((f, i) => {
+      if (f.size > 12 * 1024 * 1024) {
+        this.addMessage({sender: "gil", text: `**${f.name}** is too big (max ~12 MB).`});
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        this.showTyping();
+        api("attach", f.name, reader.result, i === 0 ? text : "");
+      };
+      reader.readAsDataURL(f);
+    });
+  },
 };
 window.gil = gil;
 
 /* jump-to-latest pill: reveal it whenever the user scrolls away from the bottom */
 $("scroll").addEventListener("scroll", updateJump, { passive: true });
+
+/* ═══════════ attach: paperclip · drag-drop · paste ═══════════ */
+$("attach").innerHTML = svg("clip", 19);
+$("fileinp").addEventListener("change", e => {
+  gil.attachFiles(e.target.files);
+  e.target.value = "";            // let the same file be picked again later
+});
+(function () {
+  const zone = $("main"), dz = $("dropzone");
+  let depth = 0;                  // counter so nested dragenter/leave don't flicker
+  const hasFiles = e => e.dataTransfer &&
+    Array.from(e.dataTransfer.types || []).includes("Files");
+  zone.addEventListener("dragenter", e => {
+    if (!hasFiles(e)) return; e.preventDefault(); depth++; dz.classList.add("on");
+  });
+  zone.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+  zone.addEventListener("dragleave", e => {
+    if (!hasFiles(e)) return; if (--depth <= 0) { depth = 0; dz.classList.remove("on"); }
+  });
+  zone.addEventListener("drop", e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; dz.classList.remove("on");
+    gil.attachFiles(e.dataTransfer.files);
+  });
+})();
+/* paste an image straight from the clipboard */
+$("inp").addEventListener("paste", e => {
+  const imgs = Array.from(e.clipboardData?.items || [])
+    .filter(it => it.type && it.type.startsWith("image/"))
+    .map(it => it.getAsFile()).filter(Boolean);
+  if (imgs.length) { e.preventDefault(); gil.attachFiles(imgs); }
+});
 
 /* ═══════════ input wiring ═══════════ */
 $("inp").addEventListener("input", () => { gil.grow(); gil.slashUpdate(); gil.atUpdate(); });

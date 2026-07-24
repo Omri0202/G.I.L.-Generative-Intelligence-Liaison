@@ -264,6 +264,87 @@ class WebChat:
                 pass
         self._push("gil.hideTyping")
 
+    # ── file / photo attachment (drag-drop, paste, or the paperclip) ──────────
+    _IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
+
+    def _rpc_attach(self, name="", data="", text=""):
+        """Receive a dropped/pasted/picked file. `data` is a data-URL or raw
+        base64. Images go to the vision model; text files become context for the
+        brain. Returns quickly; the answer streams in on a worker thread."""
+        import re
+        try:
+            raw = base64.b64decode((data or "").split(",", 1)[-1])
+        except Exception:
+            return {"ok": False, "error": "I couldn't read that file."}
+        if not raw:
+            return {"ok": False, "error": "That file was empty."}
+        if len(raw) > 12_000_000:
+            return {"ok": False, "error": "That file is too big (max ~12 MB)."}
+        try:
+            updir = Path(__file__).parent / "data" / "uploads"
+            updir.mkdir(parents=True, exist_ok=True)
+            safe = re.sub(r"[^\w.\-]", "_", name or "file")[:80] or "file"
+            path = updir / f"{int(time.time() * 1000)}_{safe}"
+            path.write_bytes(raw)
+        except Exception:
+            return {"ok": False, "error": "I couldn't save that file."}
+        is_image = path.suffix.lower() in self._IMG_EXT
+        if is_image:
+            self.add_image_message(str(path))       # thumbnail preview in chat
+        else:
+            self.add_message(f"📎 attached **{safe}**", "user")
+        threading.Thread(target=self._attach_pipeline,
+                         args=(str(path), text or "", is_image),
+                         daemon=True, name="GIL-Attach").start()
+        return {"ok": True, "image": is_image}
+
+    def _attach_pipeline(self, path, text, is_image):
+        """Off-thread: read the attachment and answer. An image is answered by the
+        vision model directly (so 'what does this say?' works); a text file is
+        handed to the brain as context."""
+        self._push("gil.showTyping")
+        try:
+            if is_image:
+                import vision_model
+                from PIL import Image
+                img = vision_model.fit_for_send(Image.open(path))
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=82)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                q = text.strip() or ("Describe this image. If it shows an error, "
+                                     "code, a document or handwriting, quote the "
+                                     "important text exactly.")
+                ok, reading, err = vision_model.chat(
+                    vision_model.image_message(q, b64), max_tokens=1400, timeout=45)
+                self._push("gil.hideTyping")
+                if ok:
+                    self.add_message(reading, "gil")
+                else:
+                    self.add_message(f"I couldn't read that image — {err}.", "gil")
+                return
+            # text file → brain context (the brain is text-only, so this is ideal)
+            try:
+                content = Path(path).read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                content = ""
+            if not content.strip():
+                self._push("gil.hideTyping")
+                self.add_message("That file doesn't look like readable text.", "gil")
+                return
+            ext = Path(path).suffix.lstrip(".")
+            msg = (f"[The user attached the file `{Path(path).name}`. Its contents:]\n"
+                   f"```{ext}\n{content[:12000]}\n```\n\n---\n\n"
+                   + (text.strip() or "Take a look at this file."))
+            fn = getattr(self._gil_window, "_chat_send_fn", None)
+            if fn:
+                threading.Thread(target=fn, args=(msg,), daemon=True,
+                                 name="GIL-AttachSend").start()
+            else:
+                self._push("gil.hideTyping")
+        except Exception:
+            self._push("gil.hideTyping")
+            self.add_message("I couldn't process that attachment.", "gil")
+
     def _rpc_stop_subagent(self, aid=0):
         """Stop button on a background sub-agent row (Feature #10)."""
         try:
