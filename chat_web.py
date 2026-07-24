@@ -73,6 +73,18 @@ class WebChat:
     def _start_server(self) -> None:
         chat = self
         html = _HTML_FILE.read_text(encoding="utf-8")
+        # GIL's app icon — Chromium's --app window uses the page's favicon for the
+        # TASKBAR icon, but only if it can actually fetch one; a data: URI isn't
+        # enough. Serve the real .ico/.png so the taskbar shows GIL, not Edge.
+        _icon_dir = _HTML_FILE.parent
+        try:
+            _ico_bytes = (_icon_dir / "gil_icon.ico").read_bytes()
+        except Exception:
+            _ico_bytes = b""
+        try:
+            _png_bytes = (_icon_dir / "gil_icon.png").read_bytes()
+        except Exception:
+            _png_bytes = b""
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence console spam
@@ -89,6 +101,24 @@ class WebChat:
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
+                elif self.path.startswith("/favicon.ico") or self.path.startswith("/gil_icon.ico"):
+                    if not _ico_bytes:
+                        self.send_response(404); self.end_headers(); return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/x-icon")
+                    self.send_header("Content-Length", str(len(_ico_bytes)))
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(_ico_bytes)
+                elif self.path.startswith("/gil_icon.png"):
+                    if not _png_bytes:
+                        self.send_response(404); self.end_headers(); return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(_png_bytes)))
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(_png_bytes)
                 elif self.path == "/events":
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")

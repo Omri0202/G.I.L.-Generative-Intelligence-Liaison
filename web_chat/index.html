@@ -3,9 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <title>G.I.L.</title>
-<!-- GIL's own mark (the ◈ diamond) as an inline favicon, so the Edge --app
-     window shows GIL's logo instead of a default/cached icon from another app. -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%23191A21'/%3E%3Cpath%20d='M16%204.4L27.6%2016%2016%2027.6%204.4%2016Z'%20fill='none'%20stroke='%2358C4DD'%20stroke-width='2.2'%20stroke-linejoin='round'/%3E%3Cpath%20d='M16%2010.4L21.6%2016%2016%2021.6%2010.4%2016Z'%20fill='%2358C4DD'/%3E%3C/svg%3E">
+<!-- GIL's own mark (the ◈ diamond). Chromium's --app window uses these for the
+     TASKBAR icon, but it must be able to FETCH a real icon — a data: URI isn't
+     enough — so the local server serves gil_icon.ico / .png at these paths. -->
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="256x256" href="/gil_icon.png">
+<link rel="shortcut icon" href="/favicon.ico">
 <style>
 /* ═══════════ G.I.L. 4.0 — web-rendered chat ═══════════ */
 :root, [data-theme="dark"] {
