@@ -126,14 +126,17 @@ class WebChat:
             def do_GET(self):
                 if not self._authorized():
                     return self._deny()
-                if self.path == "/" or self.path.startswith("/index"):
+                # route on the path WITHOUT the query — a phone loads "/?t=token"
+                # and connects SSE to "/events?t=token", which must still match.
+                route = self.path.split("?", 1)[0]
+                if route == "/" or route.startswith("/index"):
                     body = html.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
-                elif self.path.startswith("/favicon.ico") or self.path.startswith("/gil_icon.ico"):
+                elif route.startswith("/favicon.ico") or route.startswith("/gil_icon.ico"):
                     if not _ico_bytes:
                         self.send_response(404); self.end_headers(); return
                     self.send_response(200)
@@ -142,7 +145,7 @@ class WebChat:
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
                     self.wfile.write(_ico_bytes)
-                elif self.path.startswith("/gil_icon.png"):
+                elif route.startswith("/gil_icon.png"):
                     if not _png_bytes:
                         self.send_response(404); self.end_headers(); return
                     self.send_response(200)
@@ -151,7 +154,7 @@ class WebChat:
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
                     self.wfile.write(_png_bytes)
-                elif self.path.startswith("/manifest.json"):
+                elif route.startswith("/manifest.json"):
                     if not _manifest_bytes:
                         self.send_response(404); self.end_headers(); return
                     self.send_response(200)
@@ -159,7 +162,7 @@ class WebChat:
                     self.send_header("Content-Length", str(len(_manifest_bytes)))
                     self.end_headers()
                     self.wfile.write(_manifest_bytes)
-                elif self.path == "/events":
+                elif route == "/events":
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
@@ -209,6 +212,9 @@ class WebChat:
                 self.end_headers()
                 self.wfile.write(body)
 
+        # Keep the handler so the server can be restarted on a different network
+        # interface when the user pairs a phone (localhost-only until then).
+        self._Handler = Handler
         try:
             self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
             self._port = self._httpd.server_address[1]
@@ -218,6 +224,44 @@ class WebChat:
         except Exception:
             log.error("web chat server failed to start", exc_info=True)
             self._port = 0
+
+    def _rebind(self, host: str) -> None:
+        """Restart the HTTP server on `host` (same port). '127.0.0.1' = local only;
+        '0.0.0.0' = reachable from the LAN (for a paired phone). Runs off the
+        request thread; existing SSE clients auto-reconnect after the swap."""
+        try:
+            old = self._httpd
+            if old is not None:
+                old.shutdown()
+                old.server_close()
+            srv = ThreadingHTTPServer((host, self._port), self._Handler)
+            self._httpd = srv
+            threading.Thread(target=srv.serve_forever, daemon=True,
+                             name="GIL-WebChatHTTP").start()
+            log.info("web chat rebound to %s:%d", host, self._port)
+        except Exception:
+            log.error("web chat rebind to %s failed", host, exc_info=True)
+
+    def enable_lan(self) -> None:
+        """Open GIL to the local network so a paired phone can connect. Deferred
+        ~1s so the QR card and the command's own response flush first (the rebind
+        drops in-flight connections). Non-localhost requests still need the token."""
+        if getattr(self, "_lan_active", False):
+            return
+        self._lan_active = True
+
+        def _go():
+            time.sleep(1.2)
+            self._rebind("0.0.0.0")
+        threading.Thread(target=_go, daemon=True).start()
+
+    def disable_lan(self) -> None:
+        """Close network access — back to localhost only, and forget the token."""
+        self._lan_active = False
+        self._mobile_enabled = False
+        self._mobile_token = ""
+        threading.Thread(target=lambda: self._rebind("127.0.0.1"),
+                         daemon=True).start()
 
     def _launch_window(self) -> None:
         url = f"http://127.0.0.1:{self._port}/"
@@ -636,34 +680,32 @@ class WebChat:
             return
 
         if name in ("mobile", "phone", "pair"):
-            # GIL for mobile: pair a phone over the LAN. Mint a token, flip mobile
-            # access on, and show the URL + QR to scan. (The server must be bound
-            # to the network for the phone to actually connect — see _start_server.)
             import mobile as _mob
+            if arg.lower().strip() in ("off", "stop", "disable"):
+                self.disable_lan()
+                self.add_message("**Phone access off.** GIL is back to this PC only, "
+                                 "and the old pairing link no longer works.", "gil")
+                return
+            # Pair a phone: mint a token, open a token-gated LAN listener (opt-in),
+            # and show the URL + QR to scan.
             if not self._mobile_token:
                 self._mobile_token = _mob.make_token()
             self._mobile_enabled = True
             ip = _mob.lan_ip()
             url = _mob.pairing_url(ip, self._port, self._mobile_token)
             qr = _mob.qr_svg(url)
-            lan_bound = False
-            try:
-                lan_bound = self._httpd.server_address[0] not in ("127.0.0.1", "localhost")
-            except Exception:
-                pass
+            self.enable_lan()          # opens the LAN listener ~1s later
             self._push("gil.mobilePairing", {"url": url, "qr": qr, "ip": ip,
-                                             "port": self._port, "lan": lan_bound})
-            msg = ("**GIL on your phone** 📱\n\nScan this with your phone's camera "
-                   "(the phone must be on the **same Wi-Fi**). It opens GIL's chat "
-                   "in your mobile browser — tap **Share → Add to Home Screen** to "
-                   "keep it like an app.\n\n"
-                   f"Or open: `{url}`\n\n_The link carries a private pairing key; "
-                   "anyone with it can talk to your GIL, so don't share it._")
-            if not lan_bound:
-                msg += ("\n\n⚠️ **Network access is off** — GIL is currently only "
-                        "reachable from this PC. Enable phone access in settings for "
-                        "the link to work.")
-            self.add_message(msg, "gil")
+                                             "port": self._port, "lan": True})
+            self.add_message(
+                "**GIL on your phone** 📱\n\nScan this with your phone's camera — the "
+                "phone must be on the **same Wi-Fi**. It opens GIL's chat in your "
+                "mobile browser; tap **Share → Add to Home Screen** to keep it like "
+                "an app.\n\n"
+                f"Or open: `{url}`\n\n"
+                "_The link holds a private pairing key — anyone with it can talk to "
+                "your GIL, so keep it to yourself. Run `/mobile off` to close phone "
+                "access._", "gil")
             return
 
         if name in ("compact", "compress"):
