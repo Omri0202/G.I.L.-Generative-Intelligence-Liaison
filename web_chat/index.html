@@ -973,6 +973,7 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
     <div id="topbar">
       <button id="menutoggle" title="Menu" onclick="gil.toggleNav()"></button>
       <div id="title">New conversation</div>
+      <button class="iconbtn" id="installbtn" title="Install G.I.L. as an app" onclick="gil.installApp()" style="display:none"></button>
       <button class="iconbtn" id="voicebtn" title="Voice on/off" onclick="api('toggle_voice')"></button>
       <button class="iconbtn" id="themebtn" title="Theme" onclick="gil.toggleTheme()"></button>
     </div>
@@ -1214,6 +1215,7 @@ const _P = {
   chev:   '<polyline points="9 6 15 12 9 18"/>',
   clip:   '<path d="M20 11.5l-8.4 8.4a4.5 4.5 0 0 1-6.4-6.4l8.6-8.6a3 3 0 0 1 4.3 4.3l-8.6 8.6a1.5 1.5 0 0 1-2.2-2.2l7.9-7.9"/>',
   menu:   '<line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>',
+  install:'<path d="M12 3v11"/><polyline points="7 10 12 15 17 10"/><path d="M5 20h14"/>',
 };
 function svg(name, size) {
   return `<svg width="${size||14}" height="${size||14}" viewBox="0 0 24 24" fill="none" ` +
@@ -2338,6 +2340,23 @@ const gil = {
     document.body.classList.toggle("navopen", open);
   },
 
+  /* ---- PWA: install GIL as a real standalone app ---- */
+  showInstall() { const b = $("installbtn"); if (b) b.style.display = "flex"; },
+  hideInstall() { const b = $("installbtn"); if (b) b.style.display = "none"; },
+  async installApp() {
+    if (!window._gilInstall) {
+      this.addMessage({sender: "gil", text:
+        "To install me as an app: open this page in a normal browser tab " +
+        "(not a private window), then use the browser menu → **Install G.I.L.** " +
+        "On a phone, use **Share → Add to Home Screen**."});
+      return;
+    }
+    window._gilInstall.prompt();
+    try { await window._gilInstall.userChoice; } catch (e) {}
+    window._gilInstall = null;
+    this.hideInstall();
+  },
+
   /* ---- attach a photo or file (drop / paste / paperclip) ---- */
   attachFiles(files) {
     const list = Array.from(files || []).slice(0, 6);
@@ -2366,6 +2385,35 @@ $("scroll").addEventListener("scroll", updateJump, { passive: true });
 /* ═══════════ attach: paperclip · drag-drop · paste ═══════════ */
 $("attach").innerHTML = svg("clip", 19);
 $("menutoggle").innerHTML = svg("menu", 22);   // mobile hamburger
+$("installbtn").innerHTML = svg("install", 18);
+
+/* ═══════════ PWA: real installable app ═══════════ */
+(function () {
+  // A service worker is required before a browser will offer "Install". It only
+  // registers in a secure context (https or localhost), which is exactly the
+  // desktop case — a phone over plain http:// falls back to "Add to Home Screen".
+  const secure = location.protocol === "https:" ||
+    ["localhost", "127.0.0.1"].includes(location.hostname);
+  if ("serviceWorker" in navigator && secure) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+  // The installed app launches at start_url "/?app=gil"; the desktop --app window
+  // and normal tabs don't carry that marker. Offer "Install" everywhere EXCEPT
+  // when we're already running as the installed app.
+  const isInstalledApp = new URLSearchParams(location.search).get("app") === "gil";
+  if (!isInstalledApp) gil.showInstall();
+  // Chromium fires this in a normal tab when GIL meets the install criteria —
+  // capture it so the button does a one-tap install (elsewhere it shows how-to).
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    window._gilInstall = e;
+    gil.showInstall();
+  });
+  window.addEventListener("appinstalled", () => {
+    window._gilInstall = null;
+    gil.hideInstall();
+  });
+})();
 $("fileinp").addEventListener("change", e => {
   gil.attachFiles(e.target.files);
   e.target.value = "";            // let the same file be picked again later

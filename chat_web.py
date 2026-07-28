@@ -189,7 +189,27 @@ class WebChat:
                             if q in chat._clients:
                                 chat._clients.remove(q)
                 else:
-                    self.send_response(404); self.end_headers()
+                    # static assets from web_chat/ (PWA icons, sw.js, …). Only a
+                    # whitelisted extension and a basename — no path traversal.
+                    import os as _os
+                    name = _os.path.basename(route)
+                    ext = _os.path.splitext(name)[1].lower()
+                    CT = {".png": "image/png", ".ico": "image/x-icon",
+                          ".js": "application/javascript",
+                          ".json": "application/json", ".svg": "image/svg+xml",
+                          ".css": "text/css",
+                          ".webmanifest": "application/manifest+json"}
+                    fp = _icon_dir / name
+                    if name and ext in CT and fp.is_file():
+                        data = fp.read_bytes()
+                        self.send_response(200)
+                        self.send_header("Content-Type", CT[ext])
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                        self.wfile.write(data)
+                    else:
+                        self.send_response(404); self.end_headers()
 
             def do_POST(self):
                 if not self._authorized():
@@ -215,15 +235,25 @@ class WebChat:
         # Keep the handler so the server can be restarted on a different network
         # interface when the user pairs a phone (localhost-only until then).
         self._Handler = Handler
-        try:
-            self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-            self._port = self._httpd.server_address[1]
-            threading.Thread(target=self._httpd.serve_forever, daemon=True,
-                             name="GIL-WebChatHTTP").start()
-            log.info("web chat serving on 127.0.0.1:%d", self._port)
-        except Exception:
-            log.error("web chat server failed to start", exc_info=True)
+        # A STABLE port matters now that GIL can be installed as a PWA: the
+        # installed app hard-codes host:port at install time, so a random port
+        # each launch would leave the icon pointing at a dead port. Prefer a
+        # fixed port, falling back through a few, then to an OS-assigned one.
+        self._httpd = None
+        for cand in (8731, 8732, 8733, 8734, 0):
+            try:
+                self._httpd = ThreadingHTTPServer(("127.0.0.1", cand), Handler)
+                break
+            except OSError:
+                continue
+        if self._httpd is None:
+            log.error("web chat server failed to start")
             self._port = 0
+            return
+        self._port = self._httpd.server_address[1]
+        threading.Thread(target=self._httpd.serve_forever, daemon=True,
+                         name="GIL-WebChatHTTP").start()
+        log.info("web chat serving on 127.0.0.1:%d", self._port)
 
     def _rebind(self, host: str) -> None:
         """Restart the HTTP server on `host` (same port). '127.0.0.1' = local only;

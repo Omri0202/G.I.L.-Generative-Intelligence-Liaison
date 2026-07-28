@@ -73,3 +73,32 @@ def test_qr_svg_empty_data_still_returns_svg_or_empty():
     # never raises; qrcode present → svg, absent → ""
     out = mobile.qr_svg("x")
     assert out == "" or out.startswith("<svg")
+
+
+# ── PWA installability (a "real app", not just add-to-home-screen) ────────────
+
+def test_manifest_meets_install_criteria():
+    import json
+    m = json.loads((Path(__file__).parent.parent / "web_chat" / "manifest.json")
+                   .read_text(encoding="utf-8"))
+    for field in ("name", "start_url", "display", "icons", "theme_color"):
+        assert field in m, field
+    assert m["display"] in ("standalone", "fullscreen", "minimal-ui")
+    sizes = {i["sizes"] for i in m["icons"]}
+    assert "192x192" in sizes and "512x512" in sizes   # Chromium's install bar
+    assert any(i.get("purpose") == "maskable" for i in m["icons"])
+
+
+def test_pwa_icon_files_exist_and_are_real_pngs():
+    wc = Path(__file__).parent.parent / "web_chat"
+    for name in ("gil_icon_192.png", "gil_icon_512.png", "gil_maskable_512.png"):
+        data = (wc / name).read_bytes()
+        assert data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) > 1000, name
+
+
+def test_service_worker_has_a_fetch_handler():
+    sw = (Path(__file__).parent.parent / "web_chat" / "sw.js").read_text(encoding="utf-8")
+    # a registered fetch handler is what makes the browser offer "Install"
+    assert 'addEventListener("fetch"' in sw
+    # …but it must never swallow the live API / SSE
+    assert "/api" in sw and "/events" in sw
