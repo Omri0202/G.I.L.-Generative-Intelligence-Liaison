@@ -20,8 +20,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Single-instance guard ─────────────────────────────────────────────────────
-_MUTEX = ctypes.windll.kernel32.CreateMutexW(None, True, "ProjectGIL_SingleInstance")
-if ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
+import sys
+
+if sys.platform == "win32":
+    import ctypes
+    _MUTEX = ctypes.windll.kernel32.CreateMutexW(None, True, "ProjectGIL_SingleInstance")
+else:
+    _MUTEX = Noneif ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
     ctypes.windll.user32.MessageBoxW(0, "G.I.L. is already running.", "G.I.L.", 0)
     sys.exit(0)
 
