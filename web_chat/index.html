@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="G.I.L.">
+<link rel="apple-touch-icon" href="/gil_icon.png">
 <title>G.I.L.</title>
 <!-- GIL's own mark (the ◈ diamond). Chromium's --app window uses these for the
      TASKBAR icon, but it must be able to FETCH a real icon — a data: URI isn't
@@ -881,10 +887,78 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
   border:2px solid var(--accent); background:rgba(88,196,221,.12); }
 #hint { max-width:820px; margin:7px auto 0; text-align:center; font-size:11px;
   color:var(--muted); }
+
+/* pairing card (the /mobile QR) */
+.mobilecard .mob { display:flex; gap:16px; align-items:center; flex-wrap:wrap;
+  background:var(--input); border:1px solid var(--border); border-radius:14px;
+  padding:14px 16px; max-width:520px; }
+.mobilecard .mobqr { width:150px; height:150px; flex-shrink:0; background:#fff;
+  border-radius:10px; padding:8px; }
+.mobilecard .mobqr svg { width:100%; height:100%; display:block; }
+.mobilecard .mobinfo { flex:1; min-width:180px; }
+.mobilecard .mobt { font-weight:700; color:var(--txt); margin-bottom:6px; }
+.mobilecard .mobu { font-family:var(--cmfont,monospace); font-size:12.5px;
+  color:var(--accent-cyan); word-break:break-all; margin-bottom:8px; }
+.mobilecard .mobhint { font-size:11.5px; color:var(--muted); }
+
+/* ═══════════ MOBILE — GIL for phone (responsive layout + touch) ═══════════ */
+#menutoggle { display:none; }
+#scrim { display:none; }
+@media (max-width: 760px) {
+  html, body { height:100%; overflow:hidden; }
+  /* the sidebar becomes an off-canvas drawer */
+  #sidebar {
+    position:fixed; top:0; left:0; bottom:0; z-index:50;
+    width:82vw; max-width:320px; min-width:0;
+    transform:translateX(-100%); transition:transform .25s ease;
+    box-shadow:2px 0 24px rgba(0,0,0,.5);
+    padding-top:env(safe-area-inset-top);
+  }
+  body.navopen #sidebar { transform:translateX(0); }
+  #scrim { position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.5);
+    opacity:0; pointer-events:none; transition:opacity .25s; }
+  body.navopen #scrim { display:block; opacity:1; pointer-events:auto; }
+  #main { width:100vw; }
+  /* hamburger in the top bar */
+  #topbar { padding-left:calc(8px + env(safe-area-inset-left));
+    padding-top:env(safe-area-inset-top); gap:8px; }
+  #menutoggle { display:flex; align-items:center; justify-content:center;
+    width:38px; height:38px; border-radius:10px; background:none; border:none;
+    color:var(--txt); cursor:pointer; flex-shrink:0; }
+  #menutoggle:active { background:var(--hover); }
+  #title { font-size:15px; }
+  /* full-bleed message column, comfortable touch targets */
+  #scroll { -webkit-overflow-scrolling:touch; }
+  #msgs { padding-left:12px; padding-right:12px; }
+  .msg { max-width:100% !important; }
+  #composer { padding:8px 10px calc(10px + env(safe-area-inset-bottom));
+    max-width:100%; }
+  #box { border-radius:22px; padding:5px 6px; }
+  #inp { font-size:16px; }        /* 16px stops iOS auto-zoom on focus */
+  #send, #attach { width:38px; height:38px; }   /* thumb-friendly */
+  #hint { display:none; }
+  #slashmenu, #atmenu, #pins { max-width:100%; }
+  #welcome { padding:0 18px; }
+  #welcome h1 { font-size:30px; }
+  #welcome .chips { flex-wrap:wrap; justify-content:center; }
+  /* overlays fill the small screen */
+  #vinspect, #shortcuts, #histsearch { padding:12px; }
+  .scpanel, .hspanel { width:96vw; max-width:96vw; }
+  #taskdrawer { left:8px; right:8px; width:auto; bottom:88px; }
+  /* codemode diagnostic row wraps instead of overflowing */
+  #cmdiag { flex-wrap:wrap; height:auto; padding:6px 12px; }
+  #cmdiag .diaghint { display:none; }
+}
+/* very small phones */
+@media (max-width: 380px) {
+  #welcome h1 { font-size:26px; }
+  #brand b { font-size:15px; }
+}
 </style>
 </head>
 <body data-theme="dark">
 <div id="app">
+  <div id="scrim" onclick="gil.toggleNav(false)"></div>
   <div id="sidebar">
     <div id="brand"><div class="gem">◈</div><b>G.I.L.</b></div>
     <input id="search" placeholder="Search conversations…" oninput="gil.filter(this.value)">
@@ -897,6 +971,7 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
   </div>
   <div id="main">
     <div id="topbar">
+      <button id="menutoggle" title="Menu" onclick="gil.toggleNav()"></button>
       <div id="title">New conversation</div>
       <button class="iconbtn" id="voicebtn" title="Voice on/off" onclick="api('toggle_voice')"></button>
       <button class="iconbtn" id="themebtn" title="Theme" onclick="gil.toggleTheme()"></button>
@@ -984,9 +1059,27 @@ function _fuzzy(text, q) {
   for (const c of q) { i = text.indexOf(c, i); if (i < 0) return false; i++; }
   return true;
 }
+/* Mobile pairing token: a phone opens the URL with ?t=<token>; we stash it and
+   send it with every request. Desktop (localhost) has no token and doesn't need
+   one — the server trusts localhost. */
+const GIL_TOKEN = (function () {
+  try {
+    const u = new URL(location.href);
+    let t = u.searchParams.get("t");
+    if (t) { localStorage.setItem("gil_token", t); }
+    else { t = localStorage.getItem("gil_token") || ""; }
+    if (u.searchParams.has("t")) {          // hide the token from the address bar
+      u.searchParams.delete("t");
+      history.replaceState(null, "", u.pathname + u.search + u.hash);
+    }
+    return t || "";
+  } catch (e) { return ""; }
+})();
 function api(method, ...args) {
+  const headers = {"Content-Type": "application/json"};
+  if (GIL_TOKEN) headers["X-GIL-Token"] = GIL_TOKEN;
   return fetch("/api", {
-    method: "POST", headers: {"Content-Type": "application/json"},
+    method: "POST", headers,
     body: JSON.stringify({method, args})
   }).then(r => r.json()).then(d => d.result).catch(() => null);
 }
@@ -1120,6 +1213,7 @@ const _P = {
   copy:   '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M4 15.5V5a1 1 0 0 1 1-1h10.5"/>',
   chev:   '<polyline points="9 6 15 12 9 18"/>',
   clip:   '<path d="M20 11.5l-8.4 8.4a4.5 4.5 0 0 1-6.4-6.4l8.6-8.6a3 3 0 0 1 4.3 4.3l-8.6 8.6a1.5 1.5 0 0 1-2.2-2.2l7.9-7.9"/>',
+  menu:   '<line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>',
 };
 function svg(name, size) {
   return `<svg width="${size||14}" height="${size||14}" viewBox="0 0 24 24" fill="none" ` +
@@ -1699,6 +1793,22 @@ const gil = {
     if (document.getElementById("taskdrawer")?.classList.contains("show"))
       this.updateTaskDrawer();
   },
+  /* GIL for mobile: a scannable QR card to pair a phone */
+  mobilePairing(info) {
+    if (!info) return;
+    this.hideTyping();
+    const d = document.createElement("div");
+    d.className = "msg gil mobilecard";
+    d.innerHTML =
+      `<div class="mob"><div class="mobqr">${info.qr || ""}</div>` +
+      `<div class="mobinfo">` +
+      `<div class="mobt">Scan to open G.I.L. on your phone</div>` +
+      `<div class="mobu">${esc(info.url || "")}</div>` +
+      `<div class="mobhint">Same Wi-Fi · this link holds a private key — keep it to yourself</div>` +
+      `</div></div>`;
+    $("msgs").insertBefore(d, $("typing"));
+    scrollDown(true);
+  },
   stopSub(id) {
     api("stop_subagent", id);
     this._subagents = (this._subagents || []).map(
@@ -1881,7 +1991,7 @@ const gil = {
         d.innerHTML = `<div class="t"></div><div class="p"></div><button class="del">${svg("trash", 13)}</button>`;
         d.querySelector(".t").textContent = s.name || "Conversation";
         d.querySelector(".p").textContent = s.preview || (s.msg_count + " messages");
-        d.onclick = () => api("open_session", s.id);
+        d.onclick = () => { api("open_session", s.id); gil.toggleNav(false); };
         d.querySelector(".del").onclick = ev => {
           ev.stopPropagation();
           if (confirm("Delete this conversation?")) api("delete_session", s.id);
@@ -2026,6 +2136,7 @@ const gil = {
     {cmd: "/undo",     desc: "Instantly roll back to the last checkpoint", kind: "meta"},
     {cmd: "/spawn",    desc: "Run a task in the background (read-only)",   kind: "arg"},
     {cmd: "/tasks",    desc: "Status of background tasks",                kind: "meta"},
+    {cmd: "/mobile",   desc: "Use GIL on your phone (scan a QR code)",    kind: "meta"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
     {cmd: "/clear",    desc: "Start a new conversation",                  kind: "meta"},
@@ -2221,6 +2332,12 @@ const gil = {
   jumpDown() { const sc = $("scroll"); sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
     setTimeout(updateJump, 380); },
 
+  /* ---- mobile: sidebar drawer ---- */
+  toggleNav(force) {
+    const open = (force === undefined) ? !document.body.classList.contains("navopen") : !!force;
+    document.body.classList.toggle("navopen", open);
+  },
+
   /* ---- attach a photo or file (drop / paste / paperclip) ---- */
   attachFiles(files) {
     const list = Array.from(files || []).slice(0, 6);
@@ -2248,6 +2365,7 @@ $("scroll").addEventListener("scroll", updateJump, { passive: true });
 
 /* ═══════════ attach: paperclip · drag-drop · paste ═══════════ */
 $("attach").innerHTML = svg("clip", 19);
+$("menutoggle").innerHTML = svg("menu", 22);   // mobile hamburger
 $("fileinp").addEventListener("change", e => {
   gil.attachFiles(e.target.files);
   e.target.value = "";            // let the same file be picked again later
@@ -2352,7 +2470,8 @@ document.addEventListener("keydown", (e) => {
 
 /* ═══════════ Python → browser push (Server-Sent Events) ═══════════ */
 (function connectSSE() {
-  const es = new EventSource("/events");
+  // EventSource can't set headers, so the token rides in the query string.
+  const es = new EventSource("/events" + (GIL_TOKEN ? "?t=" + encodeURIComponent(GIL_TOKEN) : ""));
   es.onmessage = ev => {
     try {
       const {fn, arg} = JSON.parse(ev.data);

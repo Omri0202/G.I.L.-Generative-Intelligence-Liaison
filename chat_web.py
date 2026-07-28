@@ -64,6 +64,11 @@ class WebChat:
         self._clients_lock = threading.Lock()
         self._httpd = None
         self._port = 0
+        # GIL-for-mobile: off until the user pairs a phone (/mobile). While off,
+        # non-localhost requests are refused outright; while on, they must carry
+        # the pairing token. The desktop window (localhost) is always trusted.
+        self._mobile_enabled = False
+        self._mobile_token = ""
         self._start_server()
         if self._port:
             self._launch_window()
@@ -97,7 +102,30 @@ class WebChat:
             def _cors(self):
                 self.send_header("Access-Control-Allow-Origin", "*")
 
+            def _authorized(self) -> bool:
+                """Localhost is always trusted (the desktop window). A remote
+                phone is allowed only once mobile is paired AND it presents the
+                token — as a header (RPC) or ?t= query (page load / SSE)."""
+                import mobile
+                tok = self.headers.get("X-GIL-Token", "")
+                if not tok and "?" in self.path:
+                    from urllib.parse import parse_qs, urlparse
+                    tok = (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
+                return mobile.authorized(self.client_address[0], tok,
+                                         chat._mobile_enabled, chat._mobile_token)
+
+            def _deny(self):
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                try:
+                    self.wfile.write(b"G.I.L. mobile is not paired. Run /mobile on the desktop.")
+                except Exception:
+                    pass
+
             def do_GET(self):
+                if not self._authorized():
+                    return self._deny()
                 if self.path == "/" or self.path.startswith("/index"):
                     body = html.encode("utf-8")
                     self.send_response(200)
@@ -161,6 +189,8 @@ class WebChat:
                     self.send_response(404); self.end_headers()
 
             def do_POST(self):
+                if not self._authorized():
+                    return self._deny()
                 if self.path != "/api":
                     self.send_response(404); self.end_headers(); return
                 n = int(self.headers.get("Content-Length", 0))
@@ -603,6 +633,37 @@ class WebChat:
                 return
             self._save_cfg("agent_approval_mode", mode)
             self.add_message(f"**Approval mode → `{mode}`** — {valid[mode]}.", "gil")
+            return
+
+        if name in ("mobile", "phone", "pair"):
+            # GIL for mobile: pair a phone over the LAN. Mint a token, flip mobile
+            # access on, and show the URL + QR to scan. (The server must be bound
+            # to the network for the phone to actually connect — see _start_server.)
+            import mobile as _mob
+            if not self._mobile_token:
+                self._mobile_token = _mob.make_token()
+            self._mobile_enabled = True
+            ip = _mob.lan_ip()
+            url = _mob.pairing_url(ip, self._port, self._mobile_token)
+            qr = _mob.qr_svg(url)
+            lan_bound = False
+            try:
+                lan_bound = self._httpd.server_address[0] not in ("127.0.0.1", "localhost")
+            except Exception:
+                pass
+            self._push("gil.mobilePairing", {"url": url, "qr": qr, "ip": ip,
+                                             "port": self._port, "lan": lan_bound})
+            msg = ("**GIL on your phone** 📱\n\nScan this with your phone's camera "
+                   "(the phone must be on the **same Wi-Fi**). It opens GIL's chat "
+                   "in your mobile browser — tap **Share → Add to Home Screen** to "
+                   "keep it like an app.\n\n"
+                   f"Or open: `{url}`\n\n_The link carries a private pairing key; "
+                   "anyone with it can talk to your GIL, so don't share it._")
+            if not lan_bound:
+                msg += ("\n\n⚠️ **Network access is off** — GIL is currently only "
+                        "reachable from this PC. Enable phone access in settings for "
+                        "the link to work.")
+            self.add_message(msg, "gil")
             return
 
         if name in ("compact", "compress"):
