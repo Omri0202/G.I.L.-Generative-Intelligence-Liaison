@@ -221,6 +221,26 @@ public class MainActivity extends AppCompatActivity {
                         if (a == null) continue;
                         final String name = a.optString("action", "");
                         final String target = a.optString("target", "");
+
+                        // picture generation runs HERE (not on the UI thread) —
+                        // it's a slow network call, and the result is a card in
+                        // the chat rather than a sentence
+                        if ("image".equalsIgnoreCase(name)) {
+                            pushGil("_Painting \"" + target + "\"… this takes a moment._");
+                            java.io.File img = GilImages.generate(this, target);
+                            if (img != null) {
+                                JSONObject card = new JSONObject()
+                                        .put("kind", "image")
+                                        .put("path", img.getAbsolutePath())
+                                        .put("thumb", "/img/" + img.getName());
+                                server.push("gil.richCard", card);
+                            } else {
+                                done.append(done.length() > 0 ? "\n" : "")
+                                    .append("The picture service didn't come back — try again.");
+                            }
+                            continue;
+                        }
+
                         final String[] out = new String[1];
                         runOnUiThread(() -> out[0] = actions.run(name, target));
                         Thread.sleep(120);          // let the UI thread finish

@@ -244,12 +244,18 @@ public class GilServer {
         try { if (socket != null) socket.close(); } catch (Exception ignored) {}
     }
 
-    /** Push an event to the UI — the Java side of GIL's `_push`. */
-    public void push(String method, Object payload) {
+    /**
+     * Push an event to the UI — the Java side of GIL's `_push`.
+     *
+     * The field names are part of the contract: the web UI destructures
+     * {fn, arg}. Anything else and every push is silently swallowed by its
+     * try/catch, which looks exactly like GIL never answering.
+     */
+    public void push(String fn, Object arg) {
         JSONObject msg = new JSONObject();
         try {
-            msg.put("method", method);
-            msg.put("payload", payload == null ? JSONObject.NULL : payload);
+            msg.put("fn", fn);
+            msg.put("arg", arg == null ? JSONObject.NULL : arg);
         } catch (Exception ignored) {}
         String line = msg.toString();
         for (LinkedBlockingQueue<String> q : clients) q.offer(line);
@@ -352,8 +358,29 @@ public class GilServer {
         }
     }
 
-    /** The web UI is bundled in assets/web/. */
+    /** The web UI is bundled in assets/web/; generated pictures live on disk. */
     private void serveAsset(String route, OutputStream out) throws Exception {
+        // pictures GIL made — served from the app's own storage so the chat can
+        // show them from the same origin, offline
+        if (route.startsWith("/img/")) {
+            String fname = new java.io.File(route).getName();
+            java.io.File f = new java.io.File(GilImages.imageDir(ctx), fname);
+            if (f.isFile()) {
+                byte[] data = new byte[(int) f.length()];
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                    int read = 0;
+                    while (read < data.length) {
+                        int n = fis.read(data, read, data.length - read);
+                        if (n < 0) break;
+                        read += n;
+                    }
+                }
+                send(out, "200 OK", "image/jpeg", data);
+            } else {
+                send(out, "404 Not Found", "text/plain", "no image".getBytes());
+            }
+            return;
+        }
         String name = route.equals("/") ? "index.html" : route.substring(1);
         if (name.isEmpty()) name = "index.html";
         AssetManager am = ctx.getAssets();
@@ -451,6 +478,9 @@ public class GilBrain {
       + "- share        -> text to share to another app\n"
       + "- copy         -> text to put on the clipboard\n"
       + "- settings     -> a settings screen (\"wifi\", \"bluetooth\", \"display\")\n"
+      + "- image        -> a vivid description of a picture to CREATE. Use this "
+      + "whenever the user asks you to draw/generate/make an image — never "
+      + "web_search for a picture, you can actually make one.\n"
       + "\nYOUR FILES (Documents, Downloads, Photos — paths are relative, e.g.\n"
       + "\"Documents/cv.pdf\"):\n"
       + "- list_files   -> a folder to list (\"\" for the top level)\n"
@@ -1007,6 +1037,70 @@ public class GilFiles {
 }
 """.lstrip())
 
+# ═════════════════════════════════════════════════════════════════════ images ══
+w(PKG / "GilImages.java", r"""
+package com.gil.app;
+
+import android.content.Context;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.util.Random;
+
+/**
+ * Picture generation, same provider desktop GIL uses (Pollinations) — free and
+ * keyless, so it needs no extra setup on the phone.
+ *
+ * The file is saved into the app's own pictures dir and served back through
+ * GilServer, so the chat can display it from the same origin and it survives
+ * offline.
+ */
+public class GilImages {
+
+    private static final Random RAND = new Random();
+
+    /** Generate and save; returns the saved file, or null on failure. */
+    public static File generate(Context ctx, String prompt) {
+        try {
+            String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
+            int seed = 1 + RAND.nextInt(99_999);
+            String url = "https://image.pollinations.ai/prompt/" + encoded
+                    + "?width=1024&height=1024&seed=" + seed
+                    + "&model=flux&enhance=true&nologo=true";
+
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(20000);
+            c.setReadTimeout(120000);          // generation genuinely takes a while
+            c.setInstanceFollowRedirects(true);
+            // the provider 403s some default library user-agents, so be explicit
+            c.setRequestProperty("User-Agent", "GIL-Android/1.0");
+            if (c.getResponseCode() != 200) return null;
+
+            File dir = imageDir(ctx);
+            if (!dir.exists() && !dir.mkdirs()) return null;
+            File out = new File(dir, "gil_" + System.currentTimeMillis() + ".jpg");
+            try (InputStream in = c.getInputStream();
+                 FileOutputStream fos = new FileOutputStream(out)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+            }
+            return out.length() > 0 ? out : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public static File imageDir(Context ctx) {
+        return new File(ctx.getExternalFilesDir(null), "images");
+    }
+}
+""".lstrip())
+
 # ═════════════════════════════════════════════════════════════ screen control ══
 w(PKG / "GilAccessibility.java", r"""
 package com.gil.app;
@@ -1397,6 +1491,26 @@ public class MainActivity extends AppCompatActivity {
                         if (a == null) continue;
                         final String name = a.optString("action", "");
                         final String target = a.optString("target", "");
+
+                        // picture generation runs HERE (not on the UI thread) —
+                        // it's a slow network call, and the result is a card in
+                        // the chat rather than a sentence
+                        if ("image".equalsIgnoreCase(name)) {
+                            pushGil("_Painting \"" + target + "\"… this takes a moment._");
+                            java.io.File img = GilImages.generate(this, target);
+                            if (img != null) {
+                                JSONObject card = new JSONObject()
+                                        .put("kind", "image")
+                                        .put("path", img.getAbsolutePath())
+                                        .put("thumb", "/img/" + img.getName());
+                                server.push("gil.richCard", card);
+                            } else {
+                                done.append(done.length() > 0 ? "\n" : "")
+                                    .append("The picture service didn't come back — try again.");
+                            }
+                            continue;
+                        }
+
                         final String[] out = new String[1];
                         runOnUiThread(() -> out[0] = actions.run(name, target));
                         Thread.sleep(120);          // let the UI thread finish

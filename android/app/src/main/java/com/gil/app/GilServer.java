@@ -62,12 +62,18 @@ public class GilServer {
         try { if (socket != null) socket.close(); } catch (Exception ignored) {}
     }
 
-    /** Push an event to the UI — the Java side of GIL's `_push`. */
-    public void push(String method, Object payload) {
+    /**
+     * Push an event to the UI — the Java side of GIL's `_push`.
+     *
+     * The field names are part of the contract: the web UI destructures
+     * {fn, arg}. Anything else and every push is silently swallowed by its
+     * try/catch, which looks exactly like GIL never answering.
+     */
+    public void push(String fn, Object arg) {
         JSONObject msg = new JSONObject();
         try {
-            msg.put("method", method);
-            msg.put("payload", payload == null ? JSONObject.NULL : payload);
+            msg.put("fn", fn);
+            msg.put("arg", arg == null ? JSONObject.NULL : arg);
         } catch (Exception ignored) {}
         String line = msg.toString();
         for (LinkedBlockingQueue<String> q : clients) q.offer(line);
@@ -170,8 +176,29 @@ public class GilServer {
         }
     }
 
-    /** The web UI is bundled in assets/web/. */
+    /** The web UI is bundled in assets/web/; generated pictures live on disk. */
     private void serveAsset(String route, OutputStream out) throws Exception {
+        // pictures GIL made — served from the app's own storage so the chat can
+        // show them from the same origin, offline
+        if (route.startsWith("/img/")) {
+            String fname = new java.io.File(route).getName();
+            java.io.File f = new java.io.File(GilImages.imageDir(ctx), fname);
+            if (f.isFile()) {
+                byte[] data = new byte[(int) f.length()];
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                    int read = 0;
+                    while (read < data.length) {
+                        int n = fis.read(data, read, data.length - read);
+                        if (n < 0) break;
+                        read += n;
+                    }
+                }
+                send(out, "200 OK", "image/jpeg", data);
+            } else {
+                send(out, "404 Not Found", "text/plain", "no image".getBytes());
+            }
+            return;
+        }
         String name = route.equals("/") ? "index.html" : route.substring(1);
         if (name.isEmpty()) name = "index.html";
         AssetManager am = ctx.getAssets();
