@@ -167,6 +167,8 @@ public class MainActivity extends AppCompatActivity {
         web.setWebViewClient(new WebViewClient());
         web.loadUrl("http://127.0.0.1:" + server.getPort() + "/");
         setContentView(web);
+        // keep the process (and this server) alive once you switch away
+        GilService.start(this);
     }
 
     private SharedPreferences prefs() {
@@ -208,6 +210,7 @@ public class MainActivity extends AppCompatActivity {
         if (text.trim().isEmpty()) return null;
         new Thread(() -> {
             try {
+                GilService.status(this, "Thinking…");
                 JSONObject reply = brain.query(text);
                 String speech = reply.optString("speech", "");
                 String report = reply.optString("report", "");
@@ -261,8 +264,10 @@ public class MainActivity extends AppCompatActivity {
 
                 pushGil(shown.toString());
                 if (voiceOn && !speech.isEmpty()) speak(speech);
+                GilService.status(this, "Ready when you are");
             } catch (Exception e) {
                 pushGil("Something went wrong handling that.");
+                GilService.status(this, "Ready when you are");
             }
         }, "GilTurn").start();
         return null;
@@ -315,8 +320,15 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        if (tts != null) { tts.stop(); tts.shutdown(); }
-        if (server != null) server.stop();
+        // Only tear down when the user is genuinely LEAVING (swiped the app away
+        // or backed out). Merely switching apps must not kill the server — that
+        // is the whole point of the foreground service, and stopping here would
+        // leave a notification claiming GIL is alive when it isn't.
+        if (isFinishing()) {
+            if (tts != null) { tts.stop(); tts.shutdown(); tts = null; }
+            if (server != null) { server.stop(); server = null; }
+            GilService.stop(this);
+        }
         super.onDestroy();
     }
 

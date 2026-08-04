@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- keep working while you switch apps -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- your files: Documents, Downloads, Photos… (granted by you in Settings) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
@@ -45,6 +46,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- keeps GIL (and its local server) alive when the chat isn't in front -->
+        <service
+            android:name=".GilService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device assistant: keeps the local server and any
+                    in-flight request alive while the user is in another app." />
+        </service>
 
         <!-- lets GIL hand one of your files to another app (open_file) -->
         <provider
