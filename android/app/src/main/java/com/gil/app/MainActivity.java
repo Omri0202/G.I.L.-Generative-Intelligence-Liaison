@@ -1,193 +1,221 @@
 package com.gil.app;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Bundle;
-import android.text.TextUtils;
-import android.view.KeyEvent;
-import android.view.View;
-import android.view.ViewGroup;
-import android.webkit.ValueCallback;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
+import android.speech.tts.TextToSpeech;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.LinearLayout;
-import android.widget.TextView;
-import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.Locale;
 
 /**
- * G.I.L. — a thin native shell around GIL's web chat.
+ * G.I.L. on Android — standalone.
  *
- * GIL's brain runs on the PC; this is the phone client. On first launch it asks
- * for the pairing URL (the one /mobile shows as a QR), stores it, and from then
- * on opens straight into the chat with no browser chrome.
+ * The app starts GIL's own web UI (bundled in assets) against a local server it
+ * runs itself, so the phone needs no PC. The brain calls Groq; the actions use
+ * Android Intents.
  */
 public class MainActivity extends AppCompatActivity {
 
     private static final String PREFS = "gil";
-    private static final String KEY_URL = "pairing_url";
+    private static final String KEY_API = "groq_key";
 
     private WebView web;
-    private ValueCallback<Uri[]> filePicker;
-    private static final int FILE_REQ = 1001;
+    private GilServer server;
+    private GilBrain brain;
+    private GilActions actions;
+    private TextToSpeech tts;
+    private boolean voiceOn = true;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
-        String url = prefs().getString(KEY_URL, "");
-        if (TextUtils.isEmpty(url)) {
-            showSetup(null);
-        } else {
-            showChat(url);
+
+        brain = new GilBrain();
+        brain.setApiKey(prefs().getString(KEY_API, ""));
+        actions = new GilActions(this);
+        tts = new TextToSpeech(this, status -> {
+            if (status == TextToSpeech.SUCCESS) tts.setLanguage(Locale.getDefault());
+        });
+
+        ActivityCompat.requestPermissions(this, new String[]{
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.POST_NOTIFICATIONS}, 1);
+
+        server = new GilServer(this, this::rpc);
+        try {
+            server.start();
+        } catch (Exception e) {
+            throw new RuntimeException("GIL server failed to start", e);
         }
+
+        web = new WebView(this);
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        web.setBackgroundColor(Color.parseColor("#15161B"));
+        web.setWebViewClient(new WebViewClient());
+        web.loadUrl("http://127.0.0.1:" + server.getPort() + "/");
+        setContentView(web);
     }
 
     private SharedPreferences prefs() {
         return getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** First-run (or "change server") screen: paste the pairing URL. */
-    private void showSetup(String prefill) {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.parseColor("#15161B"));
-        int pad = (int) (24 * getResources().getDisplayMetrics().density);
-        root.setPadding(pad, pad * 2, pad, pad);
-
-        TextView title = new TextView(this);
-        title.setText("Connect to G.I.L.");
-        title.setTextColor(Color.parseColor("#E9EAF2"));
-        title.setTextSize(22);
-        root.addView(title);
-
-        TextView hint = new TextView(this);
-        hint.setText("On your PC run /mobile in GIL's chat, then paste the link "
-                + "it shows (or scan the QR and copy the URL).\n\n"
-                + "Your phone must be on the same Wi-Fi as the PC.");
-        hint.setTextColor(Color.parseColor("#9BA0B4"));
-        hint.setTextSize(14);
-        hint.setPadding(0, pad / 2, 0, pad);
-        root.addView(hint);
-
-        final EditText input = new EditText(this);
-        input.setHint("http://192.168.x.x:8731/?t=...");
-        input.setTextColor(Color.parseColor("#E9EAF2"));
-        input.setHintTextColor(Color.parseColor("#787D91"));
-        input.setSingleLine(true);
-        if (prefill != null) input.setText(prefill);
-        root.addView(input);
-
-        Button go = new Button(this);
-        go.setText("Connect");
-        go.setOnClickListener(v -> {
-            String u = input.getText().toString().trim();
-            if (TextUtils.isEmpty(u)) {
-                Toast.makeText(this, "Paste the link from /mobile first",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-            if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://" + u;
-            prefs().edit().putString(KEY_URL, u).apply();
-            showChat(u);
-        });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = pad;
-        root.addView(go, lp);
-
-        setContentView(root);
-    }
-
-    /** The chat itself. */
-    @SuppressLint("SetJavaScriptEnabled")
-    private void showChat(String url) {
-        web = new WebView(this);
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);          // the pairing token lives here
-        s.setDatabaseEnabled(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        s.setUseWideViewPort(true);
-        s.setLoadWithOverviewMode(true);
-        web.setBackgroundColor(Color.parseColor("#15161B"));
-
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                return false;                  // keep navigation inside the app
-            }
-
-            @Override
-            public void onReceivedError(WebView v, WebResourceRequest req,
-                                        WebResourceError err) {
-                if (req != null && req.isForMainFrame()) {
-                    Toast.makeText(MainActivity.this,
-                            "Can't reach GIL — is the PC awake and on the same Wi-Fi?",
-                            Toast.LENGTH_LONG).show();
+    /** The JSON-RPC surface the web UI calls — the Java twin of chat_web.py. */
+    private Object rpc(String method, JSONArray args) throws Exception {
+        switch (method) {
+            case "ready": {
+                JSONObject o = new JSONObject();
+                o.put("version", "1.0-mobile");
+                o.put("voice", voiceOn);
+                o.put("sessions", new JSONArray());
+                if (!brain.hasKey()) {
+                    server.push("gil.addMessage", msg(
+                            "**Welcome to G.I.L.** ◈\n\nI need a free Groq API key "
+                          + "to think. Get one at `console.groq.com/keys`, then send it "
+                          + "to me here as: `/key <your-key>`", "gil"));
                 }
+                return o;
             }
-        });
-
-        // file chooser so the chat's attach button works
-        web.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb,
-                                             FileChooserParams params) {
-                filePicker = cb;
-                try {
-                    startActivityForResult(params.createIntent(), FILE_REQ);
-                } catch (Exception e) {
-                    filePicker = null;
-                    return false;
-                }
+            case "send":  return send(args.optString(0, ""));
+            case "command": return command(args.optString(0, ""), args.optString(1, ""));
+            case "toggle_voice": {
+                voiceOn = !voiceOn;
+                if (!voiceOn && tts != null) tts.stop();
+                server.push("gil.setVoice", voiceOn);
+                return voiceOn;
+            }
+            case "new_chat": {
+                brain.clearHistory();
                 return true;
             }
-        });
+            default:
+                return null;    // unknown methods are harmless no-ops
+        }
+    }
 
-        web.loadUrl(url);
-        setContentView(web);
+    private JSONObject msg(String text, String sender) throws Exception {
+        return new JSONObject().put("text", text).put("sender", sender);
+    }
+
+    private Object send(String text) {
+        if (text.trim().isEmpty()) return null;
+        if (text.startsWith("/key ")) {
+            String k = text.substring(5).trim();
+            prefs().edit().putString(KEY_API, k).apply();
+            brain.setApiKey(k);
+            pushGil("Key saved — I'm awake. What do you need?");
+            return null;
+        }
+        new Thread(() -> {
+            try {
+                JSONObject reply = brain.query(text);
+                String speech = reply.optString("speech", "");
+                String report = reply.optString("report", "");
+
+                // run whatever GIL asked for, and collect what REALLY happened
+                StringBuilder done = new StringBuilder();
+                JSONArray acts = reply.optJSONArray("actions");
+                if (acts != null) {
+                    for (int i = 0; i < acts.length(); i++) {
+                        JSONObject a = acts.optJSONObject(i);
+                        if (a == null) continue;
+                        final String name = a.optString("action", "");
+                        final String target = a.optString("target", "");
+                        final String[] out = new String[1];
+                        runOnUiThread(() -> out[0] = actions.run(name, target));
+                        Thread.sleep(120);          // let the UI thread finish
+                        if (out[0] != null && !out[0].isEmpty()) {
+                            done.append(done.length() > 0 ? "\n" : "").append(out[0]);
+                        }
+                    }
+                }
+
+                StringBuilder shown = new StringBuilder();
+                if (!report.isEmpty()) shown.append(report);
+                else if (!speech.isEmpty()) shown.append(speech);
+                if (done.length() > 0) {
+                    if (shown.length() > 0) shown.append("\n\n");
+                    shown.append("_").append(done).append("_");
+                }
+                if (shown.length() == 0) shown.append("Done.");
+
+                pushGil(shown.toString());
+                if (voiceOn && !speech.isEmpty()) speak(speech);
+            } catch (Exception e) {
+                pushGil("Something went wrong handling that.");
+            }
+        }, "GilTurn").start();
+        return null;
+    }
+
+    private Object command(String name, String arg) {
+        switch (name) {
+            case "help":
+                pushGil("**What I can do on your phone**\n"
+                      + "- Open apps, links and settings\n"
+                      + "- Search the web · show places on the map\n"
+                      + "- Draft a text or email · start a call\n"
+                      + "- Set alarms and timers · open the camera\n"
+                      + "- Copy or share text\n"
+                      + "- Answer anything, in any language\n\n"
+                      + "`/key <groq-key>` sets my API key · `/clear` starts fresh");
+                return null;
+            case "clear":
+                brain.clearHistory();
+                return null;
+            default:
+                return send("/" + name + (arg.isEmpty() ? "" : " " + arg));
+        }
+    }
+
+    private void pushGil(String text) {
+        try {
+            server.push("gil.addMessage", msg(text, "gil"));
+        } catch (Exception ignored) {}
+    }
+
+    private void speak(String text) {
+        if (tts == null) return;
+        String clean = text.replaceAll("[*#`_>]", "").trim();
+        if (!clean.isEmpty()) {
+            tts.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "gil");
+        }
     }
 
     @Override
-    protected void onActivityResult(int req, int res, Intent data) {
-        if (req == FILE_REQ) {
-            if (filePicker != null) {
-                filePicker.onReceiveValue(
-                        FileChooserParams.parseResult(res, data));
-                filePicker = null;
-            }
-            return;
-        }
-        super.onActivityResult(req, res, data);
+    public void onBackPressed() {
+        if (web != null && web.canGoBack()) web.goBack();
+        else super.onBackPressed();
     }
 
-    /** Back navigates the chat; long-press back re-opens the setup screen. */
     @Override
-    public boolean onKeyDown(int code, KeyEvent event) {
-        if (code == KeyEvent.KEYCODE_BACK && web != null) {
-            if (event.isLongPress()) {
-                showSetup(prefs().getString(KEY_URL, ""));
-                return true;
-            }
-            if (web.canGoBack()) {
-                web.goBack();
-                return true;
-            }
-        }
-        return super.onKeyDown(code, event);
+    protected void onDestroy() {
+        if (tts != null) { tts.stop(); tts.shutdown(); }
+        if (server != null) server.stop();
+        super.onDestroy();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, @NonNull String[] p,
+                                           @NonNull int[] r) {
+        super.onRequestPermissionsResult(req, p, r);
     }
 }

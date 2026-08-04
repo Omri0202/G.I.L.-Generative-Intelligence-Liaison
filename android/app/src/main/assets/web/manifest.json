@@ -1,0 +1,17 @@
+{
+  "name": "G.I.L.",
+  "short_name": "GIL",
+  "description": "Generative Intelligence Liaison — your AI assistant",
+  "id": "/?app=gil",
+  "start_url": "/?app=gil",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#15161B",
+  "background_color": "#15161B",
+  "icons": [
+    { "src": "/gil_icon_192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/gil_icon_512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/gil_maskable_512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

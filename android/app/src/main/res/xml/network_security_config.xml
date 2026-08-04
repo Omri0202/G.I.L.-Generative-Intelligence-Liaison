@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- GIL is reached over plain http on your own network, so cleartext is
-         required. Everything else keeps Android's secure defaults. -->
-    <base-config cleartextTrafficPermitted="true" />
+    <!-- GIL's UI is served by a server INSIDE this app on 127.0.0.1, so
+         loopback cleartext must be allowed. Everything outbound stays TLS. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
 </network-security-config>

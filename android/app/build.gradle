@@ -6,17 +6,13 @@ android {
 
     defaultConfig {
         applicationId "com.gil.app"
-        minSdk 24
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
     }
-
     buildTypes {
-        release {
-            minifyEnabled false
-            // unsigned release is fine for sideloading; debug is simplest
-        }
+        release { minifyEnabled false }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -26,5 +22,4 @@ android {
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 }
