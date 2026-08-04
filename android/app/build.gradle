@@ -22,6 +22,11 @@ android {
 
 configurations.all {
     resolutionStrategy {
+        // AndroidX pulls kotlin-stdlib 1.8.x while some transitive still asks for
+        // the old kotlin-stdlib-jdk7/jdk8 1.6.x, whose classes were FOLDED INTO
+        // kotlin-stdlib at 1.8 — so both on the classpath = duplicate classes and
+        // a failed build. Pinning every kotlin artifact to one version makes the
+        // jdk7/jdk8 jars the empty shims they're meant to be.
         force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
         force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
         force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
