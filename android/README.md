@@ -6,13 +6,33 @@ the chat you know runs natively; the brain calls Groq and the actions use Androi
 
 ## What GIL can do on the phone
 
-Open apps, links and settings · search the web · show places on the map · draft a
-text or an email · start a call · set alarms and timers · open the camera · copy
-and share text · talk out loud (TTS) · answer anything.
+**Out of the box:** open apps, links and settings · search the web · show places
+on the map · draft a text or an email · start a call · set alarms and timers ·
+open the camera · copy and share text · talk out loud · answer anything.
 
-**Android limits, honestly:** a phone app cannot get the total system control GIL
-has on Windows. There is no arbitrary shell, and apps cannot read each other's
-private data. Everything above works through Android's sanctioned Intent APIs.
+**With "All files access"** (GIL asks; you grant it in Settings): read and write
+your Documents, Downloads and Photos — "what's in my CV", "save this as
+notes.md", "find that PDF".
+
+**With "Screen control"** (an Accessibility Service; you switch it on in
+Settings > Accessibility): GIL can read what is on screen in *other* apps and
+tap, type and scroll for you — "open WhatsApp and reply to Omri", "summarise
+what's on screen". Revoke it any time in the same place.
+
+### The honest limits
+
+Android sandboxes apps far more tightly than Windows, and these cannot be worked
+around by any app:
+
+- **No arbitrary shell** — GIL can't install/uninstall apps, change system
+  settings directly or kill processes. It opens the relevant screen; you decide.
+- **No reading another app's private data** — WhatsApp's message database,
+  Instagram's cache and saved logins are walled off from every other app.
+- **No silent screen recording** — that always needs an explicit consent dialog
+  and shows a visible indicator.
+
+Screen control is the closest thing to real automation Android allows, and it is
+deliberately gated behind a switch only you can flip.
 
 ## Build
 

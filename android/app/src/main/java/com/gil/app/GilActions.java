@@ -50,6 +50,24 @@ public class GilActions {
                 case "share":      return share(t);
                 case "copy":       return copy(t);
                 case "settings":   return settings(t);
+                // ── your files ──
+                case "list_files":  return GilFiles.list(t);
+                case "read_file":   return GilFiles.read(t);
+                case "write_file":  return GilFiles.write(t);
+                case "search_files":return GilFiles.search(t);
+                case "open_file":   return openFile(t);
+                // ── screen control (other apps) ──
+                case "read_screen": return GilAccessibility.readScreen();
+                case "tap":         return GilAccessibility.tap(t);
+                case "type":        return GilAccessibility.type(t);
+                case "scroll":      return GilAccessibility.scroll(t);
+                case "back":        return GilAccessibility.global("back");
+                case "home":        return GilAccessibility.global("home");
+                case "recents":     return GilAccessibility.global("recents");
+                case "notifications": return GilAccessibility.global("notifications");
+                // ── permission helpers ──
+                case "grant_files":  return grantFiles();
+                case "grant_screen": return grantScreen();
                 case "none":
                 case "":           return "";
                 default:           return "I don't have a way to do \"" + action + "\" on this phone.";
@@ -178,6 +196,52 @@ public class GilActions {
         ClipboardManager cm = (ClipboardManager) act.getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(ClipData.newPlainText("G.I.L.", text));
         return "Copied to the clipboard.";
+    }
+
+    /** Hand a file to whichever app owns that type. */
+    private String openFile(String rel) {
+        java.io.File f = GilFiles.resolve(rel);
+        if (!f.isFile()) return "I can't find \"" + rel + "\".";
+        Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                act, act.getPackageName() + ".files", f);
+        Intent i = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, guessType(f.getName()))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_ACTIVITY_NEW_TASK);
+        act.startActivity(i);
+        return "Opened " + f.getName() + ".";
+    }
+
+    private static String guessType(String name) {
+        String ext = android.webkit.MimeTypeMap.getFileExtensionFromUrl(name);
+        String mime = android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(ext == null ? "" : ext.toLowerCase(Locale.ROOT));
+        return mime == null ? "*/*" : mime;
+    }
+
+    /** Open the "All files access" screen — the user grants it, not GIL. */
+    private String grantFiles() {
+        if (GilFiles.granted()) return "I already have access to your files.";
+        Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + act.getPackageName()))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            act.startActivity(i);
+        } catch (ActivityNotFoundException e) {
+            act.startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        }
+        return "Opened the setting — switch on \"Allow access to manage all files\" "
+             + "and come back.";
+    }
+
+    /** Open Accessibility settings — the user switches GIL on there. */
+    private String grantScreen() {
+        if (GilAccessibility.isRunning()) return "Screen control is already on.";
+        act.startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        return "Opened Accessibility settings — find \"G.I.L. screen control\" and "
+             + "switch it on. It lets me read and tap what's on screen.";
     }
 
     private String settings(String which) {
