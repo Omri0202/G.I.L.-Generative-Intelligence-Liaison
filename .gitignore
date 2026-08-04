@@ -76,3 +76,7 @@ desktop.ini
 *.user
 data/uploads/
 data/screenshots/
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
