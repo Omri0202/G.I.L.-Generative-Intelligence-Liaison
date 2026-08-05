@@ -199,6 +199,26 @@ public class GilServer {
             }
             return;
         }
+        // sites GIL built — same-origin so they open straight in the chat's WebView
+        if (route.startsWith("/site/")) {
+            java.io.File f = new java.io.File(GilWeb.siteDir(ctx),
+                    new java.io.File(route).getName());
+            if (f.isFile()) {
+                byte[] data = new byte[(int) f.length()];
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                    int read = 0;
+                    while (read < data.length) {
+                        int n = fis.read(data, read, data.length - read);
+                        if (n < 0) break;
+                        read += n;
+                    }
+                }
+                send(out, "200 OK", "text/html; charset=utf-8", data);
+            } else {
+                send(out, "404 Not Found", "text/plain", "no site".getBytes());
+            }
+            return;
+        }
         String name = route.equals("/") ? "index.html" : route.substring(1);
         if (name.isEmpty()) name = "index.html";
         AssetManager am = ctx.getAssets();

@@ -24,6 +24,11 @@ public class GilBrain {
 
     private final List<JSONObject> history = new ArrayList<>();
     private String apiKey = "";
+    private volatile boolean rateLimited = false;
+
+    /** True if the most recent call was refused for exceeding the per-minute
+     *  budget — worth telling the user, since it clears on its own. */
+    public boolean lastWasRateLimited() { return rateLimited; }
 
     public void setApiKey(String k) { this.apiKey = k == null ? "" : k.trim(); }
     public boolean hasKey() { return !apiKey.isEmpty(); }
@@ -54,6 +59,8 @@ public class GilBrain {
       + "- image        -> a vivid description of a picture to CREATE. Use this "
       + "whenever the user asks you to draw/generate/make an image — never "
       + "web_search for a picture, you can actually make one.\n"
+      + "- website      -> what a web page should be about. Use this whenever the "
+      + "user asks you to build/make a site or page — you really do build it.\n"
       + "\nYOUR FILES (Documents, Downloads, Photos — paths are relative, e.g.\n"
       + "\"Documents/cv.pdf\"):\n"
       + "- list_files   -> a folder to list (\"\" for the top level)\n"
@@ -132,6 +139,29 @@ public class GilBrain {
         while (history.size() > 12) history.remove(0);
     }
 
+    /**
+     * One-shot completion outside the conversation — for generating an artefact
+     * (a web page, a document) rather than chatting. Returns raw text, or "" on
+     * failure. Does not touch history.
+     */
+    public String complete(String system, String user, int maxTokens) {
+        if (apiKey.isEmpty()) return "";
+        try {
+            JSONArray messages = new JSONArray()
+                    .put(new JSONObject().put("role", "system").put("content", system))
+                    .put(new JSONObject().put("role", "user").put("content", user));
+            JSONObject payload = new JSONObject()
+                    .put("model", MODEL)
+                    .put("messages", messages)
+                    .put("temperature", 0.6)
+                    .put("max_tokens", maxTokens)
+                    .put("reasoning_effort", "low");
+            return post(payload);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private String post(JSONObject payload) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(URL_CHAT).openConnection();
         c.setRequestMethod("POST");
@@ -143,9 +173,12 @@ public class GilBrain {
         try (OutputStream os = c.getOutputStream()) {
             os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
         }
+        int code = c.getResponseCode();
+        // 429 = per-minute budget, 413 = single request too large for the tier
+        rateLimited = (code == 429 || code == 413);
         StringBuilder sb = new StringBuilder();
         try (BufferedReader r = new BufferedReader(new InputStreamReader(
-                c.getResponseCode() >= 400 ? c.getErrorStream() : c.getInputStream(),
+                code >= 400 ? c.getErrorStream() : c.getInputStream(),
                 StandardCharsets.UTF_8))) {
             String line;
             while ((line = r.readLine()) != null) sb.append(line);
