@@ -86,6 +86,24 @@ def available() -> bool:
 _STARVED = "model returned only reasoning, no answer"
 
 
+def _humanise(raw: str, status: int) -> str:
+    """Turn a provider error into something a person can act on.
+
+    The raw text is a wall of quota jargon that also gets truncated mid-sentence
+    ("Limit 200000,.7"), which tells the user nothing about what to do."""
+    low = (raw or "").lower()
+    if "tokens per day" in low or "tpd" in low:
+        return ("I've used up today's image-reading allowance on the free tier. "
+                "It resets tomorrow.")
+    if "tokens per minute" in low or "tpm" in low or status == 429:
+        return "I'm over my per-minute limit for images — try again in a minute."
+    if status == 413:
+        return "that image is too large for me to read."
+    if raw:
+        return raw[:160]
+    return f"HTTP {status}"
+
+
 def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
          timeout: int = 60) -> tuple[bool, str, str]:
     """One vision call. Returns (ok, answer, error). The answer already has the
@@ -115,14 +133,27 @@ def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
                         timeout=timeout)
                     if r.status_code != 200:
                         try:
-                            last = (r.json().get("error", {}).get("message") or "")[:160]
+                            raw_err = (r.json().get("error", {}).get("message") or "")
                         except Exception:
-                            last = f"HTTP {r.status_code}"
+                            raw_err = ""
+                        last = _humanise(raw_err, r.status_code)
                         if r.status_code in (400, 404):
                             break      # model itself is wrong — try the next model
+                        if "for today" in last:
+                            return False, "", last   # a daily cap won't clear on retry
                         continue       # rate limit / transient — try the next key
+                    body = r.json()
+                    try:                   # images are the biggest token spender
+                        import token_meter
+                        u = body.get("usage", {}) or {}
+                        token_meter.record(body.get("model", model),
+                                           u.get("total_tokens", 0),
+                                           u.get("prompt_tokens", 0),
+                                           u.get("completion_tokens", 0))
+                    except Exception:
+                        pass
                     answer = strip_thinking(
-                        r.json()["choices"][0]["message"].get("content") or "")
+                        body["choices"][0]["message"].get("content") or "")
                     if answer:
                         return True, answer, ""
                     last = _STARVED

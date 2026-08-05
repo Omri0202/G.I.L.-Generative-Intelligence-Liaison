@@ -80,7 +80,16 @@ def main() -> None:
         log.debug("biometric sign-in unavailable", exc_info=True)
 
     if not username:
+        # The camera didn't know them — fall back to the password window, then
+        # register their face so next time it does.
         username = run_login()
+        if username:
+            try:
+                from face_login import enroll_user
+                if enroll_user(username):
+                    log.info("enrolled a new face for %s", username)
+            except Exception:
+                log.debug("face enrolment skipped", exc_info=True)
     if not username:
         log.warning("authentication aborted — exiting")
         sys.exit(0)

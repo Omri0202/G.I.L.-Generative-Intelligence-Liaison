@@ -70,6 +70,7 @@ class WebChat:
         self._mobile_enabled = False
         self._mobile_token = ""
         self._start_server()
+        self._hook_token_meter()      # live quota rings
         if self._port:
             self._launch_window()
             self._open = True
@@ -1221,6 +1222,35 @@ class WebChat:
 
     # live token-budget gauge — context fullness per step (Feature #2)
     def token_usage(self, info: dict) -> None: self._push("gil.tokenUsage", info)
+
+    # real API quota rings — how much of the minute/day allowance is spent
+    def token_meter(self, rows: list, warning: str = "") -> None:
+        self._push("gil.tokenMeter", {"models": rows, "warning": warning})
+
+    def _rpc_token_meter(self):
+        """The UI asks for this on load so the rings start populated."""
+        try:
+            import token_meter
+            return {"models": token_meter.all_status(), "warning": ""}
+        except Exception:
+            return {"models": [], "warning": ""}
+
+    def _hook_token_meter(self) -> None:
+        """Push a fresh reading (and any threshold warning) after every call."""
+        try:
+            import token_meter
+
+            def _on_usage(status, warning):
+                try:
+                    self.token_meter(token_meter.all_status(), warning or "")
+                    if warning:
+                        self.add_message("⚡ " + warning, "gil")
+                except Exception:
+                    pass
+
+            token_meter.subscribe(_on_usage)
+        except Exception:
+            log.debug("token meter unavailable", exc_info=True)
 
     # background sub-agent roster — status chips + drawer rows (Feature #10)
     def subagents(self, rows: list) -> None: self._push("gil.subagents", rows)

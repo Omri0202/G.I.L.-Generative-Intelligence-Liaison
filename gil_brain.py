@@ -891,6 +891,14 @@ class GILBrain:
                 usage = resp_json.get("usage", {})
                 self.last_tokens_used   = usage.get("total_tokens", 0)
                 self.last_prompt_tokens = usage.get("prompt_tokens", 0)
+                try:                       # feed the live usage gauges
+                    import token_meter
+                    token_meter.record(resp_json.get("model", chosen_model),
+                                       usage.get("total_tokens", 0),
+                                       usage.get("prompt_tokens", 0),
+                                       usage.get("completion_tokens", 0))
+                except Exception:
+                    pass
 
         except requests.exceptions.ConnectionError:
             log.error("No internet connection")

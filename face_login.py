@@ -53,14 +53,47 @@ def _identify(face_id, data_url: str) -> dict:
     return res
 
 
+def enroll_user(name: str, timeout: float = _TIMEOUT) -> bool:
+    """Register `name`'s face, using the same scanner UI in enrol mode.
+
+    Called after a password sign-in by someone the camera didn't recognise, so
+    the next time they open GIL their face alone gets them in."""
+    return _run_scanner(mode="enroll", enroll_name=name, timeout=timeout) is not None
+
+
+def _enroll_frame(face_id, data_url: str, name: str) -> bool:
+    """Register the face in this frame under `name`."""
+    try:
+        import numpy as np
+        from PIL import Image
+        raw = base64.b64decode((data_url or "").split(",", 1)[-1])
+        if not raw:
+            return False
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        bgr = np.array(img)[:, :, ::-1]
+        ok = face_id.enroll(bgr, name)
+        # enroll() returns either a bool or (ok, detail) depending on the path
+        if isinstance(ok, tuple):
+            ok = bool(ok[0])
+        return bool(ok)
+    except Exception:
+        log.debug("enrolment failed", exc_info=True)
+        return False
+
+
 def scan_for_user(timeout: float = _TIMEOUT) -> str | None:
     """Show the scanner and return the recognised username, or None."""
+    return _run_scanner(mode="identify", timeout=timeout)
+
+
+def _run_scanner(mode: str = "identify", enroll_name: str = "",
+                 timeout: float = _TIMEOUT) -> str | None:
     if not _SCAN_PAGE.is_file():
         return None
     try:
         from face_id import FaceID
         face_id = FaceID()
-        if not face_id.has_enrolled():
+        if mode == "identify" and not face_id.has_enrolled():
             log.info("no enrolled faces — skipping biometric login")
             return None
     except Exception:
@@ -107,6 +140,18 @@ def scan_for_user(timeout: float = _TIMEOUT) -> str | None:
             if method == "face_scan":
                 saw_any_frame.set()
                 out = _identify(face_id, args[0] if args else "")
+                if mode == "enroll":
+                    # Same UI, different job: once a face is clearly in frame,
+                    # register it rather than looking it up. Reported back as a
+                    # "match" so the scanner runs its normal confirm sequence.
+                    if out.get("face_box"):
+                        if _enroll_frame(face_id, args[0] if args else "", enroll_name):
+                            out = {**out, "status": "match", "name": enroll_name,
+                                   "confidence": 1.0}
+                        else:
+                            out = {**out, "status": "no_face"}
+                    else:
+                        out = {**out, "status": "no_face"}
             elif method == "face_confirmed":
                 name = (args[0] if args else "") or ""
                 out = {"ok": True}
