@@ -81,3 +81,4 @@ android/app/build/
 android/.gradle/
 android/local.properties
 data/_scan_profile/
+data/spatial_tutorial_done

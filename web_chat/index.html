@@ -2209,6 +2209,7 @@ const gil = {
     {cmd: "/undo",     desc: "Instantly roll back to the last checkpoint", kind: "meta"},
     {cmd: "/spawn",    desc: "Run a task in the background (read-only)",   kind: "arg"},
     {cmd: "/tasks",    desc: "Status of background tasks",                kind: "meta"},
+    {cmd: "/spatial",  desc: "Hand control — on · off · tutorial",        kind: "arg"},
     {cmd: "/mobile",   desc: "Use GIL on your phone (scan a QR code)",    kind: "meta"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
@@ -2389,7 +2390,7 @@ const gil = {
     }
     // these run even with no argument (/approve with no arg shows the current mode).
     const noArgOk = (cmd === "/study" || cmd === "/codemode" || cmd === "/approve"
-                     || cmd === "/checkpoint" || cmd === "/spawn");
+                     || cmd === "/checkpoint" || cmd === "/spawn" || cmd === "/spatial");
     if (known.kind === "arg" && !arg && !noArgOk) { $("inp").value = cmd + " "; this.grow(); return; }
     $("inp").value = ""; this.grow();
     if (arg) this.addMessage({sender: "user", text: cmd + " " + arg});

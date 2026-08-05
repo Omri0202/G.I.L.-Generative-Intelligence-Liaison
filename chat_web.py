@@ -799,6 +799,22 @@ class WebChat:
             self.add_message(f"**Approval mode → `{mode}`** — {valid[mode]}.", "gil")
             return
 
+        if name in ("spatial", "hands", "hand"):
+            import spatial
+            a = arg.lower().strip()
+            if a in ("off", "stop", "disable"):
+                _, msg = spatial.stop()
+            elif a in ("tutorial", "again", "help"):
+                spatial.reset_tutorial()
+                spatial.stop()
+                _, msg = spatial.start()
+            elif a in ("on", "start", "enable"):
+                _, msg = spatial.start()
+            else:
+                _, msg = spatial.toggle()
+            self.add_message(msg, "gil")
+            return
+
         if name in ("scan", "faceid", "signin"):
             if self.open_scanner():
                 self.add_message("**Biometric scan** — look at the camera.", "gil")
