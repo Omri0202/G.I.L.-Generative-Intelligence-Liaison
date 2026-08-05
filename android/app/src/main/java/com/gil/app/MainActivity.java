@@ -441,16 +441,17 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             GilService.status(this, "Painting…");
             pushGil("_Painting \"" + prompt + "\"… this takes a moment._");
-            java.io.File img = GilImages.generate(this, prompt);
-            if (img != null) {
+            GilImages.Result r = GilImages.generate(this, prompt);
+            if (r.ok()) {
                 try {
                     server.push("gil.richCard", new JSONObject()
                             .put("kind", "image")
-                            .put("path", "/img/" + img.getName())
-                            .put("thumb", "/img/" + img.getName()));
+                            .put("path", "/img/" + r.file.getName())
+                            .put("thumb", "/img/" + r.file.getName()));
                 } catch (Exception ignored) {}
             } else {
-                pushGil("The picture service didn't come back — try again in a moment.");
+                // say WHAT failed — a generic apology can't be acted on
+                pushGil("I couldn't make that picture — " + r.error);
             }
             GilService.status(this, "Ready when you are");
         }, "GilImage").start();
