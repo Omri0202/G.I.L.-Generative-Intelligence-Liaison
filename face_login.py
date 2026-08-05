@@ -104,6 +104,8 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
     result: queue.Queue = queue.Queue(maxsize=1)
     # the page polls until it has two consecutive matches, then calls face_confirmed
     saw_any_frame = threading.Event()
+    cancelled = threading.Event()      # user chose the password route
+    done = threading.Event()           # page finished its greeting and closed
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -157,8 +159,13 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
                 out = {"ok": True}
                 if name and not result.full():
                     result.put(name)
+            elif method == "scan_cancel":
+                # "Use password instead" (or Esc) — stop waiting immediately
+                out = {"ok": True}
+                cancelled.set()
             elif method == "scan_done":
                 out = {"ok": True}
+                done.set()
             self._send(200, "application/json",
                        json.dumps({"result": out}).encode("utf-8"))
 
@@ -177,6 +184,8 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
     try:
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if cancelled.is_set():          # they asked for the password screen
+                break
             try:
                 name = result.get(timeout=0.25)
                 break
@@ -184,10 +193,11 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
                 # give the camera a fair chance to warm up before the clock counts
                 if not saw_any_frame.is_set():
                     deadline = time.time() + timeout
-    finally:
-        # let the greeting land on screen before the window disappears
+        # Recognised: wait for the page to show its greeting and close ITSELF —
+        # the server must outlive that, since the page still calls scan_done.
         if name:
-            time.sleep(2.6)
+            done.wait(timeout=6.0)
+    finally:
         try:
             httpd.shutdown()
             httpd.server_close()
@@ -203,8 +213,12 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
 
 
 def _open_fullscreen(url: str):
-    """Open the scanner as a chromeless full-screen window."""
-    data_dir = Path(__file__).parent / "data" / "_web_profile"
+    """Open the scanner as a chromeless full-screen window.
+
+    Uses its OWN profile dir, not the chat's: sharing one means Chromium hands
+    the URL to an already-running instance and our Popen exits immediately, so
+    we'd hold a PID that owns nothing and couldn't close the window."""
+    data_dir = Path(__file__).parent / "data" / "_scan_profile"
     for exe in (
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -224,13 +238,25 @@ def _open_fullscreen(url: str):
 
 
 def _close(proc):
+    """Make sure the scanner window is gone.
+
+    The page closes itself on success; this is the backstop for the cases where
+    window.close() is refused. Chromium spawns a tree of child processes, so a
+    plain terminate() on the parent can leave the window up — kill the tree."""
     if proc is None:
         return
+    if proc.poll() is not None:
+        return                      # already exited
     try:
-        proc.terminate()
-        proc.wait(timeout=3)
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       capture_output=True, timeout=5,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception:
         try:
-            proc.kill()
+            proc.terminate()
+            proc.wait(timeout=3)
         except Exception:
-            pass
+            try:
+                proc.kill()
+            except Exception:
+                pass

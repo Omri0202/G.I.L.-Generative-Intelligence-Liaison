@@ -125,6 +125,16 @@ body.error .status,body.error .panel{opacity:.25;}
 .err .msg{font-size:13px;letter-spacing:.1em;color:var(--warn);line-height:1.7;}
 .blink{animation:blink 1.15s steps(2,end) infinite;}
 @keyframes blink{50%{opacity:.28}}
+
+/* always leave a way past the camera — biometrics must never be the only door */
+#skip{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);
+  padding:10px 22px;font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+  text-transform:uppercase;cursor:pointer;color:var(--cyan);
+  background:rgba(8,20,32,.6);border:1px solid rgba(92,225,255,.32);
+  border-radius:3px;backdrop-filter:blur(6px);transition:all .18s;}
+#skip:hover{background:rgba(92,225,255,.14);border-color:var(--cyan);
+  box-shadow:0 0 22px rgba(92,225,255,.3);}
+body.confirmed #skip{opacity:0;pointer-events:none;transition:opacity .4s;}
 </style>
 </head>
 <body class="booting">
@@ -198,6 +208,8 @@ body.error .status,body.error .panel{opacity:.25;}
   <div class="err">
     <div class="msg" id="errMsg"></div>
   </div>
+
+  <button id="skip" onclick="usePassword()">Use password instead</button>
 </div>
 
 <script>
@@ -489,6 +501,29 @@ function fail(html) {
   $("errMsg").innerHTML = html;
 }
 
+/* Close the scanner window.
+   The page has to do this itself: the Python side launches Edge via a laucher
+   process that exits immediately, so terminating that PID leaves the actual
+   window on screen — which is exactly what happened. */
+function closeScanner() {
+  stopCamera();
+  try { window.close(); } catch (e) {}
+  // window.close() is refused in some contexts; leave something honest on screen
+  setTimeout(() => {
+    document.body.className = "error";
+    $("errMsg").innerHTML = "SESSION COMPLETE<br><br>"
+      + "<span style='color:var(--cyan-dim)'>You can close this window.</span>";
+  }, 700);
+}
+
+function stopCamera() {
+  try {
+    const s = cam.srcObject;
+    if (s) s.getTracks().forEach(t => t.stop());
+    cam.srcObject = null;
+  } catch (e) {}
+}
+
 async function confirmIdentity(name) {
   finished = true; locked = true;
   document.body.classList.remove("scanning", "denied");
@@ -496,9 +531,24 @@ async function confirmIdentity(name) {
   $("greetName").textContent = "Hello, " + name;
   setStatus("Identity confirmed", "access granted");
   try { await api("face_confirmed", name); } catch (e) {}
-  // hand back to GIL once the greeting has landed
-  setTimeout(() => { try { api("scan_done", name); } catch (e) {} }, 3200);
+  // let the greeting land, then get out of the way
+  setTimeout(async () => {
+    try { await api("scan_done", name); } catch (e) {}
+    closeScanner();
+  }, 2400);
 }
+
+/* Skip biometrics and sign in the normal way. */
+async function usePassword() {
+  if (finished) return;
+  finished = true;
+  setStatus("Switching", "opening the password sign-in");
+  try { await api("scan_cancel"); } catch (e) {}
+  closeScanner();
+}
+addEventListener("keydown", e => {
+  if (e.key === "Escape") usePassword();
+});
 
 /* ═══ boot ═══ */
 (async function boot() {
