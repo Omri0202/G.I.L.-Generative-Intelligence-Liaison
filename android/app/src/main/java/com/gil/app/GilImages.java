@@ -46,13 +46,38 @@ public class GilImages {
             return new Result(null, "No storage available to save the picture.");
         }
 
+        // The provider 5xx's intermittently — the same request that fails can
+        // succeed a second later — so retry before giving up, and drop the
+        // optional model/enhance params on later tries in case they're the
+        // thing upsetting it.
+        String last = "the picture service didn't answer.";
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (attempt > 0) {
+                try {
+                    Thread.sleep(1500L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return new Result(null, "cancelled.");
+                }
+            }
+            Result r = attempt(ctx, dir, prompt, attempt);
+            if (r.ok()) return r;
+            last = r.error;
+            // a 4xx won't fix itself by asking again
+            if (r.error != null && r.error.contains("answered 4")) break;
+        }
+        return new Result(null, last);
+    }
+
+    private static Result attempt(Context ctx, File dir, String prompt, int tryNo) {
         HttpURLConnection c = null;
         try {
             String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
             int seed = 1 + RAND.nextInt(99_999);
+            String extras = tryNo == 0 ? "&model=flux&enhance=true" : "";
             String url = "https://image.pollinations.ai/prompt/" + encoded
                     + "?width=1024&height=1024&seed=" + seed
-                    + "&model=flux&enhance=true&nologo=true";
+                    + extras + "&nologo=true";
 
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(20000);

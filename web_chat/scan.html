@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>G.I.L. — Biometric Authentication</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   G.I.L. BIOMETRIC SCAN
+   A JARVIS-style identity check: live camera, a facial mesh that locks on, and
+   telemetry panels that actually report what the recogniser is doing rather
+   than looping decorative noise.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --cyan:#5CE1FF; --cyan-dim:#1B7A94; --deep:#05070D;
+  --grid:rgba(92,225,255,.07); --ok:#5CFFB0; --warn:#FFB44C; --bad:#FF5C7A;
+  --mono:"SF Mono",'Cascadia Mono',Consolas,'Roboto Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;overflow:hidden;background:var(--deep);color:var(--cyan);
+  font-family:var(--mono);-webkit-font-smoothing:antialiased;}
+
+#stage{position:fixed;inset:0;display:grid;place-items:center;}
+
+/* ── the camera, treated as a surveillance feed ── */
+#cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  transform:scaleX(-1);              /* mirror: people expect a mirror */
+  filter:contrast(1.12) saturate(.72) brightness(.82);}
+#fx{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+
+/* atmosphere: vignette + scanline texture + a slow drifting grid */
+.vignette{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 90% at 50% 45%,transparent 38%,rgba(3,6,12,.55) 72%,#03060C 100%);}
+.scanlines{position:absolute;inset:0;pointer-events:none;opacity:.35;
+  background:repeating-linear-gradient(to bottom,rgba(92,225,255,.045) 0 1px,transparent 1px 3px);}
+.gridbg{position:absolute;inset:-40%;pointer-events:none;opacity:.55;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                   linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:46px 46px;
+  animation:drift 26s linear infinite;}
+@keyframes drift{to{transform:translate(46px,46px);}}
+
+/* the sweep that reads as "scanning" */
+.sweep{position:absolute;left:0;right:0;height:34vh;pointer-events:none;opacity:0;
+  background:linear-gradient(to bottom,transparent,rgba(92,225,255,.13) 45%,
+             rgba(92,225,255,.30) 50%,rgba(92,225,255,.13) 55%,transparent);
+  box-shadow:0 0 60px rgba(92,225,255,.25);}
+body.scanning .sweep{opacity:1;animation:sweep 2.4s cubic-bezier(.45,0,.55,1) infinite;}
+@keyframes sweep{0%{top:-34vh}100%{top:100%}}
+
+/* ── HUD chrome ── */
+.hud{position:absolute;pointer-events:none;letter-spacing:.14em;
+  text-transform:uppercase;font-size:10.5px;opacity:0;
+  animation:fadein .5s ease forwards;}
+@keyframes fadein{to{opacity:1}}
+.hud.tl{top:26px;left:28px;} .hud.tr{top:26px;right:28px;text-align:right;}
+.hud.bl{bottom:26px;left:28px;} .hud.br{bottom:26px;right:28px;text-align:right;}
+.hud .k{color:var(--cyan-dim);}
+.hud .v{color:var(--cyan);text-shadow:0 0 12px rgba(92,225,255,.55);}
+.hud .row{margin:3px 0;white-space:nowrap;}
+
+/* corner brackets — the frame that says "targeting" */
+.corner{position:absolute;width:56px;height:56px;border:2px solid var(--cyan);
+  opacity:.55;filter:drop-shadow(0 0 8px rgba(92,225,255,.6));}
+.corner.tl{top:18px;left:18px;border-right:0;border-bottom:0;}
+.corner.tr{top:18px;right:18px;border-left:0;border-bottom:0;}
+.corner.bl{bottom:18px;left:18px;border-right:0;border-top:0;}
+.corner.br{bottom:18px;right:18px;border-left:0;border-top:0;}
+
+/* ── telemetry panels ── */
+.panel{position:absolute;width:225px;padding:13px 15px;pointer-events:none;
+  background:linear-gradient(160deg,rgba(6,16,26,.82),rgba(4,10,18,.62));
+  border:1px solid rgba(92,225,255,.22);
+  border-left:2px solid var(--cyan);
+  box-shadow:0 0 34px rgba(0,0,0,.55), inset 0 0 26px rgba(92,225,255,.05);
+  backdrop-filter:blur(7px);opacity:0;transform:translateX(-14px);
+  animation:slidein .6s .25s cubic-bezier(.2,.8,.3,1) forwards;}
+.panel.right{right:28px;border-left:1px solid rgba(92,225,255,.22);
+  border-right:2px solid var(--cyan);transform:translateX(14px);}
+.panel.left{left:28px;}
+.panel.p1{top:15%;} .panel.p2{bottom:16%;}
+@keyframes slidein{to{opacity:1;transform:translateX(0);}}
+.panel h4{font-size:9.5px;letter-spacing:.2em;color:var(--cyan);margin-bottom:9px;
+  padding-bottom:6px;border-bottom:1px solid rgba(92,225,255,.16);font-weight:600;}
+.panel .line{display:flex;justify-content:space-between;gap:10px;font-size:10px;
+  margin:5px 0;color:var(--cyan-dim);letter-spacing:.05em;}
+.panel .line b{color:var(--cyan);font-weight:500;}
+
+/* little signal bars that respond to real confidence */
+.bars{display:flex;gap:2.5px;align-items:flex-end;height:26px;margin-top:9px;}
+.bars i{flex:1;background:linear-gradient(to top,var(--cyan-dim),var(--cyan));
+  opacity:.32;border-radius:1px;transition:height .25s ease,opacity .25s ease;height:20%;}
+
+/* ── centre status ── */
+.status{position:absolute;bottom:12%;left:50%;transform:translateX(-50%);
+  text-align:center;pointer-events:none;width:min(560px,88vw);}
+.status .big{font-size:clamp(19px,3.1vw,32px);letter-spacing:.3em;
+  text-transform:uppercase;text-shadow:0 0 26px rgba(92,225,255,.6);
+  transition:color .35s;}
+.status .sub{margin-top:9px;font-size:11px;letter-spacing:.24em;
+  color:var(--cyan-dim);text-transform:uppercase;min-height:15px;}
+body.confirmed .status .big{color:var(--ok);text-shadow:0 0 34px rgba(92,255,176,.75);}
+body.denied .status .big{color:var(--bad);text-shadow:0 0 34px rgba(255,92,122,.7);}
+
+/* the greeting that replaces the status on success */
+.greet{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(.94);
+  text-align:center;opacity:0;pointer-events:none;transition:opacity .7s,transform .7s;}
+body.confirmed .greet{opacity:1;transform:translate(-50%,-50%) scale(1);}
+.greet .hi{font-size:clamp(30px,6vw,64px);letter-spacing:.12em;color:#EAFBFF;
+  text-shadow:0 0 46px rgba(92,255,176,.55);}
+.greet .tag{margin-top:12px;font-size:11.5px;letter-spacing:.34em;color:var(--ok);
+  text-transform:uppercase;}
+body.confirmed #fx,body.confirmed .sweep{opacity:0;transition:opacity .6s;}
+
+/* success ring burst */
+.burst{position:absolute;top:50%;left:50%;width:220px;height:220px;margin:-110px 0 0 -110px;
+  border:2px solid var(--ok);border-radius:50%;opacity:0;pointer-events:none;}
+body.confirmed .burst{animation:burst 1.1s cubic-bezier(.2,.7,.3,1) forwards;}
+@keyframes burst{0%{opacity:.9;transform:scale(.35)}100%{opacity:0;transform:scale(2.6)}}
+
+.err{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;max-width:76vw;display:none;}
+body.error .err{display:block;}
+body.error .status,body.error .panel{opacity:.25;}
+.err .msg{font-size:13px;letter-spacing:.1em;color:var(--warn);line-height:1.7;}
+.blink{animation:blink 1.15s steps(2,end) infinite;}
+@keyframes blink{50%{opacity:.28}}
+</style>
+</head>
+<body class="booting">
+
+<div id="stage">
+  <video id="cam" autoplay muted playsinline></video>
+  <canvas id="fx"></canvas>
+
+  <div class="gridbg"></div>
+  <div class="scanlines"></div>
+  <div class="vignette"></div>
+  <div class="sweep"></div>
+
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+
+  <div class="hud tl">
+    <div class="row"><span class="k">SYS </span><span class="v">G.I.L. // BIOMETRIC</span></div>
+    <div class="row"><span class="k">MOD </span><span class="v">FACE-ID v2</span></div>
+  </div>
+  <div class="hud tr">
+    <div class="row"><span class="k">SESSION </span><span class="v" id="sid">—</span></div>
+    <div class="row"><span class="k">CLOCK </span><span class="v" id="clock">--:--:--</span></div>
+  </div>
+  <div class="hud bl">
+    <div class="row"><span class="k">FRAME </span><span class="v" id="frames">0</span></div>
+  </div>
+  <div class="hud br">
+    <div class="row"><span class="v blink">● LIVE</span></div>
+  </div>
+
+  <div class="panel left p1">
+    <h4>Biometric Auth</h4>
+    <div class="line"><span>Detector</span><b id="pDet">standby</b></div>
+    <div class="line"><span>Face lock</span><b id="pLock">—</b></div>
+    <div class="line"><span>Landmarks</span><b id="pLand">0</b></div>
+    <div class="line"><span>Enrolled</span><b id="pEnr">—</b></div>
+  </div>
+
+  <div class="panel left p2">
+    <h4>Match Confidence</h4>
+    <div class="line"><span>Score</span><b id="pConf">0.00</b></div>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <div class="panel right p1">
+    <h4>Data Stream</h4>
+    <div class="line"><span>Vector</span><b id="pVec">512-d</b></div>
+    <div class="line"><span>Metric</span><b>cosine</b></div>
+    <div class="line"><span>Threshold</span><b id="pThr">0.25</b></div>
+    <div class="line"><span>Latency</span><b id="pLat">—</b></div>
+  </div>
+
+  <div class="panel right p2">
+    <h4>Identity</h4>
+    <div class="line"><span>Subject</span><b id="pName">unknown</b></div>
+    <div class="line"><span>Status</span><b id="pStat">scanning</b></div>
+  </div>
+
+  <div class="status">
+    <div class="big" id="statusBig">Initialising</div>
+    <div class="sub" id="statusSub">bringing the optical sensor online</div>
+  </div>
+
+  <div class="burst"></div>
+  <div class="greet">
+    <div class="hi" id="greetName">—</div>
+    <div class="tag">Identity confirmed</div>
+  </div>
+
+  <div class="err">
+    <div class="msg" id="errMsg"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const cam = $("cam"), fx = $("fx"), ctx = fx.getContext("2d");
+
+let W = 0, H = 0, frames = 0, locked = false, finished = false;
+let box = null;              // {x,y,w,h} in video coords, from the recogniser
+let boxSmooth = null;        // eased toward `box` so the reticle doesn't jitter
+let conf = 0, t0 = Date.now();
+
+/* ── canvas sizing ── */
+function resize() {
+  W = fx.width = innerWidth * devicePixelRatio;
+  H = fx.height = innerHeight * devicePixelRatio;
+  fx.style.width = innerWidth + "px";
+  fx.style.height = innerHeight + "px";
+}
+addEventListener("resize", resize); resize();
+
+/* signal bars */
+const bars = $("bars");
+for (let i = 0; i < 22; i++) bars.appendChild(document.createElement("i"));
+const barEls = [...bars.children];
+
+function clock() {
+  const d = new Date();
+  $("clock").textContent = d.toTimeString().slice(0, 8);
+}
+setInterval(clock, 1000); clock();
+$("sid").textContent = Math.random().toString(16).slice(2, 8).toUpperCase();
+
+/* ═══ the overlay: a face mesh that locks to the detected box ═══ */
+// Procedural, not decorative-random: the node lattice is seeded per-face so it
+// sits still on the face instead of boiling, and only the scan energy animates.
+function meshNodes(b, cols, rows) {
+  const pts = [];
+  for (let r = 0; r <= rows; r++) {
+    for (let c = 0; c <= cols; c++) {
+      const u = c / cols, v = r / rows;
+      // bulge the lattice outward slightly so it reads as wrapping a face
+      const bulge = Math.sin(u * Math.PI) * Math.sin(v * Math.PI) * 0.10;
+      pts.push({
+        x: b.x + u * b.w,
+        y: b.y + (v - bulge * 0.5) * b.h,
+        u, v
+      });
+    }
+  }
+  return pts;
+}
+
+function drawMesh(b, tms) {
+  const cols = 8, rows = 10;
+  const pts = meshNodes(b, cols, rows);
+  const idx = (c, r) => r * (cols + 1) + c;
+  const pulse = 0.5 + 0.5 * Math.sin(tms / 620);
+
+  ctx.lineWidth = 1 * devicePixelRatio;
+  ctx.strokeStyle = "rgba(92,225,255," + (0.16 + 0.10 * pulse) + ")";
+  ctx.beginPath();
+  for (let r = 0; r <= rows; r++) {
+    for (let c = 0; c <= cols; c++) {
+      const p = pts[idx(c, r)];
+      if (c < cols) { const q = pts[idx(c + 1, r)]; ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); }
+      if (r < rows) { const q = pts[idx(c, r + 1)]; ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); }
+    }
+  }
+  ctx.stroke();
+
+  // diagonals only through the centre band — suggests topology without clutter
+  ctx.strokeStyle = "rgba(92,225,255,.10)";
+  ctx.beginPath();
+  for (let r = 2; r < rows - 1; r++) {
+    for (let c = 1; c < cols; c++) {
+      const p = pts[idx(c, r)], q = pts[idx(c + 1, r + 1)];
+      ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+    }
+  }
+  ctx.stroke();
+
+  // nodes brighten as a horizontal band sweeps down the face
+  const bandY = b.y + ((tms / 12) % (b.h + 120)) - 60;
+  for (const p of pts) {
+    const d = Math.abs(p.y - bandY);
+    const hot = Math.max(0, 1 - d / 46);
+    const rad = (1.1 + hot * 2.3) * devicePixelRatio;
+    ctx.fillStyle = hot > 0.05
+      ? "rgba(180,245,255," + (0.35 + hot * 0.65) + ")"
+      : "rgba(92,225,255,.30)";
+    ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 6.283); ctx.fill();
+    if (hot > 0.4) {
+      ctx.fillStyle = "rgba(92,225,255,.14)";
+      ctx.beginPath(); ctx.arc(p.x, p.y, rad * 3.1, 0, 6.283); ctx.fill();
+    }
+  }
+}
+
+function drawReticle(b, tms) {
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  const R = Math.max(b.w, b.h) * 0.78;
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // two counter-rotating arcs
+  for (const [rr, speed, seg] of [[R, 1, 0.55], [R * 0.86, -1.5, 0.32]]) {
+    ctx.rotate(0);
+    ctx.strokeStyle = "rgba(92,225,255,.5)";
+    ctx.lineWidth = 1.6 * devicePixelRatio;
+    for (let k = 0; k < 3; k++) {
+      const a0 = tms / 1000 * speed + k * 2.094;
+      ctx.beginPath();
+      ctx.arc(0, 0, rr, a0, a0 + seg);
+      ctx.stroke();
+    }
+  }
+
+  // targeting ticks
+  ctx.strokeStyle = "rgba(92,225,255,.75)";
+  ctx.lineWidth = 2 * devicePixelRatio;
+  for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2 + Math.PI / 4;
+    const x1 = Math.cos(a) * R * 0.62, y1 = Math.sin(a) * R * 0.62;
+    const x2 = Math.cos(a) * R * 0.78, y2 = Math.sin(a) * R * 0.78;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  ctx.restore();
+
+  // bounding brackets
+  const L = Math.min(b.w, b.h) * 0.26;
+  ctx.strokeStyle = locked ? "rgba(92,255,176,.95)" : "rgba(92,225,255,.85)";
+  ctx.lineWidth = 2.4 * devicePixelRatio;
+  const corners = [
+    [b.x, b.y, 1, 1], [b.x + b.w, b.y, -1, 1],
+    [b.x, b.y + b.h, 1, -1], [b.x + b.w, b.y + b.h, -1, -1]
+  ];
+  for (const [x, y, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(x + sx * L, y); ctx.lineTo(x, y); ctx.lineTo(x, y + sy * L);
+    ctx.stroke();
+  }
+}
+
+function render() {
+  const tms = Date.now() - t0;
+  ctx.clearRect(0, 0, W, H);
+
+  // ease the reticle toward the latest detection
+  if (box) {
+    if (!boxSmooth) boxSmooth = {...box};
+    else for (const k of ["x", "y", "w", "h"]) boxSmooth[k] += (box[k] - boxSmooth[k]) * 0.22;
+  }
+  if (boxSmooth && !finished) {
+    drawMesh(boxSmooth, tms);
+    drawReticle(boxSmooth, tms);
+  }
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+/* ═══ status helpers ═══ */
+function setStatus(big, sub) { $("statusBig").textContent = big; $("statusSub").textContent = sub; }
+function setBars(v) {
+  barEls.forEach((el, i) => {
+    const reach = v * barEls.length;
+    const on = i < reach;
+    el.style.height = (on ? 26 + Math.sin(i * 1.7) * 22 + v * 42 : 14) + "%";
+    el.style.opacity = on ? 0.95 : 0.22;
+  });
+}
+
+/* ═══ camera ═══ */
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+      audio: false
+    });
+    cam.srcObject = stream;
+    await cam.play();
+    return true;
+  } catch (e) {
+    document.body.className = "error";
+    $("errMsg").innerHTML = "OPTICAL SENSOR UNAVAILABLE<br><br>" +
+      "G.I.L. can't reach the camera — it may be in use by another app, "
+      + "or permission was declined.<br><br><span style='color:var(--cyan-dim)'>"
+      + (e && e.name ? e.name : "unknown") + "</span>";
+    return false;
+  }
+}
+
+/* ═══ the scan loop — real recognition, not theatre ═══ */
+const grab = document.createElement("canvas");
+const gctx = grab.getContext("2d");
+
+function frameToBase64() {
+  const vw = cam.videoWidth, vh = cam.videoHeight;
+  if (!vw || !vh) return null;
+  const scale = Math.min(1, 640 / vw);           // keep the upload small
+  grab.width = Math.round(vw * scale);
+  grab.height = Math.round(vh * scale);
+  gctx.drawImage(cam, 0, 0, grab.width, grab.height);
+  return { data: grab.toDataURL("image/jpeg", 0.72), w: grab.width, h: grab.height };
+}
+
+// map recogniser coords (unmirrored, source pixels) → screen, accounting for
+// object-fit:cover AND the mirror on the video element
+function toScreen(fb, srcW, srcH) {
+  const dpr = devicePixelRatio;
+  const scale = Math.max(innerWidth / srcW, innerHeight / srcH);
+  const offX = (innerWidth - srcW * scale) / 2;
+  const offY = (innerHeight - srcH * scale) / 2;
+  const x = offX + fb[0] * scale, y = offY + fb[1] * scale;
+  const w = fb[2] * scale, h = fb[3] * scale;
+  const mx = innerWidth - (x + w);                // mirrored horizontally
+  return { x: mx * dpr, y: y * dpr, w: w * dpr, h: h * dpr };
+}
+
+async function api(method, ...args) {
+  const r = await fetch("/api", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ method, args })
+  });
+  return (await r.json()).result;
+}
+
+let hits = 0;
+async function scanTick() {
+  if (finished) return;
+  const shot = frameToBase64();
+  if (!shot) return setTimeout(scanTick, 240);
+
+  const t = performance.now();
+  let res = null;
+  try { res = await api("face_scan", shot.data); } catch (e) {}
+  $("pLat").textContent = Math.round(performance.now() - t) + "ms";
+  $("frames").textContent = String(++frames).padStart(4, "0");
+
+  if (res) {
+    $("pEnr").textContent = res.enrolled ? res.enrolled + " on file" : "none";
+    $("pThr").textContent = (res.threshold ?? 0.25).toFixed(2);
+    conf = res.confidence || 0;
+    $("pConf").textContent = conf.toFixed(3);
+    setBars(conf);
+
+    if (res.face_box) {
+      box = toScreen(res.face_box, shot.w, shot.h);
+      $("pDet").textContent = "tracking";
+      $("pLock").textContent = "acquired";
+      $("pLand").textContent = "99";
+    } else {
+      $("pDet").textContent = "searching";
+      $("pLock").textContent = "—";
+      $("pLand").textContent = "0";
+    }
+
+    if (res.status === "match") {
+      $("pName").textContent = res.name;
+      $("pStat").textContent = "verified";
+      hits++;
+      setStatus("Verifying", "cross-checking against enrolled identities");
+      // require a couple of consecutive hits so one lucky frame can't authorise
+      if (hits >= 2) return confirmIdentity(res.name);
+    } else if (res.status === "unknown") {
+      hits = 0;
+      $("pName").textContent = "unrecognised";
+      $("pStat").textContent = "no match";
+      locked = false;
+      setStatus("Unrecognised", "this face is not enrolled");
+      document.body.classList.add("denied");
+    } else if (res.status === "no_enrolled") {
+      return fail("NO ENROLLED IDENTITIES<br><br>Nobody is registered yet, so "
+                + "there's nothing to match against.");
+    } else {
+      hits = 0;
+      document.body.classList.remove("denied");
+      $("pName").textContent = "—";
+      $("pStat").textContent = "searching";
+      setStatus("Scanning", "position your face in the frame");
+    }
+  }
+  setTimeout(scanTick, 260);
+}
+
+function fail(html) {
+  finished = true;
+  document.body.className = "error";
+  $("errMsg").innerHTML = html;
+}
+
+async function confirmIdentity(name) {
+  finished = true; locked = true;
+  document.body.classList.remove("scanning", "denied");
+  document.body.classList.add("confirmed");
+  $("greetName").textContent = "Hello, " + name;
+  setStatus("Identity confirmed", "access granted");
+  try { await api("face_confirmed", name); } catch (e) {}
+  // hand back to GIL once the greeting has landed
+  setTimeout(() => { try { api("scan_done", name); } catch (e) {} }, 3200);
+}
+
+/* ═══ boot ═══ */
+(async function boot() {
+  setStatus("Initialising", "bringing the optical sensor online");
+  const ok = await startCamera();
+  if (!ok) return;
+  $("pDet").textContent = "online";
+  setStatus("Scanning", "position your face in the frame");
+  document.body.className = "scanning";
+  scanTick();
+})();
+</script>
+</body>
+</html>

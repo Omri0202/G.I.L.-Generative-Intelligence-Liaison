@@ -193,11 +193,13 @@ class WebChat:
                     # whitelisted extension and a basename — no path traversal.
                     import os as _os
                     name = _os.path.basename(route)
+                    if route in ("/scan", "/scan/"):
+                        name = "scan.html"          # friendly alias
                     ext = _os.path.splitext(name)[1].lower()
                     CT = {".png": "image/png", ".ico": "image/x-icon",
                           ".js": "application/javascript",
                           ".json": "application/json", ".svg": "image/svg+xml",
-                          ".css": "text/css",
+                          ".css": "text/css", ".html": "text/html; charset=utf-8",
                           ".webmanifest": "application/manifest+json"}
                     fp = _icon_dir / name
                     if name and ext in CT and fp.is_file():
@@ -292,6 +294,33 @@ class WebChat:
         self._mobile_token = ""
         threading.Thread(target=lambda: self._rebind("127.0.0.1"),
                          daemon=True).start()
+
+    def open_scanner(self) -> bool:
+        """Open the biometric scanner full-screen — GIL's sign-in sequence."""
+        if not self._port:
+            return False
+        url = f"http://127.0.0.1:{self._port}/scan"
+        import subprocess
+        data_dir = Path(__file__).parent / "data" / "_web_profile"
+        for exe in (
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            "msedge", "chrome",
+        ):
+            try:
+                subprocess.Popen(
+                    [exe, f"--app={url}", "--start-fullscreen",
+                     f"--user-data-dir={data_dir}",
+                     "--no-first-run", "--no-default-browser-check",
+                     "--disable-extensions"],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                return True
+            except (FileNotFoundError, OSError):
+                continue
+        import webbrowser
+        webbrowser.open(url)
+        return True
 
     def _launch_window(self) -> None:
         url = f"http://127.0.0.1:{self._port}/"
@@ -420,6 +449,66 @@ class WebChat:
             except Exception:
                 pass
         self._push("gil.hideTyping")
+
+    # ── biometric sign-in (the face scanner at /scan.html) ────────────────────
+    _face_id = None
+
+    def _rpc_face_scan(self, frame=""):
+        """One frame from the scanner's camera → who is this?
+
+        The browser owns the camera (smooth preview, no extra dependency) and
+        Python owns recognition, so only a small JPEG crosses per tick."""
+        try:
+            import base64 as _b64, io as _io
+            import numpy as _np
+            from PIL import Image as _Image
+            raw = _b64.b64decode((frame or "").split(",", 1)[-1])
+            if not raw:
+                return {"status": "no_face", "confidence": 0.0, "face_box": None}
+            img = _Image.open(_io.BytesIO(raw)).convert("RGB")
+            bgr = _np.array(img)[:, :, ::-1]          # PIL is RGB, FaceID wants BGR
+        except Exception:
+            return {"status": "no_face", "confidence": 0.0, "face_box": None}
+
+        try:
+            if self._face_id is None:
+                from face_id import FaceID
+                self._face_id = FaceID()
+            res = dict(self._face_id.identify(bgr))
+        except Exception:
+            log.debug("face scan failed", exc_info=True)
+            return {"status": "no_face", "confidence": 0.0, "face_box": None}
+
+        # a little context for the HUD panels
+        try:
+            import face_id as _fid
+            res["threshold"] = float(getattr(_fid, "_SIM_THRESHOLD", 0.25))
+            res["enrolled"] = len(getattr(self._face_id, "_embeddings", {}) or {})
+        except Exception:
+            pass
+        return res
+
+    def _rpc_face_confirmed(self, name=""):
+        """Recognised — greet them out loud, the way a doorman would."""
+        name = (name or "").strip() or "there"
+        line = f"Identity confirmed. Hello {name}."
+        try:
+            eng = getattr(self._gil_window, "_engine", None)
+            if eng is not None:
+                eng._speak(line)
+                eng._last_spoke_at[0] = time.time() - 1.5
+                eng._last_said[0] = line
+        except Exception:
+            log.debug("greeting failed", exc_info=True)
+        return {"ok": True, "said": line}
+
+    def _rpc_scan_done(self, name=""):
+        """Scanner finished — close it and hand over to the chat."""
+        try:
+            self.add_message(f"**Identity confirmed** — welcome back, {name}.", "gil")
+        except Exception:
+            pass
+        return {"ok": True}
 
     # ── file / photo attachment (drag-drop, paste, or the paperclip) ──────────
     _IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
@@ -707,6 +796,13 @@ class WebChat:
                 return
             self._save_cfg("agent_approval_mode", mode)
             self.add_message(f"**Approval mode → `{mode}`** — {valid[mode]}.", "gil")
+            return
+
+        if name in ("scan", "faceid", "signin"):
+            if self.open_scanner():
+                self.add_message("**Biometric scan** — look at the camera.", "gil")
+            else:
+                self.add_message("I couldn't open the scanner.", "gil")
             return
 
         if name in ("mobile", "phone", "pair"):
