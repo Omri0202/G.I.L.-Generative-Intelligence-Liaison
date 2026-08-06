@@ -131,10 +131,22 @@ class Workspace:
         # fail (camera busy, bad light) and being stuck in a fullscreen mode you
         # can't drive is the exact trap we just fixed elsewhere.
         self.reader = None
+        self.hand_imgs = {}          # keeps PhotoImages alive while displayed
+        self.scan_mode = False
+        self.scale_ref = None        # two-hand distance when scaling began
+        self.hand_renderer = None
         if use_hands:
             try:
-                from spatial_overlay import HandReader
-                self.reader = HandReader()
+                import spatial_handrender as hr
+                import spatial_hands as sh
+                from spatial_reader import SpatialReader
+                calib = sh.HandCalibration.load()
+                # the scan's job now: set the skin tone of the rendered hands
+                self.hand_renderer = hr.HandRenderer(
+                    hr.skin_from_calibration(calib))
+                # cutouts off — we render geometry, so the camera pixels and the
+                # per-frame masking they need are pure cost
+                self.reader = SpatialReader(cutouts=False, calib=calib)
                 self.reader.start()
             except Exception:
                 self.reader = None
@@ -188,29 +200,44 @@ class Workspace:
 
         DWM mirrors are axis-aligned rectangles, so real perspective is off the
         table. Scaling and a curved baseline read as depth honestly, instead of
-        pretending to a 3D we can't render."""
+        pretending to a 3D we can't render.
+
+        Sizing fits the CELL in both axes. A width-only rule overflows the moment
+        a tall window is on screen: a portrait panel is much taller than a
+        landscape one at the same width, so rows ran off the bottom and the
+        outer columns ran off the right."""
         n = len(self.panels)
         if not n:
             return
         cols = min(n, 4 if n > 6 else 3 if n > 2 else n)
         rows = math.ceil(n / cols)
-        cw = self.sw / (cols + 0.5)
-        base_w = min(cw * 0.86, self.sw * 0.34)
-        self.base_w = base_w
-        top = self.sh * (0.40 if rows > 1 else 0.48)
-        vgap = base_w * 0.62
 
+        margin_x, top_bar, bottom_bar = 0.05, 0.16, 0.12
+        avail_w = self.sw * (1 - margin_x * 2)
+        avail_h = self.sh * (1 - top_bar - bottom_bar)
+        cell_w = avail_w / cols
+        cell_h = avail_h / rows
+        gap_x, gap_y = cell_w * 0.10, cell_h * 0.22   # room for titles + glow
+
+        # the widest panel that still fits its cell for EVERY aspect present
+        widest = 1.0
+        for p in self.panels:
+            a = max(p.mirror.aspect, 0.35)
+            fit_w = min(cell_w - gap_x, (cell_h - gap_y) * a)
+            widest = min(widest, fit_w) if widest != 1.0 else fit_w
+        self.base_w = max(140.0, widest)
+
+        top = self.sh * top_bar + cell_h / 2
         for i, p in enumerate(self.panels):
             r, c = divmod(i, cols)
             in_row = min(cols, n - r * cols)
             spread = (c - (in_row - 1) / 2)
-            x = self.sw / 2 + spread * cw
-            # arc: outer panels sit slightly lower and smaller
+            x = self.sw / 2 + spread * cell_w
             off = abs(spread) / max(in_row / 2, 1)
-            y = top + r * vgap + off * off * 26
+            y = top + r * cell_h + off * off * (cell_h * 0.05)
             p.tx, p.home_x = x, x
             p.ty, p.home_y = y, y
-            p.ts = 1.0 - off * 0.09
+            p.ts = 1.0 - off * 0.07
 
     # ── input ─────────────────────────────────────────────────────────────────
     def _mouse_move(self, e):
@@ -300,27 +327,48 @@ class Workspace:
         self.root.after(16, self.loop)
 
     def _hands(self):
-        s = self.reader.state
-        if s.get("err"):
+        if self.reader.err:
             self.say("hand tracking unavailable — use the mouse", 0.4)
             return
-        if not s.get("hands"):
+        hands = self.reader.snapshot()
+        self.hands = hands
+        if not hands:
             if self.state == "fist":
                 self.drop()
+            self.scale_ref = None
             self.state = "idle"
             return
 
-        tx, ty = s["x"] * self.sw, s["y"] * self.sh
+        primary = hands[0]
+        tx, ty = primary.x * self.sw, primary.y * self.sh
         d = math.hypot(tx - self.px, ty - self.py)
         a = min(0.5, 0.14 + d / 1100.0)
         self.px += (tx - self.px) * a
         self.py += (ty - self.py) * a
 
-        g = s.get("gesture", "none")
+        g = primary.gesture
         if self.tutorial and not self.tutorial.ready():
             self.tutorial.saw(g)
             self.state = g
             return
+
+        # ── two hands: pull apart to grow a panel, together to shrink ────────
+        if len(hands) == 2 and all(h.gesture in ("fist", "pinch") for h in hands):
+            a2, b2 = hands[0], hands[1]
+            gap = math.hypot((a2.x - b2.x) * self.sw, (a2.y - b2.y) * self.sh)
+            target = self.held or self.panel_at(self.px, self.py)
+            if target:
+                if self.scale_ref is None:
+                    self.scale_ref = (gap, target.ts)
+                else:
+                    ref_gap, ref_scale = self.scale_ref
+                    if ref_gap > 40:
+                        target.ts = max(0.45, min(2.4,
+                                                  ref_scale * (gap / ref_gap)))
+                self.state = "scale"
+                return
+        else:
+            self.scale_ref = None
 
         if g == "fist":
             if self.held is None:
@@ -335,6 +383,8 @@ class Workspace:
                 self.drop()
                 if p:
                     self.select(p)
+                else:
+                    self._pinch_empty()
             self.state = "pinch"
         else:
             if self.state == "fist":
@@ -343,6 +393,12 @@ class Workspace:
             self.state = g
         if self.tutorial:
             self.tutorial.saw(g)
+
+    def _pinch_empty(self):
+        """Pinching empty space opens the launcher — the way to reach apps that
+        aren't running yet, so the workspace isn't limited to what's open."""
+        self.launcher = not getattr(self, "launcher", False)
+        self.say("Launcher" if self.launcher else "", 1.0)
 
     # ── drawing ───────────────────────────────────────────────────────────────
     def draw(self, hovered):
@@ -370,9 +426,59 @@ class Workspace:
         for p in self.panels:
             self._panel(c, p, p is hovered)
 
+        self._draw_hands(c)
         self._chrome()
         if self.tutorial:
             self.tutorial.draw(c)
+
+    def _draw_hands(self, c):
+        """Draw the user's hands as shaded 3D geometry, posed by real tracking.
+
+        The pose is entirely theirs — 21 tracked landmarks, so every finger bends
+        and the hand rotates exactly as it does in life. Only the SURFACE is
+        synthetic, which avoids the background bleed, sensor noise and mismatched
+        lighting that made raw camera pixels look pasted on top of the scene."""
+        hands = getattr(self, "hands", None)
+        if not hands:
+            self.hand_imgs.clear()
+            return
+        try:
+            from PIL import Image, ImageTk
+        except Exception:
+            return
+
+        fw, fh = self.reader.frame_size
+        keep = {}
+        for i, hd in enumerate(hands):
+            if hd.pts is None or hd.zs is None:
+                continue
+            try:
+                img, off = self.hand_renderer.render(hd.pts, hd.zs, fw, fh)
+            except Exception:
+                continue
+
+            # camera pixels -> screen, keeping the hand near life-size
+            scale = (self.sw / max(fw, 1)) * 0.62
+            dw = max(10, int(img.size[0] * scale))
+            dh = max(10, int(img.size[1] * scale))
+
+            # Anchor the hand ON the point it controls. Re-deriving position from
+            # camera coordinates fights the pointer's own remap and puts the hand
+            # where the user isn't reaching; the control point is the thumb-index
+            # midpoint, so centring there lines up exactly.
+            if i == 0:
+                cx, cy = self.px, self.py
+            else:
+                cx, cy = hd.x * self.sw, hd.y * self.sh
+            try:
+                im = img.resize((dw, dh), Image.LANCZOS)
+                im = im.transpose(Image.FLIP_LEFT_RIGHT)   # match the mirroring
+                photo = ImageTk.PhotoImage(im)
+            except Exception:
+                continue
+            c.create_image(int(cx), int(cy), image=photo, anchor="center")
+            keep[i] = photo          # tkinter drops un-referenced PhotoImages
+        self.hand_imgs = keep
 
     def _panel(self, c, p: Panel, is_hover: bool):
         l, t, r, b = p.rect(self.base_w, self.tick)

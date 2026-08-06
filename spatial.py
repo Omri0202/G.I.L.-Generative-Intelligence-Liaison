@@ -112,6 +112,20 @@ def open_workspace(hands: bool = True) -> tuple[bool, str]:
                   "fist to carry one, pinch to drop into it, `Esc` to come back.")
 
 
+def scan_hands() -> tuple[bool, str]:
+    """Learn the user's skin tone so the rendered hands are theirs."""
+    script = ROOT / "spatial_scan.py"
+    if not script.is_file():
+        return False, "The hand scanner is missing from this install."
+    try:
+        subprocess.Popen([sys.executable, str(script)], cwd=str(ROOT))
+    except Exception as exc:
+        return False, f"I couldn't start the hand scan: {exc}"
+    return True, ("**Scanning your hands.** ✋ Hold an open hand up to the "
+                  "camera and turn it slowly — I'll match the hands I draw to "
+                  "your own.")
+
+
 def close_workspace() -> tuple[bool, str]:
     global _ws
     if not workspace_running():

@@ -82,3 +82,4 @@ android/.gradle/
 android/local.properties
 data/_scan_profile/
 data/spatial_tutorial_done
+data/hand_calibration.json

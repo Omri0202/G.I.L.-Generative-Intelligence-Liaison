@@ -804,6 +804,8 @@ class WebChat:
             a = arg.lower().strip()
             if a in ("off", "close", "exit"):
                 _, msg = spatial.close_workspace()
+            elif a in ("scan", "hands", "calibrate"):
+                _, msg = spatial.scan_hands()
             else:
                 _, msg = spatial.open_workspace(hands=a != "mouse")
             self.add_message(msg, "gil")
