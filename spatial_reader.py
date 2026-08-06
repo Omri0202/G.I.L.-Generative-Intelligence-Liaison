@@ -25,7 +25,25 @@ import spatial_hands as sh
 MODEL = Path(__file__).parent / "data" / "hand_landmarker.task"
 
 WRIST, THUMB, INDEX, MIDDLE = 0, 4, 8, 12
+MIDDLE_MCP = 9                       # rigid palm reference; see pinch_ratio()
 PIPS = {8: 6, 12: 10, 16: 14, 20: 18}
+
+# Pinch thresholds, in PALM LENGTHS. Hysteretic: a held pinch jitters right
+# around a single cutoff, so entering costs less than staying.
+#
+# Set from hand geometry, not from the synthetic test — its poses separate at
+# 0.09 against 1.13, a gap far wider than a real hand's, so it will accept
+# almost any threshold. On a ~95mm palm: fingers touching is ~0.10, a loose
+# pinch 20mm apart is ~0.21, and a relaxed open hand sits around 0.65-0.95.
+# 0.55 clears the sloppiest pinch while staying under the most closed rest pose.
+#
+# Note these are NOT the old 0.40/0.52 rescaled. Under the old denominator the
+# ratio inflated while pinching, so the old numbers were effectively tighter
+# than they looked; a like-for-like port would have made detection hair-trigger.
+PINCH_ENTER, PINCH_STAY = 0.55, 0.78
+# Range over which closure ramps 0..1, for continuous feedback rather than a
+# binary state. Open is a relaxed hand, shut is fingers actually touching.
+PINCH_OPEN, PINCH_SHUT = 1.10, 0.18
 
 # The camera sees more than you can comfortably reach, so a central box maps to
 # the whole screen — otherwise the display's edges are unreachable.
@@ -99,12 +117,30 @@ class SpatialReader(threading.Thread):
 
     # ── gesture ───────────────────────────────────────────────────────────────
     @staticmethod
+    def pinch_ratio(lm) -> float:
+        """Thumb-to-index gap, in palm lengths.
+
+        Normalised by wrist → middle MCP, NOT wrist → middle fingertip. The
+        fingertip moves when the finger curls, and curling the middle finger is
+        exactly what a hand does while pinching — so the old denominator
+        collapsed at the moment it needed to be stable, inflating the ratio and
+        making a pinch harder to detect the harder you pinched. Palm length is
+        rigid under finger articulation and still scales with distance from the
+        camera, which is the whole job."""
+        palm = max(_d(lm[WRIST], lm[MIDDLE_MCP]), 1e-6)
+        return _d(lm[THUMB], lm[INDEX]) / palm
+
+    @staticmethod
+    def closure(ratio: float) -> float:
+        """0 when the hand is open, 1 when thumb and index are together."""
+        return min(1.0, max(0.0, (PINCH_OPEN - ratio) / (PINCH_OPEN - PINCH_SHUT)))
+
+    @staticmethod
     def classify(lm, prev: str = "none") -> str:
         w = lm[WRIST]
         ext = {t: _d(lm[t], w) > _d(lm[p], w) * 1.05 for t, p in PIPS.items()}
         n = sum(ext.values())
-        hand = max(_d(lm[WRIST], lm[MIDDLE]), 1e-6)
-        pinch = _d(lm[THUMB], lm[INDEX]) / hand
+        pinch = SpatialReader.pinch_ratio(lm)
 
         # Pinch used to require the MIDDLE finger extended, but pinching
         # naturally curls the middle finger along with the index — so a real
@@ -116,7 +152,7 @@ class SpatialReader(threading.Thread):
         # The threshold is also hysteretic. A single cutoff sat right where a
         # held pinch jitters, so the gesture flickered pinch→none→pinch many
         # times a second and never held long enough to register.
-        if pinch < (0.52 if prev == "pinch" else 0.40) and n >= 1:
+        if pinch < (PINCH_STAY if prev == "pinch" else PINCH_ENTER) and n >= 1:
             return "pinch"
         if n == 0:
             return "fist"

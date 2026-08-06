@@ -75,6 +75,27 @@ SHELF_SRC_PX = 128
 # not — and both are long enough that brushing past something does nothing.
 ARM_PANEL = 0.34
 ARM_DESKTOP = 0.58
+#: How far the cursor may wander from where a pinch STARTED before the pinch is
+#: treated as abandoned. Generous, because closing thumb and index physically
+#: translates the tracked point; only a deliberate move away should cancel.
+CANCEL_RADIUS = 95.0
+
+# ── magnetic targeting ────────────────────────────────────────────────────────
+#: how far outside itself a target can pull the cursor
+MAGNET_REACH = 64.0
+#: panels are pointed at from further away than shelf icons, which sit in dense
+#: rows where a wide reach would make neighbours inseparable
+MAGNET_PANEL_BONUS = 1.6
+#: bigger targets win ties. This is Fitts's law, not favouritism.
+MAGNET_SIZE_BIAS = 0.22
+#: how much better a rival must score before it takes the lock. Without this the
+#: target flickers between neighbours and the commit ring restarts each time.
+MAGNET_STICK = 18.0
+#: seconds of velocity used to predict ahead, covering tracking latency
+LOOKAHEAD = 0.08
+#: furthest the DRAWN cursor is pulled toward its lock. The hand still renders
+#: where it truly is — the visible disagreement is what reads as "locked on".
+SNAP_MAX = 22.0
 
 # ── hands ─────────────────────────────────────────────────────────────────────
 #: on-screen hand size, as a multiple of its true camera-pixel extent mapped to
@@ -211,6 +232,13 @@ class Workspace:
         self.arm_t = 0.0             # 0..1 progress toward opening it
         self.awaiting = None         # (name, deadline) for a launching app
         self.focused = None          # panel Enter would drop into
+        self.vx = self.vy = 0.0      # filtered cursor velocity, px/s
+        self.speed = 0.0
+        self.locked = None           # magnetically held target
+        self.locked_score = 1e9
+        self.arm_origin = (0.0, 0.0)  # where a pinch began; see apply_gesture
+        import spatial_filter as sf
+        self.cursor_filter = sf.make("cursor")
 
         # Hands are the point, but the mouse must work too: hand tracking can
         # fail (camera busy, bad light) and being stuck in a fullscreen mode you
@@ -511,7 +539,9 @@ class Workspace:
         if not self.items:
             return
         reach = self.shelf_cell * SHELF_REACH
-        focus = self.item_at(self.px, self.py)
+        # the magnetically locked item, not a raw hit test, so the icon that
+        # names itself is the one a pinch would actually open
+        focus = self.locked if isinstance(self.locked, DeskItem) else None
         for it in self.items:
             dx = (self.px - it.x) / reach
             dy = (self.py - it.y) / (reach * 0.85)
@@ -568,7 +598,11 @@ class Workspace:
 
     # ── input ─────────────────────────────────────────────────────────────────
     def _mouse_move(self, e):
+        # A mouse is already smooth, so it bypasses the filter — but its
+        # velocity readings must be cleared, or a stale hand speed would keep
+        # the magnetic gate wide open under a perfectly steady pointer.
         self.px, self.py = e.x, e.y
+        self.vx = self.vy = self.speed = 0.0
 
     def _mouse_down(self, e):
         self.px, self.py = e.x, e.y
@@ -589,6 +623,70 @@ class Workspace:
             if l <= x <= r and t <= y <= b:
                 return p
         return None
+
+    # ── magnetic targeting ────────────────────────────────────────────────────
+    def _rect_of(self, t):
+        if isinstance(t, DeskItem):
+            return t.rect(self.shelf_cell)
+        return t.rect(self.base_w, self.tick)
+
+    def resolve_target(self, x=None, y=None):
+        """What a pinch would act on — scored, not first-hit.
+
+        Aiming a hand at a small target through a webcam is genuinely hard, so
+        the UI meets it most of the way: targets pull from outside themselves,
+        larger ones win ties, the gate widens with speed because fast movement
+        means coarse aim, and the current pick keeps its lock unless clearly
+        beaten so a dense shelf row doesn't flicker under a shaking hand.
+        """
+        x = self.px if x is None else x
+        y = self.py if y is None else y
+        # predict ahead: covers the tracking latency that otherwise leaves the
+        # target behind the hand during a fast reach
+        x += self.vx * LOOKAHEAD
+        y += self.vy * LOOKAHEAD
+        widen = 1.0 + 0.6 * min(self.speed / 1200.0, 1.0)
+
+        cands = list(self.panels)
+        if self.shelf_visible:
+            cands += self.items
+
+        best, best_score, inc_score = None, 1e9, None
+        for t in cands:
+            l, tp, r, b = self._rect_of(t)
+            # distance to the RECT, so anywhere inside scores zero
+            dx = max(l - x, 0.0, x - r)
+            dy = max(tp - y, 0.0, y - b)
+            d = math.hypot(dx, dy)
+            reach = MAGNET_REACH * widen
+            if not isinstance(t, DeskItem):
+                reach *= MAGNET_PANEL_BONUS
+            if d > reach:
+                continue
+            score = d - MAGNET_SIZE_BIAS * min(r - l, b - tp) * 0.5
+            if t is self.locked:
+                inc_score = score
+            if score < best_score:
+                best, best_score = t, score
+
+        if inc_score is not None and best is not self.locked:
+            if best is None or best_score > inc_score - MAGNET_STICK:
+                best, best_score = self.locked, inc_score
+
+        self.locked, self.locked_score = best, best_score
+        return best
+
+    def cursor_draw_pos(self):
+        """Where the cursor is DRAWN: pulled toward its lock, capped."""
+        if self.locked is None:
+            return self.px, self.py
+        l, t, r, b = self._rect_of(self.locked)
+        cx, cy = (l + r) * 0.5, (t + b) * 0.5
+        d = math.hypot(cx - self.px, cy - self.py)
+        if d < 1e-3:
+            return self.px, self.py
+        k = min(SNAP_MAX, 0.38 * d) / d
+        return self.px + (cx - self.px) * k, self.py + (cy - self.py) * k
 
     def select(self, p: Panel):
         """Focus a window IN the space. Never leaves the workspace.
@@ -752,10 +850,16 @@ class Workspace:
         if changed:
             self._layout()
 
+        # One magnetic resolve per frame, and everything downstream agrees with
+        # it: what glows, what magnifies, and what a pinch would act on are the
+        # same object. Hit-testing separately per feature is how a target ends
+        # up highlighted but not actually selectable.
+        self.resolve_target()
         self._update_shelf(dt)
         self._advance_arm(dt)
 
-        hovered = self.panel_at(self.px, self.py) if not self.held else self.held
+        hovered = self.held or (self.locked if isinstance(self.locked, Panel)
+                                else None)
         for p in self.panels:
             want = 1.0 if p is hovered else 0.0
             p.hover += (want - p.hover) * min(1.0, dt * 11.0)
@@ -777,14 +881,26 @@ class Workspace:
                 self.drop()
             self.scale_ref = None
             self.state = "idle"
+            # Drop the filter's history rather than letting it interpolate
+            # across the gap — a hand that leaves and returns elsewhere would
+            # otherwise send the cursor gliding across the screen.
+            self.cursor_filter.reset()
             return
 
         primary = hands[0]
-        tx, ty = primary.x * self.sw, primary.y * self.sh
-        d = math.hypot(tx - self.px, ty - self.py)
-        a = min(0.5, 0.14 + d / 1100.0)
-        self.px += (tx - self.px) * a
-        self.py += (ty - self.py) * a
+        now = time.time()
+        dt = min(0.1, max(1e-3, now - getattr(self, "_hand_t", now - 0.016)))
+        self._hand_t = now
+
+        # One Euro rather than the old speed-scaled lerp. That lerp was a
+        # hand-rolled version of this idea with none of the theory behind it:
+        # a single coefficient cannot both hold the cursor still while you aim
+        # and keep up while you reach, so it shimmered at rest AND lagged in
+        # motion. See spatial_filter for why not Kalman or double-exponential.
+        self.px, self.py = self.cursor_filter(
+            primary.x * self.sw, primary.y * self.sh, dt)
+        self.vx, self.vy = self.cursor_filter.velocity
+        self.speed = self.cursor_filter.speed
 
         g = primary.gesture
         if self.tutorial and not self.tutorial.ready():
@@ -830,7 +946,9 @@ class Workspace:
             # so the pinch that followed "opened" a panel you were now holding
             # rather than the one you were pointing at.
             if self.held is None and self.fist_frames >= FIST_HOLD:
-                p = self.panel_at(self.px, self.py)
+                # magnetic here too: reaching for a panel to carry it should be
+                # no harder than reaching for one to open it
+                p = self.locked if isinstance(self.locked, Panel) else None
                 if p:
                     self.grab(p)
             self.state = "fist"
@@ -850,11 +968,16 @@ class Workspace:
             # panel hid that behind `closing`, but launching a desktop item did
             # not, so keeping the pinch down started the app over and over.
             if self.pinch_frames >= PINCH_HOLD and not self.pinch_fired:
-                target = (self.held or self.panel_at(self.px, self.py)
-                          or self.item_at(self.px, self.py))
-                if target is not self.arm:
-                    self.arm = target
+                # Resolve ONCE, on the frame the pinch is first recognised, and
+                # hold it. Re-resolving every frame meant the pinch moved its
+                # own target: closing thumb and index translates the tracked
+                # midpoint 10-30px, so the arm reset part-way through the
+                # commit and the ring restarted. That was most of what "it
+                # doesn't register" actually was.
+                if self.arm is None:
+                    self.arm = self.held or self.resolve_target()
                     self.arm_t = 0.0
+                    self.arm_origin = (self.px, self.py)
             self.state = "pinch"
         else:
             if self.state == "fist":
@@ -876,6 +999,16 @@ class Workspace:
         filled, so backing out is quicker than committing.
         """
         if self.state == "pinch" and self.arm is not None:
+            # Walking away from where the pinch began abandons it. Drift within
+            # that radius does not, because the pinch itself moves the hand —
+            # which is precisely why the target is latched rather than
+            # re-resolved. Cancelling also latches, so a deliberate move away
+            # cannot immediately re-arm on whatever it landed near.
+            if math.hypot(self.px - self.arm_origin[0],
+                          self.py - self.arm_origin[1]) > CANCEL_RADIUS:
+                self.arm, self.arm_t = None, 0.0
+                self.pinch_fired = True
+                return
             self.arm_t += dt / self._arm_secs(self.arm)
             if self.arm_t >= 1.0:
                 target, self.arm, self.arm_t = self.arm, None, 0.0
@@ -1155,13 +1288,19 @@ class Workspace:
 
     def _chrome(self):
         c = self.cv
-        # pointer: a calm ring, brighter when it can do something
+        # The cursor is drawn at its magnetically snapped position while the
+        # hand renders where it truly is. That small disagreement is the signal
+        # that the system has locked on — the same trick a good gaze cursor
+        # uses — and it costs nothing, because the snap only moves the marker.
+        cx, cy = self.cursor_draw_pos()
         act = {"fist": GRAB, "pinch": "#FFFFFF"}.get(self.state, ACCENT)
         rr = 15 if self.state != "pinch" else 9
-        c.create_oval(self.px - rr, self.py - rr, self.px + rr, self.py + rr,
-                      outline=act, width=2)
-        c.create_oval(self.px - 3, self.py - 3, self.px + 3, self.py + 3,
-                      fill=act, outline="")
+        if self.locked is not None and self.state != "pinch":
+            # a thin tether back to the true hand position, so the offset reads
+            # as deliberate rather than as drift
+            c.create_line(self.px, self.py, cx, cy, fill=ACCENT_SOFT, width=1)
+        c.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=act, width=2)
+        c.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=act, outline="")
 
         # The commit hold, drawn as it fills. A hold with no visible progress is
         # no better than a hair trigger: you cannot tell whether something is
@@ -1170,14 +1309,21 @@ class Workspace:
         if self.arm is not None and self.arm_t > 0.015:
             t = min(1.0, self.arm_t)
             ar = 30
-            c.create_oval(self.px - ar, self.py - ar, self.px + ar, self.py + ar,
+            # centred on the ARM's own rect, not on the live cursor. The target
+            # is latched at pinch onset, so a ring that follows the hand would
+            # drift away from the thing it is actually committing to.
+            al, at, arr, ab = self._rect_of(self.arm)
+            ax, ay = (al + arr) * 0.5, (at + ab) * 0.5
+            ax = cx + (ax - cx) * 0.55        # part way, so it stays near you
+            ay = cy + (ay - cy) * 0.55
+            c.create_oval(ax - ar, ay - ar, ax + ar, ay + ar,
                           outline=_hex(_blend(BG_BOT, (60, 92, 116), 0.9)), width=3)
-            c.create_arc(self.px - ar, self.py - ar, self.px + ar, self.py + ar,
+            c.create_arc(ax - ar, ay - ar, ax + ar, ay + ar,
                          start=90, extent=-359.9 * t, style="arc",
                          outline=ACCENT, width=3)
             label = (self.arm.name if isinstance(self.arm, DeskItem)
                      else self.arm.mirror.title)
-            c.create_text(self.px, self.py + ar + 16, text=label[:34],
+            c.create_text(ax, ay + ar + 16, text=label[:34],
                           fill=TEXT, font=("Segoe UI", 10))
 
         c.create_text(38, 34, text="SPATIAL WORKSPACE", anchor="w",
