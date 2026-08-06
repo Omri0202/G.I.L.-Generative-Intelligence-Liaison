@@ -56,7 +56,7 @@ _dwm.DwmQueryThumbnailSourceSize.restype = ctypes.c_long
 class Mirror:
     """One live window, rendered into our host window."""
 
-    __slots__ = ("src", "title", "handle", "size", "_visible")
+    __slots__ = ("src", "title", "handle", "size", "_visible", "_state")
 
     def __init__(self, host_hwnd: int, src_hwnd: int, title: str):
         self.src = src_hwnd
@@ -64,6 +64,7 @@ class Mirror:
         self.handle = None
         self.size = (16, 9)
         self._visible = True
+        self._state = None          # last rect pushed to DWM; see place()
         th = c_void_p()
         try:
             hr = _dwm.DwmRegisterThumbnail(host_hwnd, src_hwnd, byref(th))
@@ -101,7 +102,7 @@ class Mirror:
             return
         state = (int(left), int(top), int(right), int(bottom),
                  max(0, min(255, int(opacity))), bool(visible))
-        if state == getattr(self, "_state", None):
+        if state == self._state:
             return
         self._state = state
         p = _ThumbProps()

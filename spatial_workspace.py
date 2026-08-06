@@ -632,7 +632,7 @@ class Workspace:
             return
         try:
             self._frame()
-        except Exception:
+        except Exception as exc:
             self._faults += 1
             try:
                 import traceback
@@ -640,14 +640,43 @@ class Workspace:
                     .write(f"\n--- frame {self.tick} ---\n{traceback.format_exc()}")
             except Exception:
                 pass
+            # SAY SO ON SCREEN. A frame that dies part-way still leaves whatever
+            # it managed to draw, so the failure looks like missing features
+            # rather than an error — the workspace once ran for hundreds of
+            # frames with no panels, no shelf and no hands, and nothing on
+            # screen suggested anything had gone wrong. This is drawn after the
+            # failed frame, so it sits on top of the partial one.
+            try:
+                self._fault_banner(exc)
+            except Exception:
+                pass
             # a persistently broken frame is worse than leaving: say so and go,
             # rather than sitting on a frozen fullscreen window
-            if self._faults > 240:
+            if self._faults > 600:
                 self.say("Spatial hit an error — leaving", 1.0)
-                return self.quit()
+                return self.root.after(1200, self.quit)
         finally:
             if not self.closing:
                 self.root.after(16, self.loop)
+
+    def _fault_banner(self, exc):
+        """Put the failure on screen, in words, where it cannot be mistaken for
+        a feature that simply isn't there."""
+        c = self.cv
+        y = self.sh * 0.5
+        c.create_rectangle(0, y - 46, self.sw, y + 46, fill="#2A1016", outline="")
+        c.create_line(0, y - 46, self.sw, y - 46, fill="#C4576B", width=2)
+        c.create_line(0, y + 46, self.sw, y + 46, fill="#C4576B", width=2)
+        c.create_text(self.sw / 2, y - 18,
+                      text="Something in this frame failed to draw",
+                      fill="#FFD3DC", font=("Segoe UI", 15, "bold"))
+        c.create_text(self.sw / 2, y + 6,
+                      text=f"{type(exc).__name__}: {str(exc)[:90]}",
+                      fill="#F2A9B8", font=("Consolas", 10))
+        c.create_text(self.sw / 2, y + 28,
+                      text=f"{self._faults} frames affected · logged to "
+                           f"data{chr(92)}spatial_errors.log · Esc to leave",
+                      fill="#C98C9B", font=("Segoe UI", 10))
 
     def _frame(self):
         if win32api.GetAsyncKeyState(win32con.VK_ESCAPE) & 0x8000:
