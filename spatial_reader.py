@@ -72,6 +72,7 @@ class SpatialReader(threading.Thread):
         self._stop = threading.Event()
         self._scan_samples = []
         self._scanning = False
+        self._prev_g = {}         # handedness → last gesture, for hysteresis
 
     # ── calibration ("scan my hands") ─────────────────────────────────────────
     def begin_scan(self):
@@ -98,13 +99,24 @@ class SpatialReader(threading.Thread):
 
     # ── gesture ───────────────────────────────────────────────────────────────
     @staticmethod
-    def classify(lm) -> str:
+    def classify(lm, prev: str = "none") -> str:
         w = lm[WRIST]
         ext = {t: _d(lm[t], w) > _d(lm[p], w) * 1.05 for t, p in PIPS.items()}
         n = sum(ext.values())
         hand = max(_d(lm[WRIST], lm[MIDDLE]), 1e-6)
         pinch = _d(lm[THUMB], lm[INDEX]) / hand
-        if pinch < 0.32 and ext[12]:
+
+        # Pinch used to require the MIDDLE finger extended, but pinching
+        # naturally curls the middle finger along with the index — so a real
+        # pinch failed this test, fell through to `n == 0`, and was reported as
+        # a FIST. Pinching to open a panel grabbed it instead. What actually
+        # separates the two is whether the hand is balled at all, so ask that
+        # instead: any finger still out means this is a pinch, not a fist.
+        #
+        # The threshold is also hysteretic. A single cutoff sat right where a
+        # held pinch jitters, so the gesture flickered pinch→none→pinch many
+        # times a second and never held long enough to register.
+        if pinch < (0.52 if prev == "pinch" else 0.40) and n >= 1:
             return "pinch"
         if n == 0:
             return "fist"
@@ -157,16 +169,19 @@ class SpatialReader(threading.Thread):
                 out = []
                 for i, lm in enumerate(res.hand_landmarks or []):
                     hd = Hand()
-                    hd.gesture = self.classify(lm)
+                    try:
+                        hd.label = res.handedness[i][0].category_name
+                    except Exception:
+                        hd.label = ""
+                    # hysteresis is per hand, keyed on handedness rather than
+                    # list position — the detector reorders the list freely
+                    hd.gesture = self.classify(lm, self._prev_g.get(hd.label, "none"))
+                    self._prev_g[hd.label] = hd.gesture
                     cx = (lm[THUMB].x + lm[INDEX].x) / 2
                     cy = (lm[THUMB].y + lm[INDEX].y) / 2
                     # mirrored so moving right on screen means moving right
                     hd.x = 1.0 - _remap(cx, X_LO, X_HI)
                     hd.y = _remap(cy, Y_LO, Y_HI)
-                    try:
-                        hd.label = res.handedness[i][0].category_name
-                    except Exception:
-                        hd.label = ""
                     pts = sh._px(lm, w, h)
                     hd.pts = pts
                     hd.zs = np.array([p.z for p in lm], dtype=np.float32)

@@ -44,6 +44,17 @@ GRAB = "#FFC46B"
 TEXT = "#DCE9F2"
 MUTED = "#4A6076"
 
+# ── gesture timing ────────────────────────────────────────────────────────────
+#: frames a pinch must hold before it acts. Two is enough to reject a twitch
+#: while still feeling immediate; the loop runs at ~60fps, so this is ~33ms.
+PINCH_HOLD = 2
+#: non-pinch frames tolerated before the pinch is considered released. Tracking
+#: drops the odd frame, and without this each drop restarted the whole gesture.
+PINCH_GRACE = 5
+#: frames a fist must hold before it picks a panel up, so the fist-like frame on
+#: the way into a pinch doesn't snatch one.
+FIST_HOLD = 2
+
 
 def _blend(c1, c2, t):
     return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
@@ -81,12 +92,17 @@ class Panel:
         self.s += (self.ts - self.s) * min(1.0, dt * 9.0)
 
     def rect(self, base_w: float, tick: int):
-        """Screen rectangle, including a slow idle drift so it feels afloat."""
+        """Screen rectangle, including a slow idle drift so it feels afloat.
+
+        Hover scales the panel up as well as lifting it: on a flat plane, size
+        IS distance, so growing toward the viewer is what "coming forward"
+        actually looks like. A lift alone just slides it up the screen."""
         drift = 0.0 if self.grabbed else math.sin(tick / 62.0 + self.seed) * 3.0
-        w = base_w * self.s
+        w = base_w * self.s * (1.0 + 0.13 * self.hover)
         h = w / max(self.mirror.aspect, 0.35)
-        return (self.x - w / 2, self.y - h / 2 + drift,
-                self.x + w / 2, self.y + h / 2 + drift)
+        lift = self.hover * 16.0
+        return (self.x - w / 2, self.y - h / 2 + drift - lift,
+                self.x + w / 2, self.y + h / 2 + drift - lift)
 
 
 class Workspace:
@@ -126,6 +142,9 @@ class Workspace:
         self.status = ""
         self.status_until = 0.0
         self.pinch_frames = 0
+        self.pinch_fired = False     # one action per pinch, not one per frame
+        self.pinch_grace = 0         # dropped frames tolerated mid-pinch
+        self.fist_frames = 0
 
         # Hands are the point, but the mouse must work too: hand tracking can
         # fail (camera busy, bad light) and being stuck in a fullscreen mode you
@@ -370,15 +389,40 @@ class Workspace:
         else:
             self.scale_ref = None
 
+        self.apply_gesture(g)
+        if self.tutorial:
+            self.tutorial.saw(g)
+
+    def apply_gesture(self, g: str):
+        """Turn one frame's gesture into grabs and opens.
+
+        Kept free of camera and canvas state so the timing can be exercised
+        directly against flickery gesture streams — this is the part that made
+        opening a panel feel like luck, and eyeballing it was how it shipped
+        broken.
+        """
         if g == "fist":
-            if self.held is None:
+            self.fist_frames += 1
+            self.pinch_grace = 0
+            # A pinch passes through a fist-like frame on its way in. Grabbing
+            # on the very first fist frame let that transient snatch a panel,
+            # so the pinch that followed "opened" a panel you were now holding
+            # rather than the one you were pointing at.
+            if self.held is None and self.fist_frames >= FIST_HOLD:
                 p = self.panel_at(self.px, self.py)
                 if p:
                     self.grab(p)
             self.state = "fist"
         elif g == "pinch":
+            self.fist_frames = 0
             self.pinch_frames += 1
-            if self.pinch_frames == 3:          # brief hold, avoids twitch-selects
+            self.pinch_grace = PINCH_GRACE
+            # Fires ONCE per pinch, on a >= test. The old `== 3` fired on
+            # exactly one frame: a single dropped or misread frame reset the
+            # counter to zero, and every frame past the third did nothing at
+            # all — so whether a pinch opened anything was mostly luck.
+            if self.pinch_frames >= PINCH_HOLD and not self.pinch_fired:
+                self.pinch_fired = True
                 p = self.held or self.panel_at(self.px, self.py)
                 self.drop()
                 if p:
@@ -389,10 +433,15 @@ class Workspace:
         else:
             if self.state == "fist":
                 self.drop()
-            self.pinch_frames = 0
-            self.state = g
-        if self.tutorial:
-            self.tutorial.saw(g)
+            self.fist_frames = 0
+            # Ride out a few dropped frames rather than restarting the pinch.
+            if self.pinch_grace > 0:
+                self.pinch_grace -= 1
+                self.state = "pinch"
+            else:
+                self.pinch_frames = 0
+                self.pinch_fired = False
+                self.state = g
 
     def _pinch_empty(self):
         """Pinching empty space opens the launcher — the way to reach apps that
@@ -481,11 +530,7 @@ class Workspace:
         self.hand_imgs = keep
 
     def _panel(self, c, p: Panel, is_hover: bool):
-        l, t, r, b = p.rect(self.base_w, self.tick)
-        lift = p.hover * 12.0
-        t -= lift
-        b -= lift
-
+        l, t, r, b = p.rect(self.base_w, self.tick)   # hover lift is in rect()
         grabbed = p.grabbed
         accent = GRAB if grabbed else ACCENT
         # glow: concentric strokes fading into the backdrop. No alpha in tkinter,
