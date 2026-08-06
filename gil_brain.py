@@ -125,6 +125,54 @@ def _load_model() -> str:
 
 GROQ_MODEL = _load_model()
 
+# Brains the user can pick between, verified against this account's
+# /v1/models rather than written from memory. gemma2-9b-it and
+# mixtral-8x7b-32768 are deliberately ABSENT: both were still offered by the
+# desktop settings menu and neither is served any more, so choosing either
+# silently broke every reply with a 400.
+MODELS = [
+    {"id": "openai/gpt-oss-120b",     "name": "GPT-OSS 120B",
+     "note": "Strongest. The default brain.",              "tag": "default"},
+    {"id": "openai/gpt-oss-20b",      "name": "GPT-OSS 20B",
+     "note": "Same family, quicker to first word.",        "tag": "fast"},
+    {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B",
+     "note": "Strong all-rounder with a different voice.", "tag": ""},
+    {"id": "llama-3.1-8b-instant",    "name": "Llama 3.1 8B",
+     "note": "Fastest. Best for short commands.",          "tag": "fast"},
+    {"id": "groq/compound",           "name": "Compound",
+     "note": "Searches the web and runs code on its own.", "tag": "tools"},
+    {"id": "qwen/qwen3.6-27b",        "name": "Qwen3.6 27B",
+     "note": "Reads images as well as text.",              "tag": "vision"},
+]
+MODEL_IDS = {m["id"] for m in MODELS}
+
+
+def current_model() -> str:
+    return GROQ_MODEL
+
+
+def set_model(model_id: str) -> bool:
+    """Switch the brain, now and for next launch.
+
+    Rebinds the module global rather than only writing config: every read of
+    GROQ_MODEL in this file goes through that global at call time, so the
+    change lands on the next message instead of the next restart."""
+    global GROQ_MODEL
+    if model_id not in MODEL_IDS:
+        return False
+    GROQ_MODEL = model_id
+    try:
+        import json
+        from pathlib import Path
+        p = Path(__file__).parent / "data" / "gil_config.json"
+        cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        cfg["ai_model"] = model_id
+        p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception:
+        pass                      # the in-memory switch still stands
+    return True
+
+
 # The heavyweight model used for complex/multi-step/coding queries.
 # Simple commands stay on the configured fast model for sub-second latency.
 _SMART_MODEL = "openai/gpt-oss-120b"

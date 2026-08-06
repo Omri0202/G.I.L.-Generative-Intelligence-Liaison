@@ -316,13 +316,14 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(s, text="AI Model",
                      font=ctk.CTkFont("Segoe UI", 11, "bold"),
                      text_color="#4A4A6A").pack(anchor="w", pady=(0, 6))
-        _MODELS = [
-            ("openai/gpt-oss-120b",     "gpt-oss-120b  (strongest, default)"),
-            ("llama-3.1-8b-instant",    "llama-3.1-8b  (fast)"),
-            ("llama-3.3-70b-versatile", "llama-3.3-70b  (smarter, slower)"),
-            ("mixtral-8x7b-32768",      "Mixtral 8×7B  (multilingual)"),
-            ("gemma2-9b-it",            "Gemma 2 9B    (lightweight)"),
-        ]
+        # One registry, shared with the web chat's picker. Hard-coding a list
+        # here is how Mixtral and Gemma 2 stayed on this menu long after Groq
+        # stopped serving them — picking either broke every reply with a 400.
+        try:
+            from gil_brain import MODELS as _M
+            _MODELS = [(m["id"], f"{m['name']}  —  {m['note']}") for m in _M]
+        except Exception:
+            _MODELS = [("openai/gpt-oss-120b", "gpt-oss-120b  (default)")]
         self._model_var = ctk.StringVar(value=self._cfg_get("ai_model", "openai/gpt-oss-120b"))
         for model_id, label in _MODELS:
             row = ctk.CTkFrame(s, fg_color="#0A0A18", corner_radius=6, height=38)
@@ -3507,28 +3508,13 @@ class ChatWindow(ctk.CTkToplevel):
 
     def _cycle_model(self) -> None:
         """Cycle through available Groq models."""
-        import json
-        from pathlib import Path
-        _MODELS = [
-            "openai/gpt-oss-120b",
-            "llama-3.1-8b-instant",
-            "llama-3.3-70b-versatile",
-            "gemma2-9b-it",
-        ]
-        cfg_path = Path(__file__).parent / "data" / "gil_config.json"
-        try:
-            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            cfg = {}
-        current = cfg.get("ai_model", _MODELS[0])
-        try:
-            idx = _MODELS.index(current)
-            next_model = _MODELS[(idx + 1) % len(_MODELS)]
-        except ValueError:
-            next_model = _MODELS[0]
-        cfg["ai_model"] = next_model
-        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-        # Refresh badges to show new model
+        # Same registry as everywhere else, and set through gil_brain so the
+        # switch applies to the next message rather than the next restart.
+        import gil_brain
+        ids = [m["id"] for m in gil_brain.MODELS]
+        cur = gil_brain.current_model()
+        nxt = ids[(ids.index(cur) + 1) % len(ids)] if cur in ids else ids[0]
+        gil_brain.set_model(nxt)
         self._update_context_badges()
 
 

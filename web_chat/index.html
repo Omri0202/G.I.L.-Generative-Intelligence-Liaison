@@ -753,14 +753,31 @@ body.codemode .approval .chose{padding:0 14px 12px;font-size:11.5px;color:var(--
 
 /* ── Composer ────────────────────────────────────────── */
 #composer { padding:14px 22px 20px; position:relative; }
-/* slash-command menu */
+/* slash-command menu.
+   There are twenty-odd commands and the list had no height limit, so typing
+   "/" pushed a full-height wall of them up the screen. It is now a bounded,
+   scrollable panel; slashNav keeps the selection in view as you arrow past
+   the fold. */
 #slashmenu { display:none; max-width:820px; margin:0 auto 8px; background:var(--input);
-  border:1px solid var(--border); border-radius:14px; overflow:hidden;
-  box-shadow:0 -2px 20px var(--shadow); }
+  border:1px solid var(--border); border-radius:14px;
+  max-height:min(46vh, 340px); overflow-y:auto; overscroll-behavior:contain;
+  box-shadow:0 -2px 20px var(--shadow); scrollbar-width:thin;
+  scrollbar-color:var(--border) transparent; }
 #slashmenu.on { display:block; animation:rise .15s ease both; }
+#slashmenu::-webkit-scrollbar { width:9px; }
+#slashmenu::-webkit-scrollbar-thumb { background:var(--border); border-radius:99px;
+  border:3px solid transparent; background-clip:content-box; }
+#slashmenu::-webkit-scrollbar-thumb:hover { background:var(--muted);
+  border:3px solid transparent; background-clip:content-box; }
+/* a sticky caption, so the panel stays legible once it is scrolled */
+#slashmenu .scap { position:sticky; top:0; z-index:1; padding:8px 15px 7px;
+  background:var(--input); border-bottom:1px solid var(--border);
+  font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--muted); display:flex; justify-content:space-between; }
 #slashmenu .cmd { display:flex; align-items:baseline; gap:10px; padding:9px 15px;
-  cursor:pointer; font-size:13.5px; }
+  cursor:pointer; font-size:13.5px; scroll-margin:38px 0 6px; }
 #slashmenu .cmd.sel, #slashmenu .cmd:hover { background:var(--hover); }
+#slashmenu .cmd.sel { box-shadow:inset 2px 0 0 var(--accent); }
 #slashmenu .cmd b { color:var(--accent); font-weight:700; min-width:96px; }
 #slashmenu .cmd span { color:var(--muted); font-size:12px; }
 
@@ -888,30 +905,85 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
 #hint { max-width:820px; margin:7px auto 0; text-align:center; font-size:11px;
   color:var(--muted); }
 
-/* ── token quota rings (JARVIS-style, real API usage) ── */
-#tokrings{display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);
-  z-index:35;gap:18px;padding:10px 18px;border-radius:14px;
-  background:linear-gradient(160deg,rgba(10,18,30,.9),rgba(6,12,22,.78));
-  border:1px solid rgba(88,196,221,.22);backdrop-filter:blur(9px);
-  box-shadow:0 6px 30px rgba(0,0,0,.45);}
-#tokrings.on{display:flex;}
-#tokrings .ring{display:flex;flex-direction:column;align-items:center;gap:5px;
-  min-width:74px;}
-#tokrings .dial{position:relative;width:52px;height:52px;}
-#tokrings svg{transform:rotate(-90deg);display:block;}
-#tokrings .trk{stroke:rgba(88,196,221,.15);}
-#tokrings .arc{stroke:var(--accent-cyan,#58C4DD);stroke-linecap:round;
-  transition:stroke-dashoffset .6s ease, stroke .3s;}
-#tokrings .ring.warn .arc{stroke:#FBBF24;}
-#tokrings .ring.hot  .arc{stroke:#F87171;}
-#tokrings .pct{position:absolute;inset:0;display:flex;align-items:center;
-  justify-content:center;font-size:11px;font-weight:700;color:var(--txt);
-  font-variant-numeric:tabular-nums;}
-#tokrings .lbl{font-size:9px;letter-spacing:.11em;text-transform:uppercase;
-  color:var(--muted);white-space:nowrap;}
-#tokrings .amt{font-size:9.5px;color:var(--dim);font-variant-numeric:tabular-nums;}
-#tokrings .ring.hot .lbl{color:#F87171;}
-body.codemode #tokrings{top:auto;bottom:74px;}
+/* ── composer bar: brain picker + usage ring ─────────────────────────────
+   Both of these used to be somewhere else entirely — the rings floated in a
+   slab across the top of the screen, over the conversation. They belong next
+   to what you are typing, because that is where the decision is made: which
+   brain answers this message, and whether there is budget left to answer it. */
+#cbar{display:flex;align-items:center;gap:8px;max-width:820px;margin:7px auto 0;
+  padding:0 2px;}
+#cbar > div{position:relative;}
+
+/* the trigger buttons share one quiet resting state and light up on hover */
+#modelbtn,#usagebtn{display:flex;align-items:center;gap:7px;height:28px;
+  padding:0 10px;border-radius:999px;cursor:pointer;font:inherit;font-size:12px;
+  color:var(--muted);background:transparent;border:1px solid transparent;
+  transition:background .15s,border-color .15s,color .15s;}
+#modelbtn:hover,#usagebtn:hover,#modelbtn.on,#usagebtn.on{
+  background:var(--input);border-color:var(--border);color:var(--txt);}
+#modelbtn:focus-visible,#usagebtn:focus-visible{outline:2px solid var(--accent);
+  outline-offset:2px;}
+#modelbtn .mdot{width:6px;height:6px;border-radius:50%;background:var(--accent);
+  flex:0 0 auto;box-shadow:0 0 7px var(--accent);}
+#modelbtn .mcar{font-size:10px;opacity:.6;}
+#modelname{max-width:170px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;}
+
+/* the ring itself: stroke-dashoffset carries the fraction REMAINING, so it
+   empties as you spend, which is the direction people read a fuel gauge */
+#usagebtn svg{transform:rotate(-90deg);display:block;flex:0 0 auto;}
+#usagebtn .utrk{stroke:var(--border);}
+#usagebtn .uarc{stroke:var(--accent);transition:stroke-dashoffset .55s ease,
+  stroke .3s;}
+#usage.warn #usagebtn .uarc{stroke:#FBBF24;}
+#usage.hot  #usagebtn .uarc{stroke:#F87171;}
+#usage.warn #usagebtn,#usage.hot #usagebtn{color:var(--txt);}
+#usagetxt{font-variant-numeric:tabular-nums;letter-spacing:.01em;}
+
+/* popovers rise from the control, never cover the input */
+#modelmenu,#usagepanel{display:none;position:absolute;bottom:calc(100% + 8px);
+  z-index:60;background:var(--input);border:1px solid var(--border);
+  border-radius:14px;box-shadow:0 10px 40px var(--shadow),0 0 0 1px rgba(0,0,0,.2);
+  overflow:hidden;animation:rise .14s ease both;}
+#modelmenu{left:0;width:330px;}
+#usagepanel{right:0;width:308px;padding:14px 15px 12px;}
+#modelmenu.on,#usagepanel.on{display:block;}
+
+#modelmenu .mhead,#usagepanel .uhead{font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);}
+#modelmenu .mhead{padding:11px 14px 7px;border-bottom:1px solid var(--border);}
+#modelmenu .mopt{display:flex;gap:10px;align-items:flex-start;padding:10px 14px;
+  cursor:pointer;border-bottom:1px solid rgba(255,255,255,.035);}
+#modelmenu .mopt:last-child{border-bottom:0;}
+#modelmenu .mopt:hover{background:var(--hover);}
+#modelmenu .mopt .mcheck{width:14px;flex:0 0 14px;color:var(--accent);
+  font-size:12px;line-height:1.5;}
+#modelmenu .mopt .mtitle{font-size:13px;color:var(--txt);font-weight:600;
+  display:flex;align-items:center;gap:7px;}
+#modelmenu .mopt .mnote{font-size:11.5px;color:var(--muted);margin-top:1px;
+  line-height:1.45;}
+#modelmenu .mopt .mtag{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
+  padding:1.5px 5px;border-radius:4px;background:rgba(88,196,221,.13);
+  color:var(--accent);font-weight:700;}
+#modelmenu .mopt.sel .mtitle{color:var(--accent);}
+
+#usagepanel .uhead{margin-bottom:11px;display:flex;justify-content:space-between;
+  align-items:baseline;}
+#usagepanel .urow{margin-bottom:11px;}
+#usagepanel .urow:last-child{margin-bottom:2px;}
+#usagepanel .uname{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:12px;color:var(--txt);margin-bottom:5px;gap:8px;}
+#usagepanel .uname span:last-child{color:var(--muted);font-size:11px;
+  font-variant-numeric:tabular-nums;white-space:nowrap;}
+#usagepanel .ubar{height:5px;border-radius:3px;background:var(--border);
+  overflow:hidden;}
+#usagepanel .ubar i{display:block;height:100%;border-radius:3px;
+  background:var(--accent);transition:width .5s ease;}
+#usagepanel .urow.warn .ubar i{background:#FBBF24;}
+#usagepanel .urow.hot  .ubar i{background:#F87171;}
+#usagepanel .ufoot{margin-top:11px;padding-top:10px;border-top:1px solid var(--border);
+  font-size:11px;color:var(--muted);line-height:1.5;}
+#usagepanel .uempty{font-size:12px;color:var(--muted);line-height:1.5;}
 
 /* pairing card (the /mobile QR) */
 .mobilecard .mob { display:flex; gap:16px; align-items:center; flex-wrap:wrap;
@@ -984,8 +1056,6 @@ body.codemode #tokrings{top:auto;bottom:74px;}
 <body data-theme="dark">
 <div id="app">
   <div id="scrim" onclick="gil.toggleNav(false)"></div>
-  <!-- live API quota rings — real usage, not decoration -->
-  <div id="tokrings" title="API token budget"></div>
   <div id="sidebar">
     <div id="brand"><div class="gem">◈</div><b>G.I.L.</b></div>
     <input id="search" placeholder="Search conversations…" oninput="gil.filter(this.value)">
@@ -1032,6 +1102,29 @@ body.codemode #tokrings{top:auto;bottom:74px;}
         <textarea id="inp" rows="1" spellcheck="true"
           placeholder="Message G.I.L.  —  Enter sends, Shift+Enter for a new line, / for commands"></textarea>
         <button id="send" onclick="gil.sendOrStop()">↑</button>
+      </div>
+      <!-- the two controls that belong beside what you are typing: which brain
+           answers, and how much budget that brain has left -->
+      <div id="cbar">
+        <div id="modelpick">
+          <button id="modelbtn" onclick="gil.toggleModels(event)"
+                  title="Which brain GIL thinks with">
+            <span class="mdot"></span><span id="modelname">…</span><span class="mcar">⌄</span>
+          </button>
+          <div id="modelmenu"></div>
+        </div>
+        <div id="usage">
+          <button id="usagebtn" onclick="gil.toggleUsage(event)"
+                  title="Token budget — click for the breakdown">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+              <circle class="utrk" cx="12" cy="12" r="9.2" fill="none" stroke-width="2.6"></circle>
+              <circle class="uarc" cx="12" cy="12" r="9.2" fill="none" stroke-width="2.6"
+                      stroke-linecap="round"></circle>
+            </svg>
+            <span id="usagetxt">—</span>
+          </button>
+          <div id="usagepanel"></div>
+        </div>
       </div>
       <div id="hint">Type <b>/</b> for commands · <b>@</b> to attach a file · G.I.L. shows every tool he uses, live.</div>
     </div>
@@ -1828,42 +1921,130 @@ const gil = {
     if (document.getElementById("taskdrawer")?.classList.contains("show"))
       this.updateTaskDrawer();
   },
-  /* ── token quota rings: how much of the real API allowance is left ── */
+  /* ── token budget: one ring beside the composer, details on click ──────
+     The ring always shows the tightest budget you are actually against — the
+     one that will stop you first — because a row of four dials answers "how
+     much of everything" when the only question that matters is "can I send
+     this". The full picture is one click away and never in the way. */
+  _usage: null,
   tokenMeter(info) {
-    const el = $("tokrings");
-    if (!el) return;
-    const rows = (info && info.models) || [];
-    if (!rows.length) { el.classList.remove("on"); return; }
+    this._usage = info || null;
+    const wrap = $("usage"), txt = $("usagetxt"), arc = document.querySelector("#usagebtn .uarc");
+    if (!wrap || !arc) return;
 
-    // one ring per budget that's actually being used; day first, it's the one
-    // that bites (a minute resets on its own, a day doesn't)
-    const dials = [];
+    const budgets = this.usageRows();
+    const C = 2 * Math.PI * 9.2;
+    arc.setAttribute("stroke-dasharray", C.toFixed(2));
+
+    if (!budgets.length) {                       // nothing spent yet this session
+      arc.setAttribute("stroke-dashoffset", "0");
+      txt.textContent = "100%";
+      wrap.className = "";
+    } else {
+      // the tightest one drives the ring: what stops you first is what matters
+      const worst = budgets.reduce((a, b) => (b.pct > a.pct ? b : a));
+      const left = Math.max(0, 1 - worst.pct);
+      arc.setAttribute("stroke-dashoffset", (C * (1 - left)).toFixed(2));
+      txt.textContent = Math.round(left * 100) + "%";
+      wrap.className = worst.pct >= 0.95 ? "hot" : worst.pct >= 0.8 ? "warn" : "";
+    }
+    if ($("usagepanel").classList.contains("on")) this.renderUsage();
+  },
+
+  /* Every budget currently in play, flattened and sorted by how close it is
+     to biting. A minute window refills by itself; a day does not, so ties
+     break toward the day. */
+  usageRows() {
+    const rows = (this._usage && this._usage.models) || [];
+    const out = [];
     rows.forEach(m => {
       const short = (m.model || "").split("/").pop();
-      if (m.day && m.day.used > 0) dials.push({key: short + " · day", ...m.day});
-      if (m.minute && m.minute.used > 0) dials.push({key: short + " · min", ...m.minute});
+      if (m.day && m.day.limit)
+        out.push({name: short, win: "today", rank: 0, ...m.day});
+      if (m.minute && m.minute.limit)
+        out.push({name: short, win: "this minute", rank: 1, ...m.minute});
     });
-    if (!dials.length) { el.classList.remove("on"); return; }
+    return out.filter(r => r.used > 0)
+              .sort((a, b) => (b.pct - a.pct) || (a.rank - b.rank));
+  },
 
-    const C = 2 * Math.PI * 22;             // r=22
-    el.innerHTML = dials.slice(0, 4).map(d => {
-      const pct = Math.max(0, Math.min(1, d.pct || 0));
-      const cls = pct >= 0.95 ? "hot" : pct >= 0.8 ? "warn" : "";
-      const off = C * (1 - pct);
-      return `<div class="ring ${cls}">
-        <div class="dial">
-          <svg width="52" height="52" viewBox="0 0 52 52">
-            <circle class="trk" cx="26" cy="26" r="22" fill="none" stroke-width="4"></circle>
-            <circle class="arc" cx="26" cy="26" r="22" fill="none" stroke-width="4"
-              stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"></circle>
-          </svg>
-          <div class="pct">${Math.round(pct * 100)}%</div>
-        </div>
-        <div class="lbl">${esc(d.key)}</div>
-        <div class="amt">${fmtTok(d.used)} / ${fmtTok(d.limit)}</div>
-      </div>`;
-    }).join("");
-    el.classList.add("on");
+  toggleUsage(ev) {
+    if (ev) ev.stopPropagation();
+    const p = $("usagepanel"), on = p.classList.toggle("on");
+    $("usagebtn").classList.toggle("on", on);
+    $("modelmenu").classList.remove("on"); $("modelbtn").classList.remove("on");
+    if (on) this.renderUsage();
+  },
+
+  renderUsage() {
+    const p = $("usagepanel"), rows = this.usageRows();
+    if (!rows.length) {
+      p.innerHTML = `<div class="uhead"><span>Token budget</span></div>
+        <div class="uempty">Nothing spent yet. The ring fills in as GIL thinks —
+        it tracks the real API allowance, per model, per minute and per day.</div>`;
+      return;
+    }
+    const warn = (this._usage && this._usage.warning) || "";
+    p.innerHTML =
+      `<div class="uhead"><span>Token budget</span><span>${rows.length} in use</span></div>` +
+      rows.map(r => {
+        const pct = Math.max(0, Math.min(1, r.pct || 0));
+        const cls = pct >= 0.95 ? "hot" : pct >= 0.8 ? "warn" : "";
+        return `<div class="urow ${cls}">
+          <div class="uname"><span>${esc(r.name)} · ${esc(r.win)}</span>
+            <span>${fmtTok(r.used)} / ${fmtTok(r.limit)}</span></div>
+          <div class="ubar"><i style="width:${(pct * 100).toFixed(1)}%"></i></div>
+        </div>`;
+      }).join("") +
+      `<div class="ufoot">${warn ? esc(warn)
+        : "The ring shows whichever budget is closest to running out."}</div>`;
+  },
+
+  /* ── which brain GIL thinks with ──────────────────────────────────────── */
+  _models: null,
+  setModels(info) {
+    this._models = info || null;
+    const cur = (info && info.current) || "";
+    const opt = ((info && info.options) || []).find(m => m.id === cur);
+    const el = $("modelname");
+    if (el) el.textContent = opt ? opt.name : (cur.split("/").pop() || "model");
+    if ($("modelmenu").classList.contains("on")) this.renderModels();
+  },
+
+  toggleModels(ev) {
+    if (ev) ev.stopPropagation();
+    const m = $("modelmenu"), on = m.classList.toggle("on");
+    $("modelbtn").classList.toggle("on", on);
+    $("usagepanel").classList.remove("on"); $("usagebtn").classList.remove("on");
+    if (on) this.renderModels();
+  },
+
+  renderModels() {
+    const m = $("modelmenu");
+    const info = this._models || {current: "", options: []};
+    m.innerHTML = `<div class="mhead">GIL's brain</div>` +
+      (info.options || []).map(o => {
+        const sel = o.id === info.current;
+        return `<div class="mopt ${sel ? "sel" : ""}" data-id="${esc(o.id)}">
+          <div class="mcheck">${sel ? "✓" : ""}</div>
+          <div><div class="mtitle">${esc(o.name)}
+            ${o.tag ? `<span class="mtag">${esc(o.tag)}</span>` : ""}</div>
+            <div class="mnote">${esc(o.note || "")}</div></div>
+        </div>`;
+      }).join("");
+    m.querySelectorAll(".mopt").forEach(el =>
+      el.onclick = () => this.pickModel(el.dataset.id));
+  },
+
+  async pickModel(id) {
+    $("modelmenu").classList.remove("on");
+    $("modelbtn").classList.remove("on");
+    if (!id || (this._models && this._models.current === id)) return;
+    const res = await call("set_model", [id]);
+    if (res && res.ok) {
+      this._models.current = id;
+      this.setModels(this._models);
+    }
   },
 
   /* GIL for mobile: a scannable QR card to pair a phone */
@@ -2228,12 +2409,24 @@ const gil = {
     if (!matches.length) { menu.classList.remove("on"); return; }
     this._slashSel = Math.min(this._slashSel, matches.length - 1);
     this._slashMatches = matches;
-    menu.innerHTML = matches.map((c, i) =>
-      `<div class="cmd ${i === this._slashSel ? "sel" : ""}" data-i="${i}">` +
-      `<b>${c.cmd}</b><span>${c.desc}</span></div>`).join("");
+    menu.innerHTML =
+      `<div class="scap"><span>Commands</span>` +
+      `<span>${matches.length}${matches.length === this.COMMANDS.length
+        ? "" : " of " + this.COMMANDS.length} · ↑↓ to move, ⏎ to pick</span></div>` +
+      matches.map((c, i) =>
+        `<div class="cmd ${i === this._slashSel ? "sel" : ""}" data-i="${i}">` +
+        `<b>${c.cmd}</b><span>${esc(c.desc)}</span></div>`).join("");
     menu.classList.add("on");
     menu.querySelectorAll(".cmd").forEach(el =>
       el.onclick = () => this.slashPick(+el.dataset.i));
+    this.slashReveal();
+  },
+  /* The list is taller than the panel, so arrowing past the fold has to bring
+     the selection with it — otherwise the highlight walks off-screen and the
+     menu looks frozen. */
+  slashReveal() {
+    const sel = $("slashmenu").querySelector(".cmd.sel");
+    if (sel) sel.scrollIntoView({block: "nearest"});
   },
   slashNav(dir) {
     if (!this._slashMatches) return;
@@ -2644,11 +2837,31 @@ function boot() {
     gil.setVoice(st.voice !== false);
     gil.setVersion(st.version || "4.0");
     gil.setSessions(st.sessions || []);
+    gil.setModels(st.models || {current: "", options: []});
     if (st.current) gil.loadMessages(st.current);
-    // start the quota rings populated rather than waiting for the first call
+    // start the ring populated rather than waiting for the first API call
     api("token_meter").then(m => m && gil.tokenMeter(m));
   });
 }
+
+/* one shared outside-click closer for the composer popovers, so opening one
+   never leaves the other stranded open behind it */
+document.addEventListener("click", ev => {
+  if (!ev.target.closest("#modelpick")) {
+    $("modelmenu").classList.remove("on");
+    $("modelbtn").classList.remove("on");
+  }
+  if (!ev.target.closest("#usage")) {
+    $("usagepanel").classList.remove("on");
+    $("usagebtn").classList.remove("on");
+  }
+});
+document.addEventListener("keydown", ev => {
+  if (ev.key !== "Escape") return;
+  ["modelmenu", "usagepanel"].forEach(id => $(id).classList.remove("on"));
+  ["modelbtn", "usagebtn"].forEach(id => $(id).classList.remove("on"));
+});
+
 boot();
 </script>
 </body>

@@ -376,7 +376,31 @@ class WebChat:
             VERSION = "4.0"
         return {"theme": self._theme(), "voice": voice, "version": VERSION,
                 "sessions": self._rpc_sessions(),
+                "models": self._rpc_models(),
                 "current": self._session_payload()}
+
+    # ── which brain GIL thinks with ──────────────────────────────────────────
+    def _rpc_models(self):
+        try:
+            import gil_brain
+            return {"current": gil_brain.current_model(),
+                    "options": gil_brain.MODELS}
+        except Exception:
+            return {"current": "", "options": []}
+
+    def _rpc_set_model(self, model_id=""):
+        try:
+            import gil_brain
+            if not gil_brain.set_model(model_id):
+                return {"ok": False, "current": gil_brain.current_model()}
+            name = next((m["name"] for m in gil_brain.MODELS
+                         if m["id"] == model_id), model_id)
+            self.add_message(
+                f"Brain switched to **{name}** — it applies from your next "
+                f"message, no restart needed.", "gil")
+            return {"ok": True, "current": model_id}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def _rpc_sessions(self):
         try:
