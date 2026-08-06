@@ -21,6 +21,8 @@ summary land in the chat. Max 20 steps per task.
 
 import json
 import os
+import functools
+import shutil
 import re
 import subprocess
 import threading
@@ -806,6 +808,85 @@ def _is_search_tooling(line: str) -> bool:
             or bool(_SELF_TOOLING_RE.match(s)))
 
 
+#: no source file is this big; anything larger is generated or binary-ish and
+#: reading it is pure cost. Without this cap a search read 95MB per call.
+_SEARCH_MAX_BYTES = 2_000_000
+
+
+def _iter_source_files(root: Path):
+    """Every file worth searching, pruning skipped folders as we go.
+
+    os.walk with in-place dirnames pruning, NOT rglob. rglob descends into
+    every directory and lets the caller reject the results afterwards, so a
+    search still walked .git, node_modules, the browser profile and the backup
+    folder in full: 10,500 paths visited to keep 672 of them."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
+        for name in filenames:
+            if os.path.splitext(name)[1].lower() in _SEARCH_SKIP_EXT:
+                continue
+            p = os.path.join(dirpath, name)
+            try:
+                if os.path.getsize(p) > _SEARCH_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            yield Path(p)
+
+
+@functools.lru_cache(maxsize=1)
+def _rg_path() -> str:
+    """ripgrep, if installed. Cached — this sits on the hot path."""
+    return shutil.which("rg") or ""
+
+
+def _rg_search(pattern: str, root: Path, display: int, scan_cap: int):
+    """Search with ripgrep. Returns (hits, total, filtered), or None if it
+    can't run and the caller should fall back.
+
+    The pure-Python path below opens and reads EVERY file in the tree on every
+    single search — measured at 6.4s per call on this project. An agent runs
+    many searches to answer one question, so that alone was most of "why is he
+    taking so long". ripgrep does the same work in milliseconds, and it was
+    already being detected and used by dev_search; the agent's own search tool
+    was simply never taught about it."""
+    rg = _rg_path()
+    if not rg:
+        return None
+    cmd = [rg, "--no-heading", "--line-number", "--color", "never",
+           "--no-messages", "--max-columns", "220", "-e", pattern]
+    for d in _SEARCH_SKIP_DIRS:
+        cmd += ["--glob", f"!{d}/**"]
+    for e in _SEARCH_SKIP_EXT:
+        cmd += ["--glob", f"!*{e}"]
+    cmd += ["--", str(root)]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=20)
+    except Exception:
+        return None
+    # 0 = matched, 1 = no match, anything else is a real failure (a regex rg
+    # rejects, say) — fall back so the caller's re.escape retry still applies
+    if p.returncode not in (0, 1):
+        return None
+
+    hits, total, filtered = [], 0, 0
+    for raw in p.stdout.splitlines():
+        parts = raw.split(":", 2)
+        if len(parts) < 3:
+            continue
+        path, ln, line = parts
+        if _is_search_tooling(line):
+            filtered += 1
+            continue
+        total += 1
+        if len(hits) < display:
+            hits.append(f"{path}:{ln}: {line.strip()[:140]}")
+        if total >= scan_cap:
+            break
+    return hits, total, filtered
+
+
 def _t_search(args: dict) -> str:
     pattern = args.get("pattern", "")
     root = Path(args.get("dir", ".") or ".")
@@ -813,6 +894,21 @@ def _t_search(args: dict) -> str:
         return "ERROR: need a search pattern"
     if not root.is_dir():
         return f"ERROR: {root} is not a folder.{_did_you_mean(root)}"
+
+    fast = _rg_search(pattern, root, 40, 600)
+    if fast is not None and fast[0]:
+        hits, total, filtered = fast
+        more = (f"\n[{total}+ matches — showing first {len(hits)}; narrow the "
+                f"pattern to see the rest]" if total > len(hits)
+                else f"\n[{total} match(es)]")
+        if filtered:
+            more += (f"\n[{filtered} match(es) skipped — GIL's own search "
+                     "patterns / activity labels, not real occurrences]")
+        return "\n".join(hits) + more
+    # No ripgrep hits: fall through, both to cover the case where rg is absent
+    # and to reuse the "did you mean a FILE by that name?" recovery below,
+    # which answers a different question than "no text matched".
+
     # Whole-file (multi-line) regex so patterns that span lines actually match —
     # the old line-by-line scan silently failed on those.
     try:
@@ -820,14 +916,9 @@ def _t_search(args: dict) -> str:
     except re.error:
         rx = re.compile(re.escape(pattern), re.MULTILINE)
 
-    def _skip(f: Path) -> bool:
-        return (not f.is_file() or f.suffix.lower() in _SEARCH_SKIP_EXT
-                or any(part in _SEARCH_SKIP_DIRS for part in f.parts))
-
     hits, total, filtered, DISPLAY, SCAN_CAP = [], 0, 0, 40, 600
-    for f in root.rglob("*"):
-        if _skip(f):
-            continue
+    files = list(_iter_source_files(root))
+    for f in files:
         try:
             text = f.read_text(encoding="utf-8", errors="ignore")
         except Exception:
@@ -859,11 +950,10 @@ def _t_search(args: dict) -> str:
                      "activity labels, not real occurrences]")
         return "\n".join(hits) + more
     # No text matched — maybe they meant a FILE by that name (a common mixup).
+    # Reuses the list already walked above; re-walking the tree here is why a
+    # miss cost four times what a hit did.
     import difflib
-    names = {}
-    for f in root.rglob("*"):
-        if f.is_file() and not any(part in _SEARCH_SKIP_DIRS for part in f.parts):
-            names[f.name] = str(f)
+    names = {f.name: str(f) for f in files}
     core = re.sub(r"[^\w.]", "", pattern)
     near = [names[n] for n in difflib.get_close_matches(core, list(names), n=6, cutoff=0.4)]
     near += [v for n, v in names.items() if core and core.lower() in n.lower() and v not in near]
@@ -1378,6 +1468,115 @@ def _ask_hunk_review(eng, file: str, hunks: list, why: str):
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
+
+#: Surfaces that aren't Python modules and so have no docstring to harvest,
+#: but own big pieces of GIL. The chat UI in particular is one 2,700-line file
+#: holding all of its markup, styling and behaviour — the single most likely
+#: place for a "change how the interface looks" task to belong.
+_NON_PY_MAP = [
+    ("web_chat/index.html", "THE ENTIRE CHAT UI — markup, CSS and JS in one "
+                            "file. Anything about how the chat LOOKS or "
+                            "behaves in the browser is here."),
+    ("web_chat/scan.html", "the face/hand scan page"),
+    ("data/gil_config.json", "user settings: model, voice, theme, modes"),
+    ("data/token_usage.json", "recorded API token spend"),
+]
+
+
+@functools.lru_cache(maxsize=1)
+def _module_blurbs() -> tuple:
+    """(module, one-line purpose) for every top-level module, taken from the
+    module's own docstring.
+
+    Harvested rather than hand-written, because a hand-written index of a
+    ~120-module project is out of date the week after it is written, and a
+    stale map sends the agent somewhere confidently wrong."""
+    out = []
+    root = Path(__file__).parent
+    for p in sorted(root.glob("*.py")):
+        if p.name.startswith("_"):
+            continue
+        try:
+            with p.open("r", encoding="utf-8", errors="ignore") as fh:
+                head = fh.read(1400)
+        except Exception:
+            continue
+        m = re.search(r'^\s*(?:"""|\'\'\')(.*?)(?:"""|\'\'\')', head, re.S)
+        if not m:
+            continue
+        for line in m.group(1).splitlines():
+            line = line.strip()
+            # skip a bare "module.py —" title line and go for the sentence
+            if not line or line.rstrip(" -—").lower() == p.stem.lower():
+                continue
+            line = re.sub(r'^' + re.escape(p.name) + r'\s*[—:-]\s*', '', line)
+            if len(line) > 8:
+                out.append((p.name, line[:150]))
+                break
+    return tuple(out)
+
+
+#: Words that appear in half the docstrings in the project and so carry no
+#: signal about WHERE something lives. Without this filter "make the usage ring
+#: smaller" ranked weather.py first, purely because "make" is in its docstring —
+#: the same wrong-place hunt this map exists to prevent.
+_MAP_STOP = frozenset("""
+the and for with that this from into your you its his out are was has have not
+make makes making made change changes changed fix fixes fixed add adds added
+new old more less small smaller big bigger better best good bad show shows
+shown display displays use uses used using need needs should would could
+project gil file files code line lines when what where which how why does
+""".split())
+
+#: Task words that mean "this is about the interface", which lives almost
+#: entirely in one HTML file rather than in any module.
+_UI_WORDS = frozenset("""
+ui interface chat window ring button menu bar panel colour color theme dark
+light font size smaller bigger layout css style styling screen page dropdown
+popup icon avatar bubble scroll sidebar composer input textbox placeholder
+""".split())
+
+
+def _score_words(task: str) -> set:
+    return {w for w in re.findall(r"[a-z]{3,}", (task or "").lower())
+            if w not in _MAP_STOP}
+
+
+def _project_map(task: str = "", limit: int = 14) -> str:
+    """The modules most likely to matter for THIS task, one line each.
+
+    Ranked rather than dumped: the whole index is thousands of tokens, and
+    burying the answer inside it is barely better than not having it. Without
+    any map the agent had to grep blind for the file owning a feature, which is
+    what made a one-line change take minutes."""
+    words = _score_words(task)
+    entries = [(n, b, n[:-3].lower()) for n, b in _module_blurbs()]
+    entries += [(p, d, p.lower()) for p, d in _NON_PY_MAP]
+
+    ui = bool(words & _UI_WORDS)
+    scored = []
+    for name, blurb, stem in entries:
+        hay = stem + " " + blurb.lower()
+        # a hit in the FILENAME is worth far more than one in prose: the name
+        # is what the module is, the docstring is what it happens to mention
+        score = sum(4 if w in stem else 1 for w in words if w in hay)
+        if ui and name.endswith(".html"):
+            score += 9          # the interface is one file; say so loudly
+        # A data file is STATE, not logic. "token usage isn't being recorded"
+        # is a question about the code that writes the file, not the file —
+        # yet token_usage.json outscored token_meter.py on filename alone.
+        if name.startswith("data/") and not (words & {"config", "setting",
+                                                      "settings", "json"}):
+            score -= 6
+        if score > 0:
+            scored.append((score, name, blurb))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    top = scored[:limit]
+    if not top:
+        return ("  (nothing matched by name — list_dir the project root, and "
+                "remember the whole chat interface is web_chat/index.html)")
+    return "\n".join(f"- {n} — {b}" for _, n, b in top)
+
 
 def _known_locations() -> str:
     """Real paths the agent should use instead of guessing where things live."""
@@ -2084,6 +2283,9 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
         f"TASK:\n{task[:2500]}\n\n"
         f"KNOWN LOCATIONS (use these — do NOT guess paths):\n"
         f"{_known_locations()}\n\n"
+        f"WHERE THINGS LIVE IN G.I.L. (most relevant to this task first — go "
+        f"STRAIGHT to the right file, do not grep the tree to find it):\n"
+        f"{_project_map(task)}\n\n"
         f"{_playbook_block(task)}\n\n"
         f"Start with the toolkit above on the relevant known location." +
         (f"\n\nSUGGESTED FIX COMMANDS (verify before using):\n" +

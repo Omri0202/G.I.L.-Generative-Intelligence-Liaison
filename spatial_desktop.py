@@ -1,5 +1,6 @@
 """
-spatial_desktop.py — your real Windows desktop, as reachable objects.
+spatial_desktop.py — the desktop shelf: your real Windows desktop items and
+their icons, as objects the Spatial Workspace can hover and open.
 
 Mirrored panels only ever show what is ALREADY running, which left the workspace
 unable to reach anything you hadn't opened yet. This enumerates the actual
