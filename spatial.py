@@ -18,6 +18,7 @@ log = _get_log("spatial")
 
 ROOT = Path(__file__).parent
 SCRIPT = ROOT / "spatial_overlay.py"
+WORKSPACE = ROOT / "spatial_workspace.py"
 MODEL = ROOT / "data" / "hand_landmarker.task"
 TUTORIAL_FLAG = ROOT / "data" / "spatial_tutorial_done"
 
@@ -83,6 +84,49 @@ def stop() -> tuple[bool, str]:
 
 def toggle() -> tuple[bool, str]:
     return stop() if is_running() else start()
+
+
+_ws: subprocess.Popen | None = None
+
+
+def workspace_running() -> bool:
+    return _ws is not None and _ws.poll() is None
+
+
+def open_workspace(hands: bool = True) -> tuple[bool, str]:
+    """Lift the open windows into the Spatial Workspace."""
+    global _ws
+    if workspace_running():
+        return True, "The workspace is already open."
+    if not WORKSPACE.is_file():
+        return False, "The spatial workspace is missing from this install."
+    try:
+        args = [sys.executable, str(WORKSPACE)]
+        if not hands:
+            args.append("--nohands")
+        _ws = subprocess.Popen(args, cwd=str(ROOT))
+    except Exception as exc:
+        log.error("workspace start failed", exc_info=True)
+        return False, f"I couldn't open the workspace: {exc}"
+    return True, ("**Spatial Workspace.** 🪐 Your windows are floating — "
+                  "fist to carry one, pinch to drop into it, `Esc` to come back.")
+
+
+def close_workspace() -> tuple[bool, str]:
+    global _ws
+    if not workspace_running():
+        return True, "The workspace isn't open."
+    try:
+        subprocess.run(["taskkill", "/PID", str(_ws.pid), "/T", "/F"],
+                       capture_output=True, timeout=5,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        try:
+            _ws.terminate()
+        except Exception:
+            pass
+    _ws = None
+    return True, "Workspace closed."
 
 
 def reset_tutorial() -> None:

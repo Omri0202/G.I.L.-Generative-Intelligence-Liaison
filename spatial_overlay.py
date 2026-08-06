@@ -235,7 +235,9 @@ class SpatialHUD:
         installed no colour key at all, which is what turned the overlay into an
         opaque sheet. So set the key explicitly with the Win32 call and verify it
         actually took, rather than assuming."""
-        hwnd = win32gui.GetParent(self.cv.winfo_id()) or self.root.winfo_id()
+        # from the ROOT, not the canvas: the canvas's parent is tk's inner
+        # window, and styling that leaves the actual top-level untouched
+        hwnd = win32gui.GetParent(self.root.winfo_id()) or self.root.winfo_id()
         self.hwnd = hwnd
         ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
         win32gui.SetWindowLong(

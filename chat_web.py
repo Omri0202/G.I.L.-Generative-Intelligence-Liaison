@@ -799,6 +799,16 @@ class WebChat:
             self.add_message(f"**Approval mode → `{mode}`** — {valid[mode]}.", "gil")
             return
 
+        if name in ("workspace", "windows", "space"):
+            import spatial
+            a = arg.lower().strip()
+            if a in ("off", "close", "exit"):
+                _, msg = spatial.close_workspace()
+            else:
+                _, msg = spatial.open_workspace(hands=a != "mouse")
+            self.add_message(msg, "gil")
+            return
+
         if name in ("spatial", "hands", "hand"):
             import spatial
             a = arg.lower().strip()
