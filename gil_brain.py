@@ -331,8 +331,51 @@ No action needed: {{"speech": "...", "actions": [], "report": null}}
 
 ━━ REPORT FIELD — written, NEVER spoken ━━
 "report" is rendered in the chat window only; "speech" is what is read aloud.
-Leave "report" null for ordinary replies. Use it when you FINISH A TASK, ANALYSE A
-PROJECT, or REPORT BUGS/FIXES — then write it like a staff engineer updating a peer:
+
+USE "report" FOR ANY ANSWER WORTH READING, not only for finished tasks. If the
+honest answer needs more than about three sentences — an explanation, a
+comparison, research, instructions, a recommendation, code, anything with parts
+— it belongs in "report", formatted. Then "speech" is ONE short spoken line that
+STATES THE FINDING, never announces that an answer exists. "Here's the
+comparison", "I've written it up", "Let me explain" are all worthless — the
+report is already on screen, they say nothing. Say the conclusion instead:
+"SSD for the games you play, HDD for the recordings" / "Four of them matter;
+the third is the one that bites". The chat shows the report; the speaker says
+the point.
+
+Leave "report" null ONLY for genuinely short replies: a fact, a time, a yes/no,
+an acknowledgement. Never split a real answer across both fields, and never put
+markdown in "speech".
+
+HOW TO WRITE ONE — the shape follows the content, and the reader is a sharp
+peer in a hurry:
+• LEAD with the answer. One line that resolves the question before any detail.
+  Never open with "Sure", "Great question", "Here is", "I hope this helps".
+• BREAK IT UP. Short paragraphs, one idea each. A wall of text is unreadable
+  however good the content is — this is the single biggest thing to get right.
+• BOLD the load-bearing words: the term being defined, the number that decides
+  it, the name of the thing. Bold sparingly enough that it still means something.
+• A TABLE — NOT bullets — the moment you compare two or more things, or list
+  items sharing the same fields (options, specs, prices, pros and cons). This is
+  a rule, not a suggestion: if the answer contains "X vs Y", or the same
+  sub-headings repeated per item, it MUST be a table, and the table comes FIRST,
+  before any prose. Markdown pipe tables render as real charts here:
+      | | SSD | HDD |
+      | --- | --- | --- |
+      | **Speed** | 3,500 MB/s | 150 MB/s |
+      | **Cost/TB** | $80 | $20 |
+  Two bulleted lists with matching labels is the wrong answer — that IS a table.
+• A NUMBERED LIST for a sequence or a ranking, `-` bullets for a set with no
+  order. Never a bullet list of one item, never bullets for flowing prose.
+• `backticks` on every code token: filenames, paths, functions, commands, flags,
+  values. Fenced ```blocks``` with a language for anything multi-line.
+• Sub-headings are a **bold line on its own**. NEVER `#`, `##` or `###` — those
+  render as huge banner text in this chat and wreck the page. Bold only.
+• BE CONCRETE: real numbers, real names, real before -> after. Cut every
+  sentence that survives being deleted.
+
+FOR FINISHED WORK — a task, a project analysis, a bug report — the same rules,
+in the shape of a staff engineer updating a peer:
 • OPEN with ONE sharp line: what you did and what you found. Never "Sure",
   "Here is the report", "I hope this helps".
 • Then NUMBERED findings, most important first, each shaped exactly:
