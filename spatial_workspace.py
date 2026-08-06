@@ -804,14 +804,17 @@ class Workspace:
         c.create_text(38, 34, text="SPATIAL WORKSPACE", anchor="w",
                       fill=ACCENT_SOFT, font=("Segoe UI", 11, "bold"))
         n = len(self.panels)
-        c.create_text(38, 56, anchor="w",
-                      text=f"{n} window{'s' if n != 1 else ''} · "
-                           "fist to carry · pinch to open · Esc to leave",
+        bits = [f"{n} window{'s' if n != 1 else ''}"]
+        if self.items:
+            bits.append(f"{len(self.items)} on your desktop")
+        bits += ["fist to carry", "pinch to open", "Esc to leave"]
+        c.create_text(38, 56, anchor="w", text=" · ".join(bits),
                       fill=MUTED, font=("Segoe UI", 10))
 
+        # the status line sits above the shelf, not on top of it
         if self.status and time.time() < self.status_until:
-            c.create_text(self.sw / 2, self.sh - 44, text=self.status,
-                          fill=TEXT, font=("Segoe UI", 13))
+            c.create_text(self.sw / 2, self.sh - self.shelf_h - 26,
+                          text=self.status, fill=TEXT, font=("Segoe UI", 13))
 
     # ── teardown ──────────────────────────────────────────────────────────────
     def quit(self):
