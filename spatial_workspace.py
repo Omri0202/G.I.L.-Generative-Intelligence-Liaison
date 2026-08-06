@@ -69,6 +69,19 @@ SHELF_QUANT = 6
 #: keeps one bitmap per item rather than one per item per size
 SHELF_SRC_PX = 128
 
+# ── commit hold ───────────────────────────────────────────────────────────────
+# A pinch arms a target; holding it commits. Durations are scaled to the cost of
+# the mistake — focusing an already-open window is cheap, launching an app is
+# not — and both are long enough that brushing past something does nothing.
+ARM_PANEL = 0.34
+ARM_DESKTOP = 0.58
+
+# ── hands ─────────────────────────────────────────────────────────────────────
+#: on-screen hand size, as a multiple of its true camera-pixel extent mapped to
+#: the screen. 1.0 would be "life size" for a camera that saw exactly what you
+#: see; the camera is much wider than your reach, so that reads as enormous.
+HAND_SCALE = 0.46
+
 
 def _blend(c1, c2, t):
     return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
@@ -193,6 +206,10 @@ class Workspace:
         self.pinch_fired = False     # one action per pinch, not one per frame
         self.pinch_grace = 0         # dropped frames tolerated mid-pinch
         self.fist_frames = 0
+        self._faults = 0             # frames lost to exceptions
+        self.arm = None              # what a sustained pinch is about to open
+        self.arm_t = 0.0             # 0..1 progress toward opening it
+        self.awaiting = None         # (name, deadline) for a launching app
 
         # Hands are the point, but the mouse must work too: hand tracking can
         # fail (camera busy, bad light) and being stuck in a fullscreen mode you
@@ -221,6 +238,7 @@ class Workspace:
         self.cv.bind("<Button-1>", self._mouse_down)
         self.cv.bind("<ButtonRelease-1>", self._mouse_up)
         self.root.bind_all("<Escape>", lambda e: self.quit())
+        self.root.bind_all("<Tab>", lambda e: self._toggle_shelf())
         self.root.focus_force()
 
         self.tutorial = Tutorial(self) if not TUTORIAL_FLAG.exists() else None
@@ -261,6 +279,32 @@ class Workspace:
             m = sm.Mirror(self.hwnd, h, title)
             if m.handle:
                 self.panels.append(Panel(m, self.sw / 2, self.sh / 2, 0.35))
+
+    def _rescan(self) -> bool:
+        """Adopt windows that appeared since the last look.
+
+        Without this the workspace only ever showed what was running when it
+        opened, so an app launched from the shelf started invisibly behind it
+        and there was no way to reach the thing you just asked for.
+        """
+        known = {p.mirror.src for p in self.panels}
+        added = False
+        for h, title in sm.list_windows(exclude_hwnd=self.hwnd):
+            if h in known:
+                continue
+            m = sm.Mirror(self.hwnd, h, title)
+            if not m.handle:
+                continue
+            # arrive small and near the middle, then spring into the layout —
+            # a new panel popping in at full size reads as a glitch
+            p = Panel(m, self.sw / 2, self.sh * 0.42, 0.30)
+            p.ts = 1.0
+            self.panels.append(p)
+            added = True
+            if self.awaiting:
+                self.say(f"{title[:34]} is here", 2.0)
+                self.awaiting = None
+        return added
 
     def _layout(self):
         """Lay panels on a gentle arc — depth suggested by scale, not perspective.
@@ -412,28 +456,23 @@ class Workspace:
         return photo
 
     def open_desk(self, it: DeskItem):
-        """Open a desktop item and leave — you asked to go there."""
-        if self.closing:
-            return
-        self.closing = True
-        self.say(f"Opening {it.name[:36]}")
-        it.mag = 1.35
-        self.root.after(170, lambda: self._finish_desk(it))
+        """Launch a desktop item WITHOUT leaving.
 
-    def _finish_desk(self, it: DeskItem):
-        try:
-            for q in self.panels:
-                q.mirror.hide()
-            self.root.withdraw()
-            self.root.update()
-        except Exception:
-            pass
-        try:
-            if self.sd:
-                self.sd.open_item(it.path)
-        except Exception:
-            pass
-        self.quit()
+        The app starts behind the workspace and arrives as its own panel once
+        its window exists, so choosing something adds it to the space rather
+        than ejecting you from it. Leaving later hands you the app already
+        running. Quitting on every launch made a mis-aimed pinch cost the whole
+        session, which is exactly what went wrong in practice.
+        """
+        if self.closing or not self.sd:
+            return
+        it.mag = 1.35
+        if self.sd.open_item(it.path):
+            self.say(f"Opening {it.name[:34]}…", 2.6)
+            # give it a while to put a window up; a cold app can be slow
+            self.awaiting = (it.name, time.time() + 25.0)
+        else:
+            self.say(f"Couldn't open {it.name[:30]}", 2.0)
 
     # ── input ─────────────────────────────────────────────────────────────────
     def _mouse_move(self, e):
@@ -495,6 +534,37 @@ class Workspace:
 
     # ── loop ──────────────────────────────────────────────────────────────────
     def loop(self):
+        """One frame. Never lets an exception escape.
+
+        The next frame is scheduled by the tail of this one, so ANY exception
+        here used to break the chain permanently: the window stayed up but
+        stopped repainting and stopped responding, which is indistinguishable
+        from the workspace having closed itself. A single bad frame must never
+        be able to end the session, so the frame is wrapped and the schedule is
+        re-armed in a finally.
+        """
+        if self.closing:
+            return
+        try:
+            self._frame()
+        except Exception:
+            self._faults += 1
+            try:
+                import traceback
+                (ROOT / "data" / "spatial_errors.log").open("a", encoding="utf-8")\
+                    .write(f"\n--- frame {self.tick} ---\n{traceback.format_exc()}")
+            except Exception:
+                pass
+            # a persistently broken frame is worse than leaving: say so and go,
+            # rather than sitting on a frozen fullscreen window
+            if self._faults > 240:
+                self.say("Spatial hit an error — leaving", 1.0)
+                return self.quit()
+        finally:
+            if not self.closing:
+                self.root.after(16, self.loop)
+
+    def _frame(self):
         if win32api.GetAsyncKeyState(win32con.VK_ESCAPE) & 0x8000:
             return self.quit()
 
@@ -511,10 +581,21 @@ class Workspace:
         for p in gone:
             p.mirror.close()
             self.panels.remove(p)
-        if gone:
+        changed = bool(gone)
+
+        # ...and adopt ones that appeared. Twice a second is often enough to
+        # feel immediate, and cheap enough not to matter; every frame would
+        # enumerate every top-level window sixty times a second for nothing.
+        if self.tick % 30 == 0:
+            if self.awaiting and time.time() > self.awaiting[1]:
+                self.say(f"{self.awaiting[0][:30]} didn't open a window", 2.4)
+                self.awaiting = None
+            changed |= self._rescan()
+        if changed:
             self._layout()
 
         self._update_shelf(dt)
+        self._advance_arm(dt)
 
         hovered = self.panel_at(self.px, self.py) if not self.held else self.held
         for p in self.panels:
@@ -525,8 +606,7 @@ class Workspace:
                 p.ty = self.py + self.hold_off[1]
             p.step(dt, self.tick)
 
-        self.draw(hovered)
-        self.root.after(16, self.loop)
+        self.draw(hovered)          # rescheduling is handled by loop()'s finally
 
     def _hands(self):
         if self.reader.err:
@@ -600,22 +680,23 @@ class Workspace:
             self.fist_frames = 0
             self.pinch_frames += 1
             self.pinch_grace = PINCH_GRACE
-            # Fires ONCE per pinch, on a >= test. The old `== 3` fired on
-            # exactly one frame: a single dropped or misread frame reset the
-            # counter to zero, and every frame past the third did nothing at
-            # all — so whether a pinch opened anything was mostly luck.
+            # Detection is deliberately eager — the old `== 3` fired on exactly
+            # one frame, so a single dropped frame lost the whole gesture. But
+            # eager detection must not mean an eager ACTION: a pinch only ARMS
+            # what it is over, and the hold that follows is what commits. A
+            # brushed pinch now costs nothing, where before it launched an app
+            # and closed the workspace.
+            # `pinch_fired` latches once this pinch has committed, and only
+            # clears when the pinch is genuinely released. Without it a pinch
+            # held past the commit simply re-arms and fires again: opening a
+            # panel hid that behind `closing`, but launching a desktop item did
+            # not, so keeping the pinch down started the app over and over.
             if self.pinch_frames >= PINCH_HOLD and not self.pinch_fired:
-                self.pinch_fired = True
-                p = self.held or self.panel_at(self.px, self.py)
-                self.drop()
-                if p:
-                    self.select(p)
-                else:
-                    it = self.item_at(self.px, self.py)
-                    if it:
-                        self.open_desk(it)
-                    else:
-                        self._pinch_empty()
+                target = (self.held or self.panel_at(self.px, self.py)
+                          or self.item_at(self.px, self.py))
+                if target is not self.arm:
+                    self.arm = target
+                    self.arm_t = 0.0
             self.state = "pinch"
         else:
             if self.state == "fist":
@@ -630,12 +711,46 @@ class Workspace:
                 self.pinch_fired = False
                 self.state = g
 
-    def _pinch_empty(self):
-        """Pinching empty space folds the desktop shelf away, and back."""
+    def _advance_arm(self, dt: float):
+        """Grow (or unwind) the hold that commits an action.
+
+        Held to completion it opens; let go early and it rewinds, faster than it
+        filled, so backing out is quicker than committing.
+        """
+        if self.state == "pinch" and self.arm is not None:
+            self.arm_t += dt / self._arm_secs(self.arm)
+            if self.arm_t >= 1.0:
+                target, self.arm, self.arm_t = self.arm, None, 0.0
+                self.pinch_fired = True      # nothing else until you let go
+                if isinstance(target, DeskItem):
+                    self.open_desk(target)
+                else:
+                    self.drop()
+                    self.select(target)
+        elif self.arm_t > 0.0:
+            self.arm_t -= dt / (ARM_PANEL * 0.55)
+            if self.arm_t <= 0.0:
+                self.arm_t, self.arm = 0.0, None
+
+    @staticmethod
+    def _arm_secs(target) -> float:
+        """How long the hold is, scaled to how bad the mistake would be.
+
+        Opening a panel just focuses a window that is already running. Opening a
+        desktop item LAUNCHES something, which is the mistake worth guarding."""
+        return ARM_DESKTOP if isinstance(target, DeskItem) else ARM_PANEL
+
+    def _toggle_shelf(self):
+        """Fold the desktop away, and back.
+
+        On Tab rather than on a pinch. As a gesture this was a trap: pinching
+        empty space is the easiest thing to do by accident, and the desktop
+        silently vanishing gives no hint of what happened or how to undo it."""
         if not self.items:
             return
         self.shelf_visible = not self.shelf_visible
-        self.say("Desktop hidden" if not self.shelf_visible else "Desktop", 1.0)
+        self.say("Desktop hidden — Tab to show" if not self.shelf_visible
+                 else "Desktop", 1.4)
 
     # ── drawing ───────────────────────────────────────────────────────────────
     def draw(self, hovered):
@@ -715,24 +830,34 @@ class Workspace:
             return
 
         fw, fh = self.reader.frame_size
+        cam2scr = self.sw / max(fw, 1)
         keep = {}
         for i, hd in enumerate(hands):
             if hd.pts is None or hd.zs is None:
                 continue
             try:
-                img, off = self.hand_renderer.render(hd.pts, hd.zs, fw, fh)
+                img, off, extent = self.hand_renderer.render(hd.pts, hd.zs, fw, fh)
             except Exception:
                 continue
+            if extent[0] < 1.0 or extent[1] < 1.0:
+                continue
 
-            # camera pixels -> screen, keeping the hand near life-size
-            scale = (self.sw / max(fw, 1)) * 0.62
-            dw = max(10, int(img.size[0] * scale))
-            dh = max(10, int(img.size[1] * scale))
+            # Size from the hand's REAL extent in camera pixels. The render is
+            # produced at a fixed internal resolution, so its own pixel size
+            # says nothing about how big the hand is — scaling by that drew a
+            # constant, oversized hand that never responded to reach.
+            dw = max(24, int(extent[0] * cam2scr * HAND_SCALE))
+            dh = max(24, int(extent[1] * cam2scr * HAND_SCALE))
 
-            # Anchor the hand ON the point it controls. Re-deriving position from
-            # camera coordinates fights the pointer's own remap and puts the hand
-            # where the user isn't reaching; the control point is the thumb-index
-            # midpoint, so centring there lines up exactly.
+            # Put the PINCH POINT on the cursor. The control point is the
+            # thumb-index midpoint; centring the whole image instead planted the
+            # cursor in the middle of the palm, so the hand never looked like it
+            # was touching the thing it was pointing at.
+            ctrl_x = (hd.pts[4][0] + hd.pts[8][0]) * 0.5
+            ctrl_y = (hd.pts[4][1] + hd.pts[8][1]) * 0.5
+            fx = 1.0 - (ctrl_x - off[0]) / extent[0]    # image is mirrored below
+            fy = (ctrl_y - off[1]) / extent[1]
+
             if i == 0:
                 cx, cy = self.px, self.py
             else:
@@ -743,7 +868,8 @@ class Workspace:
                 photo = ImageTk.PhotoImage(im)
             except Exception:
                 continue
-            c.create_image(int(cx), int(cy), image=photo, anchor="center")
+            c.create_image(int(cx - fx * dw), int(cy - fy * dh),
+                           image=photo, anchor="nw")
             keep[i] = photo          # tkinter drops un-referenced PhotoImages
         self.hand_imgs = keep
 
@@ -800,6 +926,23 @@ class Workspace:
                       outline=act, width=2)
         c.create_oval(self.px - 3, self.py - 3, self.px + 3, self.py + 3,
                       fill=act, outline="")
+
+        # The commit hold, drawn as it fills. A hold with no visible progress is
+        # no better than a hair trigger: you cannot tell whether something is
+        # about to happen, so you cannot stop it. The ring is what makes
+        # "keep pinching to open, let go to cancel" legible without instructions.
+        if self.arm is not None and self.arm_t > 0.015:
+            t = min(1.0, self.arm_t)
+            ar = 30
+            c.create_oval(self.px - ar, self.py - ar, self.px + ar, self.py + ar,
+                          outline=_hex(_blend(BG_BOT, (60, 92, 116), 0.9)), width=3)
+            c.create_arc(self.px - ar, self.py - ar, self.px + ar, self.py + ar,
+                         start=90, extent=-359.9 * t, style="arc",
+                         outline=ACCENT, width=3)
+            label = (self.arm.name if isinstance(self.arm, DeskItem)
+                     else self.arm.mirror.title)
+            c.create_text(self.px, self.py + ar + 16, text=label[:34],
+                          fill=TEXT, font=("Segoe UI", 10))
 
         c.create_text(38, 34, text="SPATIAL WORKSPACE", anchor="w",
                       fill=ACCENT_SOFT, font=("Segoe UI", 11, "bold"))
