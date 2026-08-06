@@ -55,6 +55,20 @@ PINCH_GRACE = 5
 #: the way into a pinch doesn't snatch one.
 FIST_HOLD = 2
 
+# ── desktop shelf ─────────────────────────────────────────────────────────────
+#: icon size as a fraction of its cell, at rest and fully magnified
+SHELF_ICON, SHELF_GROW = 0.56, 0.62
+#: how far the magnification reaches, in cells
+SHELF_REACH = 1.7
+#: smallest cell worth showing; below this the shelf wraps to another row
+SHELF_MIN_CELL = 62.0
+#: icon bitmaps are cached per quantised size — resizing every frame cannot hold
+#: 60fps, and a continuous size would defeat the cache entirely
+SHELF_QUANT = 6
+#: icons are pulled once at this size and resized down locally, so the shelf
+#: keeps one bitmap per item rather than one per item per size
+SHELF_SRC_PX = 128
+
 
 def _blend(c1, c2, t):
     return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
@@ -105,6 +119,36 @@ class Panel:
                 self.x + w / 2, self.y + h / 2 + drift - lift)
 
 
+class DeskItem:
+    """One thing on your real desktop, sitting on the shelf.
+
+    Magnification is proximity-based rather than strictly on/off: the item under
+    your hand grows most and its neighbours grow a little, which is what makes a
+    dense shelf readable without a separate zoom mode. At this size the label
+    would be unreadable, so only the focused item names itself.
+    """
+
+    __slots__ = ("name", "path", "kind", "x", "y", "mag", "hover")
+
+    def __init__(self, name, path, kind, x=0.0, y=0.0):
+        self.name = name
+        self.path = path
+        self.kind = kind
+        self.x = x
+        self.y = y
+        self.mag = 0.0        # 0..1 proximity, eased
+        self.hover = 0.0      # 0..1, only for the single focused item
+
+    def size(self, cell: float) -> float:
+        return cell * (SHELF_ICON + SHELF_GROW * self.mag)
+
+    def rect(self, cell: float):
+        s = self.size(cell)
+        lift = self.mag * cell * 0.30      # rises out of the shelf as it grows
+        return (self.x - s / 2, self.y - s / 2 - lift,
+                self.x + s / 2, self.y + s / 2 - lift)
+
+
 class Workspace:
     def __init__(self, use_hands: bool = True):
         self.root = tk.Tk()
@@ -129,6 +173,10 @@ class Workspace:
         # set before _layout, which returns early when nothing is open — without
         # this, every geometry call would raise on an empty desktop
         self.base_w = self.sw * 0.3
+        # the shelf claims the bottom band first — panel layout sizes itself
+        # around whatever is left
+        self._collect_desktop()
+        self._layout_desktop()
         self._collect()
         self._layout()
 
@@ -231,7 +279,10 @@ class Workspace:
         cols = min(n, 4 if n > 6 else 3 if n > 2 else n)
         rows = math.ceil(n / cols)
 
-        margin_x, top_bar, bottom_bar = 0.05, 0.16, 0.12
+        margin_x, top_bar = 0.05, 0.16
+        # leave the shelf its band, plus a gap so a magnified icon never
+        # collides with the lowest row of panels
+        bottom_bar = max(0.12, getattr(self, "shelf_h", 0.0) / self.sh + 0.03)
         avail_w = self.sw * (1 - margin_x * 2)
         avail_h = self.sh * (1 - top_bar - bottom_bar)
         cell_w = avail_w / cols
@@ -258,6 +309,132 @@ class Workspace:
             p.ty, p.home_y = y, y
             p.ts = 1.0 - off * 0.07
 
+    # ── the real desktop ──────────────────────────────────────────────────────
+    def _collect_desktop(self):
+        """Your actual desktop, as things you can reach.
+
+        Mirrors only ever show what is ALREADY running, which left the workspace
+        unable to open anything you hadn't started yet. The desktop window is
+        itself mirrorable, but a mirror is one flat picture — you cannot hover a
+        single icon inside it — so the items are enumerated individually and get
+        their own hit-box, magnification and depth.
+        """
+        self.items = []
+        self.item_photos = {}          # (path, px) -> PhotoImage
+        self.item_src = {}             # path -> PIL image at SHELF_SRC_PX
+        self._photo_order = []
+        self.shelf_h = 0.0
+        self.shelf_cell = 72.0
+        self.shelf_visible = True
+        self.sd = None
+        try:
+            import spatial_desktop as sd
+            self.sd = sd
+            for d in sd.list_desktop():
+                self.items.append(DeskItem(d["name"], d["path"], d["kind"]))
+        except Exception:
+            self.items = []
+
+    def _layout_desktop(self):
+        """Fit every desktop item along the bottom, wrapping to more rows rather
+        than shrinking past legibility. Seeing all of it is the point."""
+        n = len(self.items)
+        self.shelf_h = 0.0
+        if not n:
+            return
+        avail = self.sw * 0.94
+        rows = 1
+        while rows < 4 and avail / math.ceil(n / rows) < SHELF_MIN_CELL:
+            rows += 1
+        per = math.ceil(n / rows)
+        cell = min(avail / per, self.sh * 0.125)
+        self.shelf_cell = cell
+        self.shelf_rows = rows
+        self.shelf_per = per
+        # rows, plus headroom for a magnified icon and its label
+        self.shelf_h = rows * cell * 1.02 + cell * 0.62
+
+        bottom = self.sh - cell * 0.60
+        for i, it in enumerate(self.items):
+            r, c = divmod(i, per)
+            in_row = min(per, n - r * per)
+            row_w = in_row * cell
+            it.x = (self.sw - row_w) / 2 + cell * (c + 0.5)
+            it.y = bottom - (rows - 1 - r) * cell * 1.02
+
+    def item_at(self, x, y):
+        best = None
+        for it in self.items:
+            l, t, r, b = it.rect(self.shelf_cell)
+            if l <= x <= r and t <= y <= b:
+                best = it          # later items sit on top of earlier ones
+        return best
+
+    def _update_shelf(self, dt):
+        """Ease each item's magnification from how near your hand is."""
+        if not self.items:
+            return
+        reach = self.shelf_cell * SHELF_REACH
+        focus = self.item_at(self.px, self.py)
+        for it in self.items:
+            dx = (self.px - it.x) / reach
+            dy = (self.py - it.y) / (reach * 0.85)
+            d2 = dx * dx + dy * dy
+            want = math.exp(-d2 * 1.5) if d2 < 8.0 else 0.0
+            it.mag += (want - it.mag) * min(1.0, dt * 15.0)
+            it.hover += ((1.0 if it is focus else 0.0) - it.hover) * min(1.0, dt * 15.0)
+
+    def _icon_photo(self, it: DeskItem, px: float):
+        """A tk bitmap for this icon at (quantised) px. Resizing every icon every
+        frame cannot hold 60fps, and an unquantised size would never hit."""
+        px = max(16, int(round(px / SHELF_QUANT)) * SHELF_QUANT)
+        key = (it.path, px)
+        photo = self.item_photos.get(key)
+        if photo is not None:
+            return photo
+        if it.path not in self.item_src:
+            try:
+                self.item_src[it.path] = self.sd.icon_for(it.path, SHELF_SRC_PX)
+            except Exception:
+                self.item_src[it.path] = None
+        src = self.item_src.get(it.path)
+        if src is None:
+            return None
+        try:
+            from PIL import Image, ImageTk
+            photo = ImageTk.PhotoImage(src.resize((px, px), Image.LANCZOS))
+        except Exception:
+            return None
+        self.item_photos[key] = photo
+        self._photo_order.append(key)
+        while len(self._photo_order) > 420:      # bound as items are magnified
+            self.item_photos.pop(self._photo_order.pop(0), None)
+        return photo
+
+    def open_desk(self, it: DeskItem):
+        """Open a desktop item and leave — you asked to go there."""
+        if self.closing:
+            return
+        self.closing = True
+        self.say(f"Opening {it.name[:36]}")
+        it.mag = 1.35
+        self.root.after(170, lambda: self._finish_desk(it))
+
+    def _finish_desk(self, it: DeskItem):
+        try:
+            for q in self.panels:
+                q.mirror.hide()
+            self.root.withdraw()
+            self.root.update()
+        except Exception:
+            pass
+        try:
+            if self.sd:
+                self.sd.open_item(it.path)
+        except Exception:
+            pass
+        self.quit()
+
     # ── input ─────────────────────────────────────────────────────────────────
     def _mouse_move(self, e):
         self.px, self.py = e.x, e.y
@@ -267,6 +444,10 @@ class Workspace:
         p = self.panel_at(e.x, e.y)
         if p:
             self.select(p)
+            return
+        it = self.item_at(e.x, e.y)
+        if it:
+            self.open_desk(it)
 
     def _mouse_up(self, e):
         pass
@@ -332,6 +513,8 @@ class Workspace:
             self.panels.remove(p)
         if gone:
             self._layout()
+
+        self._update_shelf(dt)
 
         hovered = self.panel_at(self.px, self.py) if not self.held else self.held
         for p in self.panels:
@@ -428,7 +611,11 @@ class Workspace:
                 if p:
                     self.select(p)
                 else:
-                    self._pinch_empty()
+                    it = self.item_at(self.px, self.py)
+                    if it:
+                        self.open_desk(it)
+                    else:
+                        self._pinch_empty()
             self.state = "pinch"
         else:
             if self.state == "fist":
@@ -444,10 +631,11 @@ class Workspace:
                 self.state = g
 
     def _pinch_empty(self):
-        """Pinching empty space opens the launcher — the way to reach apps that
-        aren't running yet, so the workspace isn't limited to what's open."""
-        self.launcher = not getattr(self, "launcher", False)
-        self.say("Launcher" if self.launcher else "", 1.0)
+        """Pinching empty space folds the desktop shelf away, and back."""
+        if not self.items:
+            return
+        self.shelf_visible = not self.shelf_visible
+        self.say("Desktop hidden" if not self.shelf_visible else "Desktop", 1.0)
 
     # ── drawing ───────────────────────────────────────────────────────────────
     def draw(self, hovered):
@@ -457,28 +645,58 @@ class Workspace:
             c.create_image(0, 0, image=self.bg_img, anchor="nw")
 
         if not self.panels:
-            c.create_text(self.sw / 2, self.sh / 2 - 10, text="Nothing open",
+            c.create_text(self.sw / 2, self.sh * 0.34, text="Nothing open",
                           fill=TEXT, font=("Segoe UI Light", 30))
-            c.create_text(self.sw / 2, self.sh / 2 + 30,
-                          text="Open an app, then come back.",
+            c.create_text(self.sw / 2, self.sh * 0.34 + 40,
+                          text="Your desktop is below — pinch anything to open it.",
                           fill=MUTED, font=("Segoe UI", 12))
-            self._chrome()
-            return
+        else:
+            # a soft ground line, so panels feel like they're standing in a
+            # space. It sits on the shelf rather than at a fixed height, or the
+            # two draw straight through each other.
+            gy = self.sh - max(self.shelf_h, self.sh * 0.16) - 8
+            for i in range(6):
+                t = i / 5
+                c.create_line(0, gy + i * 2, self.sw, gy + i * 2,
+                              fill=_hex(_blend((16, 26, 40), BG_BOT, t)))
 
-        # a soft ground line, so panels feel like they're standing in a space
-        gy = self.sh * 0.84
-        for i in range(6):
-            t = i / 5
-            c.create_line(0, gy + i * 2, self.sw, gy + i * 2,
-                          fill=_hex(_blend((16, 26, 40), BG_BOT, t)))
+            for p in self.panels:
+                self._panel(c, p, p is hovered)
 
-        for p in self.panels:
-            self._panel(c, p, p is hovered)
-
+        # the shelf and the hands are drawn either way — with nothing open the
+        # desktop IS the workspace, and an early return here used to take the
+        # user's hands off screen with it
+        self._draw_shelf(c)
         self._draw_hands(c)
         self._chrome()
         if self.tutorial:
             self.tutorial.draw(c)
+
+    def _draw_shelf(self, c):
+        """Your desktop items, magnified by how near your hand is."""
+        if not self.items or not self.shelf_visible:
+            return
+        cell = self.shelf_cell
+        top = self.sh - self.shelf_h
+        # a hairline rather than a plinth: the shelf should read as a surface
+        # without laying a slab of chrome over the backdrop
+        c.create_line(self.sw * 0.04, top, self.sw * 0.96, top, fill="#16283A")
+
+        # least-magnified first, so the focused icon overlaps its neighbours
+        for it in sorted(self.items, key=lambda i: i.mag):
+            l, t, r, b = it.rect(cell)
+            cx, cy = (l + r) / 2, (t + b) / 2
+            photo = self._icon_photo(it, it.size(cell))
+            if photo is not None:
+                c.create_image(cx, cy, image=photo)
+            else:
+                c.create_rectangle(l, t, r, b, outline=MUTED)
+            if it.hover > 0.04:
+                # only the focused item names itself — at this density every
+                # label at once is unreadable noise
+                col = _hex(_blend(BG_BOT, (220, 233, 242), min(1.0, it.hover * 1.5)))
+                c.create_text(cx, t - cell * 0.17, text=it.name[:30],
+                              fill=col, font=("Segoe UI", 10))
 
     def _draw_hands(self, c):
         """Draw the user's hands as shaded 3D geometry, posed by real tracking.
