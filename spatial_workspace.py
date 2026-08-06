@@ -216,6 +216,7 @@ class Workspace:
         # can't drive is the exact trap we just fixed elsewhere.
         self.reader = None
         self.hand_imgs = {}          # keeps PhotoImages alive while displayed
+        self._hand_cache = {}        # index -> (photo, anchor fx, anchor fy)
         self.scan_mode = False
         self.scale_ref = None        # two-hand distance when scaling began
         self.hand_renderer = None
@@ -248,7 +249,8 @@ class Workspace:
     def _backdrop(self):
         """A quiet deep-space gradient with a few stars, rendered once."""
         try:
-            from PIL import Image, ImageDraw, ImageFilter, ImageTk
+            from PIL import (Image, ImageChops, ImageDraw, ImageFilter,
+                             ImageTk)
         except Exception:
             self.bg_img = None
             return
@@ -259,20 +261,64 @@ class Workspace:
             t = y / max(h - 1, 1)
             # ease so most of the frame is dark and the glow sits up top
             d.rectangle([0, y, w, y + 2], fill=_blend(BG_TOP, BG_BOT, t ** 0.75))
-        # faint aurora bloom behind everything, so panels sit in light
-        glow = Image.new("RGB", (w, h), (0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.ellipse([w * 0.18, -h * 0.42, w * 0.82, h * 0.55], fill=(20, 44, 66))
-        glow = glow.filter(ImageFilter.GaussianBlur(w // 12))
-        img = Image.blend(img, Image.blend(img, glow, 0.55), 0.75)
-        d = ImageDraw.Draw(img)
+        # ── nebula: several coloured blooms, blurred and added ─────────────────
+        # Additive rather than blended. Blending toward a colour washes the
+        # whole frame toward grey and flattens it; adding light leaves the dark
+        # parts genuinely dark, which is what gives the depth.
         rnd = random.Random(7)
-        for _ in range(150):
+        neb = Image.new("RGB", (w // 4, h // 4), (0, 0, 0))
+        nd = ImageDraw.Draw(neb)
+        for cx, cy, rx, ry, col in (
+                (0.50, -0.10, 0.46, 0.40, (26, 58, 92)),     # cool crown
+                (0.16, 0.30, 0.30, 0.34, (40, 30, 76)),      # violet, left
+                (0.86, 0.44, 0.26, 0.30, (14, 52, 70)),      # teal, right
+                (0.50, 0.86, 0.62, 0.26, (10, 30, 52))):     # floor haze
+            nd.ellipse([(cx - rx) * w / 4, (cy - ry) * h / 4,
+                        (cx + rx) * w / 4, (cy + ry) * h / 4], fill=col)
+        neb = neb.filter(ImageFilter.GaussianBlur(w // 34)) \
+                 .resize((w, h), Image.BICUBIC)
+        img = ImageChops.add(img, neb)
+
+        # ── stars, in three depths ────────────────────────────────────────────
+        # A single size and brightness reads as noise. Depth comes from most of
+        # them being barely there, a few being crisp, and a handful blooming.
+        stars = Image.new("RGB", (w, h), (0, 0, 0))
+        sd = ImageDraw.Draw(stars)
+        for _ in range(430):                                  # far, faint dust
             x, y = rnd.randrange(w), rnd.randrange(h)
-            v = rnd.randint(28, 92)
-            r = 1 if rnd.random() < 0.86 else 2
-            d.ellipse([x, y, x + r, y + r], fill=(v, v + 8, v + 16))
+            v = rnd.randint(16, 46)
+            sd.point((x, y), fill=(v, v + 4, v + 10))
+        for _ in range(130):                                  # mid
+            x, y = rnd.randrange(w), rnd.randrange(h)
+            v = rnd.randint(60, 120)
+            sd.ellipse([x, y, x + 1, y + 1], fill=(v, v + 6, v + 14))
+        img = ImageChops.add(img, stars)
+
+        bright = Image.new("RGB", (w, h), (0, 0, 0))
+        bd = ImageDraw.Draw(bright)
+        for _ in range(26):                                   # near, blooming
+            x, y = rnd.randrange(w), rnd.randrange(h)
+            v = rnd.randint(120, 210)
+            bd.ellipse([x - 1, y - 1, x + 2, y + 2], fill=(v, v + 6, v + 16))
+        img = ImageChops.add(img, bright.filter(ImageFilter.GaussianBlur(2.2)))
+        img = ImageChops.add(img, bright)
+
+        # ── vignette ──────────────────────────────────────────────────────────
+        # Darkening the corners pulls the eye to the middle, where the panels
+        # are, and stops the gradient from banding into the screen edges.
+        vig = Image.new("L", (w // 8, h // 8), 0)
+        ImageDraw.Draw(vig).ellipse(
+            [-w // 32, -h // 26, w // 8 + w // 32, h // 8 + h // 26], fill=255)
+        vig = vig.filter(ImageFilter.GaussianBlur(w // 90)) \
+                 .resize((w, h), Image.BICUBIC).point(lambda v: 70 + v * 0.72)
+        img = ImageChops.multiply(img, Image.merge("RGB", (vig, vig, vig)))
+
         self.bg_img = ImageTk.PhotoImage(img)
+        # A small copy kept for sampling. tkinter cannot draw translucently, so
+        # every soft edge is faked by blending toward "the background" — and
+        # blending toward one constant only works if the background IS constant.
+        # Against a lit nebula it painted black frames around every panel.
+        self.bg_pil = img.resize((max(1, w // 8), max(1, h // 8)), Image.BOX)
 
     def _collect(self):
         for h, title in sm.list_windows(exclude_hwnd=self.hwnd):
@@ -405,6 +451,45 @@ class Workspace:
             row_w = in_row * cell
             it.x = (self.sw - row_w) / 2 + cell * (c + 0.5)
             it.y = bottom - (rows - 1 - r) * cell * 1.02
+        self._bake_shelf()
+
+    def _bake_shelf(self):
+        """Composite the resting shelf into ONE bitmap.
+
+        Thirty-nine separate RGBA images on the canvas cost about 29ms a frame,
+        which is most of a frame budget spent redrawing icons that are not
+        moving. Only the few near your hand ever change, so the rest are baked
+        once and drawn as a single blit; magnified ones are drawn over the top,
+        and since a magnified icon is always strictly larger than its resting
+        one, it covers it completely.
+        """
+        self.shelf_photo = None
+        if not self.items or not self.sd:
+            return
+        try:
+            from PIL import Image, ImageTk
+        except Exception:
+            return
+        cell = self.shelf_cell
+        top = self.sh - self.shelf_h
+        base = Image.new("RGBA", (int(self.sw), int(math.ceil(self.shelf_h))),
+                         (0, 0, 0, 0))
+        px = max(16, int(round(cell * SHELF_ICON / SHELF_QUANT)) * SHELF_QUANT)
+        for it in self.items:
+            src = self.item_src.get(it.path)
+            if it.path not in self.item_src:
+                try:
+                    src = self.sd.icon_for(it.path, SHELF_SRC_PX)
+                except Exception:
+                    src = None
+                self.item_src[it.path] = src
+            if src is None:
+                continue
+            ic = src.resize((px, px), Image.LANCZOS)
+            base.alpha_composite(ic, (int(it.x - px / 2),
+                                      int(it.y - top - px / 2)))
+        self.shelf_photo = ImageTk.PhotoImage(base)
+        self.shelf_top = top
 
     def item_at(self, x, y):
         best = None
@@ -797,14 +882,20 @@ class Workspace:
         # without laying a slab of chrome over the backdrop
         c.create_line(self.sw * 0.04, top, self.sw * 0.96, top, fill="#16283A")
 
-        # least-magnified first, so the focused icon overlaps its neighbours
-        for it in sorted(self.items, key=lambda i: i.mag):
+        # everything at rest, in one blit
+        if getattr(self, "shelf_photo", None) is not None:
+            c.create_image(0, top, image=self.shelf_photo, anchor="nw")
+
+        # ...then only what your hand is near, least-magnified first so the
+        # focused icon overlaps its neighbours
+        near = [it for it in self.items if it.mag > 0.02]
+        for it in sorted(near, key=lambda i: i.mag):
             l, t, r, b = it.rect(cell)
             cx, cy = (l + r) / 2, (t + b) / 2
             photo = self._icon_photo(it, it.size(cell))
             if photo is not None:
                 c.create_image(cx, cy, image=photo)
-            else:
+            elif self.shelf_photo is None:
                 c.create_rectangle(l, t, r, b, outline=MUTED)
             if it.hover > 0.04:
                 # only the focused item names itself — at this density every
@@ -823,6 +914,7 @@ class Workspace:
         hands = getattr(self, "hands", None)
         if not hands:
             self.hand_imgs.clear()
+            self._hand_cache.clear()
             return
         try:
             from PIL import Image, ImageTk
@@ -835,63 +927,123 @@ class Workspace:
         for i, hd in enumerate(hands):
             if hd.pts is None or hd.zs is None:
                 continue
+            # Mirror in LANDMARK space rather than flipping the finished image.
+            # The view is mirrored so moving right moves right, and transposing
+            # the render to achieve that cost a whole extra image copy a frame.
+            pts = hd.pts.copy()
+            pts[:, 0] = fw - pts[:, 0]
+
+            # Size from the hand's REAL extent in camera pixels — the render's
+            # own pixel size says nothing about how big the hand is — and then
+            # render at exactly that size. Rendering at a fixed resolution and
+            # resampling afterwards cost more than the render itself.
             try:
-                img, off, extent = self.hand_renderer.render(hd.pts, hd.zs, fw, fh)
+                off, extent = self.hand_renderer.extent(pts)
             except Exception:
                 continue
             if extent[0] < 1.0 or extent[1] < 1.0:
                 continue
 
-            # Size from the hand's REAL extent in camera pixels. The render is
-            # produced at a fixed internal resolution, so its own pixel size
-            # says nothing about how big the hand is — scaling by that drew a
-            # constant, oversized hand that never responded to reach.
-            dw = max(24, int(extent[0] * cam2scr * HAND_SCALE))
-            dh = max(24, int(extent[1] * cam2scr * HAND_SCALE))
+            # Re-pose on alternate frames. Rendering the surface is by far the
+            # most expensive thing in a frame, and a pose one frame stale is not
+            # perceptible — while POSITION still updates every frame, because it
+            # comes from the cursor, so the hand never lags where you point it.
+            cached = self._hand_cache.get(i)
+            if cached is not None and (self.tick & 1):
+                photo, fx, fy = cached
+                if i == 0:
+                    cx, cy = self.px, self.py
+                else:
+                    cx, cy = hd.x * self.sw, hd.y * self.sh
+                c.create_image(int(cx - fx * photo.width()),
+                               int(cy - fy * photo.height()),
+                               image=photo, anchor="nw")
+                keep[(i, (photo.width(), photo.height()))] = photo
+                continue
+
+            # Quantised, so the same buffer can be reused frame to frame.
+            # Allocating a fresh PhotoImage costs ~9ms; pasting into one that
+            # already exists is a straight block copy, and a hand's size changes
+            # slowly enough that the size repeats for many frames at a time.
+            dw = max(24, int(extent[0] * cam2scr * HAND_SCALE) // 8 * 8)
+            try:
+                img, off, extent = self.hand_renderer.render(
+                    pts, hd.zs, fw, fh, res_w=dw)
+                key = (i, img.size)
+                photo = self.hand_imgs.get(key)
+                if photo is None:
+                    photo = ImageTk.PhotoImage(img)
+                else:
+                    photo.paste(img)
+            except Exception:
+                continue
 
             # Put the PINCH POINT on the cursor. The control point is the
             # thumb-index midpoint; centring the whole image instead planted the
             # cursor in the middle of the palm, so the hand never looked like it
             # was touching the thing it was pointing at.
-            ctrl_x = (hd.pts[4][0] + hd.pts[8][0]) * 0.5
-            ctrl_y = (hd.pts[4][1] + hd.pts[8][1]) * 0.5
-            fx = 1.0 - (ctrl_x - off[0]) / extent[0]    # image is mirrored below
+            ctrl_x = (pts[4][0] + pts[8][0]) * 0.5
+            ctrl_y = (pts[4][1] + pts[8][1]) * 0.5
+            fx = (ctrl_x - off[0]) / extent[0]
             fy = (ctrl_y - off[1]) / extent[1]
 
             if i == 0:
                 cx, cy = self.px, self.py
             else:
                 cx, cy = hd.x * self.sw, hd.y * self.sh
-            try:
-                im = img.resize((dw, dh), Image.LANCZOS)
-                im = im.transpose(Image.FLIP_LEFT_RIGHT)   # match the mirroring
-                photo = ImageTk.PhotoImage(im)
-            except Exception:
-                continue
-            c.create_image(int(cx - fx * dw), int(cy - fy * dh),
+            c.create_image(int(cx - fx * img.size[0]),
+                           int(cy - fy * img.size[1]),
                            image=photo, anchor="nw")
-            keep[i] = photo          # tkinter drops un-referenced PhotoImages
-        self.hand_imgs = keep
+            self._hand_cache[i] = (photo, fx, fy)
+            keep[key] = photo        # tkinter drops un-referenced PhotoImages
+        # keep at most a couple of spare sizes so a hand moving toward the
+        # camera doesn't accumulate a buffer for every width it passes through
+        for k in list(self.hand_imgs)[:-4]:
+            self.hand_imgs.pop(k, None)
+        self.hand_imgs.update(keep)
+
+    def _bg_at(self, x, y):
+        """The backdrop colour under a point, for faking translucency."""
+        pil = getattr(self, "bg_pil", None)
+        if pil is None:
+            return BG_BOT
+        try:
+            return pil.getpixel((min(max(int(x / 8), 0), pil.width - 1),
+                                 min(max(int(y / 8), 0), pil.height - 1)))[:3]
+        except Exception:
+            return BG_BOT
 
     def _panel(self, c, p: Panel, is_hover: bool):
         l, t, r, b = p.rect(self.base_w, self.tick)   # hover lift is in rect()
         grabbed = p.grabbed
         accent = GRAB if grabbed else ACCENT
-        # glow: concentric strokes fading into the backdrop. No alpha in tkinter,
-        # so blend toward the known background instead of faking transparency.
-        strength = 0.30 + p.hover * 0.70
-        for i in range(7, 0, -1):
-            k = (i / 7.0)
-            col = _blend(BG_BOT,
-                         (125, 219, 255) if not grabbed else (255, 196, 107),
-                         strength * (1.0 - k) * 0.75)
+        tint = (255, 196, 107) if grabbed else (125, 219, 255)
+        # Glow: concentric strokes fading into the backdrop. There is no alpha
+        # in the tkinter canvas, so each ring blends toward whatever is actually
+        # behind it — sampled from the backdrop, not assumed to be near-black.
+        near = self._bg_at((l + r) / 2, t)
+        far = self._bg_at((l + r) / 2, b)
+        # A resting panel gets a thin halo; only the one you are looking at pays
+        # for the full stack. Nine strokes on every panel was a third of the
+        # frame spent on glow nobody was looking at.
+        rings = 9 if (p.hover > 0.03 or grabbed) else 4
+        strength = 0.22 + p.hover * 0.62
+        for i in range(rings, 0, -1):
+            k = i / rings
+            # quadratic falloff reads as light spilling out; linear looks like a
+            # stack of drawn boxes, which is what it was
+            a = strength * (1.0 - k) * (1.0 - k)
             pad = i * 3
             c.create_rectangle(l - pad, t - pad, r + pad, b + pad,
-                               outline=_hex(col), width=2)
+                               outline=_hex(_blend(_blend(near, far, k), tint, a)),
+                               width=2)
 
-        # drop shadow, grounding the panel
-        c.create_rectangle(l + 5, b + 3, r + 5, b + 9,
-                           outline="", fill=_hex(_blend(BG_BOT, (0, 0, 0), 0.5)))
+        # contact shadow, grounding the panel against the floor haze
+        for i in range(4):
+            sh = _blend(self._bg_at((l + r) / 2, b + 6 + i * 3), (0, 0, 0),
+                        0.42 - i * 0.09)
+            c.create_line(l + 10 + i * 4, b + 5 + i * 3,
+                          r - 10 - i * 4, b + 5 + i * 3, fill=_hex(sh), width=3)
 
         # the live window itself
         p.mirror.place(l, t, r, b, opacity=255, visible=True)
@@ -906,13 +1058,16 @@ class Workspace:
                 c.create_line(cx + dx * n, cy, cx, cy, fill=accent, width=3)
                 c.create_line(cx, cy, cx, cy + dy * n, fill=accent, width=3)
 
-        # title, only when it's the one you're looking at
+        # title, brightening as you look at it
         title = p.mirror.title
         if len(title) > 46:
             title = title[:44] + "…"
-        fill = TEXT if (is_hover or grabbed) else MUTED
-        c.create_text((l + r) / 2, b + 22, text=title, fill=fill,
-                      font=("Segoe UI", 12, "bold" if is_hover else "normal"))
+        lit = max(p.hover, 1.0 if grabbed else 0.0)
+        fill = _hex(_blend(_blend(self._bg_at((l + r) / 2, b + 26), (150, 174, 196), 0.85),
+                           (255, 236, 196) if grabbed else (226, 240, 250), lit))
+        c.create_text((l + r) / 2, b + 26, text=title, fill=fill,
+                      font=("Segoe UI Semilight", 13,
+                            "bold" if is_hover else "normal"))
         if grabbed:
             c.create_text((l + r) / 2, b + 42, text="carrying", fill=GRAB,
                           font=("Segoe UI", 10))

@@ -91,9 +91,19 @@ class Mirror:
 
     def place(self, left: int, top: int, right: int, bottom: int,
               opacity: int = 255, visible: bool = True) -> None:
-        """Position this mirror. Cheap enough to call every frame."""
+        """Position this mirror.
+
+        Skips the call when nothing actually moved. Every update is a DWM round
+        trip that makes the compositor re-scale the source window, and the
+        workspace calls this for each panel on each frame — including the many
+        frames where a panel is sitting perfectly still."""
         if not self.handle:
             return
+        state = (int(left), int(top), int(right), int(bottom),
+                 max(0, min(255, int(opacity))), bool(visible))
+        if state == getattr(self, "_state", None):
+            return
+        self._state = state
         p = _ThumbProps()
         p.dwFlags = (_TNP_RECTDESTINATION | _TNP_VISIBLE | _TNP_OPACITY
                      | _TNP_SOURCECLIENTAREAONLY)

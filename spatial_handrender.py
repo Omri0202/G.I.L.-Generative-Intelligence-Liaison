@@ -182,7 +182,22 @@ class HandRenderer:
                             max(1.2, ra), max(1.0, rb)))
         return out
 
-    def render(self, pts_xy, zs, frame_w=None, frame_h=None, pad=0.16):
+    @staticmethod
+    def extent(pts_xy, pad=0.16):
+        """(top-left, (width, height)) of the hand in input pixels.
+
+        Exposed so a caller can work out how big the hand will be drawn BEFORE
+        rendering it, and then ask for exactly that resolution — rendering at a
+        fixed size and resampling afterwards cost more than the render."""
+        p = np.asarray(pts_xy, dtype=np.float32)
+        span = float(np.linalg.norm(p[12] - p[0])) or 1.0
+        margin = span * pad
+        lo = p.min(0) - margin
+        hi = p.max(0) + margin
+        return lo, (float(hi[0] - lo[0]), float(hi[1] - lo[1]))
+
+    def render(self, pts_xy, zs, frame_w=None, frame_h=None, pad=0.16,
+               res_w=None):
         """pts_xy: (21,2) pixels. zs: (21,) MediaPipe depth (negative = nearer).
 
         Returns (RGBA image, (offset_x, offset_y), (width, height)) — the last
@@ -202,9 +217,9 @@ class HandRenderer:
             return (Image.new("RGBA", (8, 8), (0, 0, 0, 0)),
                     (float(lo[0]), float(lo[1])), (w_px, h_px))
 
-        # work at a fixed internal resolution so cost is stable
-        res_w = self.RES
-        res_h = max(8, int(self.RES * h_px / w_px))
+        # render straight at the size it will be drawn when the caller knows it
+        res_w = max(32, min(int(res_w or self.RES), 340))
+        res_h = max(8, int(res_w * h_px / w_px))
         sx, sy = res_w / w_px, res_h / h_px
         q = (p - lo) * (sx, sy)
         span_r = span * (sx + sy) * 0.5
@@ -316,7 +331,19 @@ class HandRenderer:
         # ~1px of smoothing: enough to kill the stair-stepping on the silhouette,
         # not enough to erase the knuckles.
         hs = cv2.GaussianBlur(height, (0, 0), 1.1)
+
+        # Shade at HALF resolution and upsample the result. The surface is
+        # smooth, so its lighting carries no detail at pixel scale; the
+        # silhouette does, and that comes from the full-resolution height field
+        # below, so nothing visible is lost. Shading was around four fifths of
+        # the render, and this is a quarter of the pixels.
+        sw_, sh_ = max(2, res_w // 2), max(2, res_h // 2)
+        hs = cv2.resize(hs, (sw_, sh_), interpolation=cv2.INTER_AREA)
         gy, gx = np.gradient(hs)
+        # one small pixel spans two full ones, so the gradient it reports is
+        # twice the per-pixel slope the normals need
+        gx *= 0.5
+        gy *= 0.5
         # nz is in the SAME units as the gradient (height per pixel), so it must
         # be near 1. Setting it to a fraction of the hand span made it ~75
         # against gradients of ~1, so every normal pointed at the camera and the
@@ -362,11 +389,12 @@ class HandRenderer:
         col += rim[..., None] * np.array([0.34, 0.46, 0.60], np.float32) * 0.55
 
         col = np.clip(col, 0, 1)
-        rgb = (col * 255).astype(np.uint8)
+        rgb = cv2.resize((col * 255).astype(np.uint8), (res_w, res_h),
+                         interpolation=cv2.INTER_LINEAR)
 
-        # Antialias the silhouette from the height field. The ramp is ~1.5px:
-        # scaling it to the hand span made the edge dozens of pixels wide and
-        # the hand looked like a soft mitten.
+        # Antialias the silhouette from the FULL-resolution height field. The
+        # ramp is ~1.5px: scaling it to the hand span made the edge dozens of
+        # pixels wide and the hand looked like a soft mitten.
         a = np.clip((height - 0.30) / 1.5, 0, 1)
         a = cv2.GaussianBlur(a.astype(np.float32), (0, 0), 0.7)
         alpha = (np.clip(a, 0, 1) * 255).astype(np.uint8)
