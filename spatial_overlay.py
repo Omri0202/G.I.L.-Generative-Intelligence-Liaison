@@ -20,6 +20,7 @@ hand — so the HUD is a focus reticle, a live target highlight, and state colou
 
 from __future__ import annotations
 
+import ctypes
 import math
 import sys
 import threading
@@ -42,6 +43,8 @@ MODEL = ROOT / "data" / "hand_landmarker.task"
 TUTORIAL_FLAG = ROOT / "data" / "spatial_tutorial_done"
 
 CHROMA = "#010203"                    # painted transparent by the window manager
+# the same colour as a Win32 COLORREF (0x00BBGGRR), for SetLayeredWindowAttributes
+CHROMA_KEY = 0x00030201
 CYAN = "#5CE1FF"
 WHITE = "#EAFBFF"
 AMBER = "#FFB44C"
@@ -183,6 +186,10 @@ class SpatialHUD:
 
     def __init__(self):
         self.root = tk.Tk()
+        # Stay HIDDEN until transparency is proven. A full-screen window that
+        # isn't see-through is a black sheet over the whole desktop with no way
+        # out — never show it on hope.
+        self.root.withdraw()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-transparentcolor", CHROMA)
@@ -193,7 +200,12 @@ class SpatialHUD:
                             bg=CHROMA, highlightthickness=0)
         self.cv.pack()
         self.root.update_idletasks()
-        self._make_clickthrough()
+
+        if not self._make_clickthrough():
+            self._abort("This display won't let G.I.L. draw a see-through "
+                        "overlay, so spatial control can't run here safely.")
+            return
+        self.root.deiconify()
 
         self.reader = HandReader()
         self.reader.start()
@@ -211,17 +223,71 @@ class SpatialHUD:
         self.tick = 0
         self.tutorial = Tutorial(self) if not TUTORIAL_FLAG.exists() else None
 
-        self.root.bind_all("<Escape>", lambda e: self.quit())
+        # A click-through, no-activate window NEVER receives keyboard events, so
+        # a tkinter <Escape> binding is dead code — which is why there was no way
+        # out. Poll the key globally instead, so Esc always works.
         self.loop()
 
-    def _make_clickthrough(self):
+    def _make_clickthrough(self) -> bool:
+        """Make the window see-through and click-through, and PROVE it worked.
+
+        tkinter's -transparentcolor is unreliable — on this machine it silently
+        installed no colour key at all, which is what turned the overlay into an
+        opaque sheet. So set the key explicitly with the Win32 call and verify it
+        actually took, rather than assuming."""
         hwnd = win32gui.GetParent(self.cv.winfo_id()) or self.root.winfo_id()
+        self.hwnd = hwnd
         ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
         win32gui.SetWindowLong(
             hwnd, win32con.GWL_EXSTYLE,
             ex | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT
             | win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_NOACTIVATE)
-        self.hwnd = hwnd
+        try:
+            win32gui.SetLayeredWindowAttributes(
+                hwnd, CHROMA_KEY, 255, win32con.LWA_COLORKEY)
+        except Exception:
+            return False
+        self.root.update_idletasks()
+        return self._transparency_ok(hwnd)
+
+    @staticmethod
+    def _transparency_ok(hwnd) -> bool:
+        """Read the colour key back — belief isn't verification."""
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetLayeredWindowAttributes.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32),
+                ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_uint32)]
+            cr = ctypes.c_uint32()
+            alpha = ctypes.c_ubyte()
+            flags = ctypes.c_uint32()
+            ok = user32.GetLayeredWindowAttributes(
+                hwnd, ctypes.byref(cr), ctypes.byref(alpha), ctypes.byref(flags))
+            return bool(ok) and bool(flags.value & win32con.LWA_COLORKEY)
+        except Exception:
+            return False
+
+    def _abort(self, message: str):
+        """Never leave a blank sheet on screen — say why and get out.
+
+        Can fire before the camera thread exists (transparency is checked first),
+        hence the getattr rather than assuming the attribute is there."""
+        reader = getattr(self, "reader", None)
+        if reader is not None:
+            try:
+                reader.stop()
+            except Exception:
+                pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                0, message, "G.I.L. Spatial Control", 0x40)
+        except Exception:
+            print(message)
+        sys.exit(1)
 
     # ── window helpers ────────────────────────────────────────────────────────
     def window_at(self, x, y):
@@ -257,6 +323,14 @@ class SpatialHUD:
 
     # ── main loop ─────────────────────────────────────────────────────────────
     def loop(self):
+        # Global escape hatch, checked every frame before anything else. Esc must
+        # work even though this window can't hold focus, and even if tracking or
+        # drawing is broken — there has to be a way out that doesn't depend on
+        # the rest of the program behaving.
+        if win32api.GetAsyncKeyState(win32con.VK_ESCAPE) & 0x8000:
+            self.quit()
+            return
+
         self.tick += 1
         s = self.reader.state
         if s.get("err"):
