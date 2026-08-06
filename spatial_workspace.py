@@ -210,6 +210,7 @@ class Workspace:
         self.arm = None              # what a sustained pinch is about to open
         self.arm_t = 0.0             # 0..1 progress toward opening it
         self.awaiting = None         # (name, deadline) for a launching app
+        self.focused = None          # panel Enter would drop into
 
         # Hands are the point, but the mouse must work too: hand tracking can
         # fail (camera busy, bad light) and being stuck in a fullscreen mode you
@@ -238,6 +239,12 @@ class Workspace:
         self.cv.bind("<Motion>", self._mouse_move)
         self.cv.bind("<Button-1>", self._mouse_down)
         self.cv.bind("<ButtonRelease-1>", self._mouse_up)
+        # Leaving is a KEYBOARD decision, exclusively. Enter drops into whatever
+        # is focused; Escape is kept as an unconditional way out, because this
+        # is a fullscreen topmost window and a mode you cannot escape from is
+        # the one failure that is genuinely unrecoverable for the user.
+        self.root.bind_all("<Return>", lambda e: self.enter_focused())
+        self.root.bind_all("<KP_Enter>", lambda e: self.enter_focused())
         self.root.bind_all("<Escape>", lambda e: self.quit())
         self.root.bind_all("<Tab>", lambda e: self._toggle_shelf())
         self.root.focus_force()
@@ -584,9 +591,38 @@ class Workspace:
         return None
 
     def select(self, p: Panel):
-        """Drop into a window: focus it and leave the workspace."""
+        """Focus a window IN the space. Never leaves the workspace.
+
+        This used to drop straight out to the real window, which meant every
+        spatial interaction with a panel tore down the whole session — a
+        mis-aimed pinch ended the workspace, and there was no way to simply
+        bring a window forward and keep working.
+
+        Leaving is now a keyboard decision and only a keyboard decision. A
+        spatial action can focus, carry, scale or launch; nothing a hand does
+        can close the space.
+        """
+        if self.closing or p is None:
+            return
+        if self.focused is p:
+            return
+        self.focused = p
+        # front of the draw order, so a focused panel is never occluded
+        if p in self.panels:
+            self.panels.remove(p)
+            self.panels.append(p)
+        self.say(f"{p.mirror.title[:34]} — Enter to open it", 2.4)
+
+    def enter_focused(self):
+        """Enter: leave the space, landing in the focused window if there is one.
+
+        This is the ONLY path from a workspace interaction to the real desktop,
+        and it is reached exclusively from the keyboard."""
         if self.closing:
             return
+        p = self.focused
+        if p is None or p not in self.panels:
+            return self.quit()
         self.closing = True
         self.say(f"Opening {p.mirror.title[:36]}")
         p.ts = 1.22
@@ -679,8 +715,13 @@ class Workspace:
                       fill="#C98C9B", font=("Segoe UI", 10))
 
     def _frame(self):
+        # Polled as well as bound. This window is overrideredirect and topmost,
+        # and a tk binding that silently never fires would leave the user with
+        # no way out of a fullscreen mode — which has happened here before.
         if win32api.GetAsyncKeyState(win32con.VK_ESCAPE) & 0x8000:
             return self.quit()
+        if win32api.GetAsyncKeyState(win32con.VK_RETURN) & 0x8000:
+            return self.enter_focused()
 
         now = time.time()
         dt = min(0.05, now - self.last)
@@ -695,6 +736,9 @@ class Workspace:
         for p in gone:
             p.mirror.close()
             self.panels.remove(p)
+            if self.focused is p:
+                # Enter must not try to drop into a window that has closed
+                self.focused = None
         changed = bool(gone)
 
         # ...and adopt ones that appeared. Twice a second is often enough to
@@ -1077,9 +1121,17 @@ class Workspace:
         # the live window itself
         p.mirror.place(l, t, r, b, opacity=255, visible=True)
 
-        # frame + corner ticks
-        c.create_rectangle(l - 1, t - 1, r + 1, b + 1,
-                           outline=accent, width=2 if (is_hover or grabbed) else 1)
+        # frame + corner ticks. The focused panel — the one Enter would open —
+        # is marked distinctly from the one merely under your hand, or "Enter to
+        # open it" names a target the user cannot identify.
+        focused = self.focused is p
+        c.create_rectangle(l - 1, t - 1, r + 1, b + 1, outline=accent,
+                           width=2 if (is_hover or grabbed or focused) else 1)
+        if focused and not grabbed:
+            c.create_rectangle(l - 6, t - 6, r + 6, b + 6,
+                               outline="#EAF8FF", width=2)
+            c.create_text((l + r) / 2, t - 18, text="⏎  ENTER TO OPEN",
+                          fill="#EAF8FF", font=("Segoe UI", 9, "bold"))
         if is_hover or grabbed:
             n = 22
             for cx, cy, dx, dy in ((l, t, 1, 1), (r, t, -1, 1),
@@ -1134,7 +1186,8 @@ class Workspace:
         bits = [f"{n} window{'s' if n != 1 else ''}"]
         if self.items:
             bits.append(f"{len(self.items)} on your desktop")
-        bits += ["fist to carry", "pinch to open", "Esc to leave"]
+        bits += ["fist to carry", "pinch to focus",
+                 "Enter to open it", "Esc to leave"]
         c.create_text(38, 56, anchor="w", text=" · ".join(bits),
                       fill=MUTED, font=("Segoe UI", 10))
 
