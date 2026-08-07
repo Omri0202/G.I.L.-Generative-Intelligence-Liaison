@@ -383,10 +383,34 @@ class WebChat:
     def _rpc_models(self):
         try:
             import gil_brain
-            return {"current": gil_brain.current_model(),
-                    "options": gil_brain.MODELS}
+            out = {"current": gil_brain.current_model(),
+                   "options": gil_brain.MODELS, "auto": False, "lanes": []}
+            try:
+                import model_router
+                out["auto"] = model_router.auto_enabled()
+                out["lanes"] = [
+                    {"lane": k, "label": v["label"], "model": v["model"],
+                     "hue": v["hue"], "why": v["why"]}
+                    for k, v in model_router.LANES.items()]
+            except Exception:
+                pass
+            return out
         except Exception:
-            return {"current": "", "options": []}
+            return {"current": "", "options": [], "auto": False, "lanes": []}
+
+    def _rpc_set_auto(self, on=False):
+        """Auto mode: let GIL pick the brain per message."""
+        try:
+            import model_router
+            model_router.set_auto(bool(on))
+            self.add_message(
+                ("**Auto** is on — I'll pick the brain that fits each message, "
+                 "and tell you when it changes.") if on else
+                ("**Auto** is off — I'll use whichever model you've picked, "
+                 "every time."), "gil")
+            return {"ok": True, "auto": model_router.auto_enabled()}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def _rpc_set_model(self, model_id=""):
         try:
@@ -1274,6 +1298,10 @@ class WebChat:
 
     # live token-budget gauge — context fullness per step (Feature #2)
     def token_usage(self, info: dict) -> None: self._push("gil.tokenUsage", info)
+
+    # Auto mode changed lane — the badge above the reply
+    def route_badge(self, route: dict) -> None:
+        self._push("gil.routeBadge", route)
 
     # real API quota rings — how much of the minute/day allowance is spent
     def token_meter(self, rows: list, warning: str = "") -> None:

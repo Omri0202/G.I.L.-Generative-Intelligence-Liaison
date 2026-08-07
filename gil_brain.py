@@ -184,11 +184,31 @@ _MISSION_HINTS = (
 )
 
 
-def _pick_model(user_input: str, sub_prompt: str) -> str:
+#: set by _pick_model when Auto routes a message, read by the caller so the UI
+#: can say what happened. Not a return value, because _pick_model's contract is
+#: "a model id" and every caller depends on that.
+LAST_ROUTE: dict | None = None
+
+
+def _pick_model(user_input: str, sub_prompt: str, has_image: bool = False) -> str:
+    """Which brain answers this message.
+
+    With Auto on, model_router decides per message. With it off, the user's
+    pick is obeyed exactly — predictability IS the feature when it is off — and
+    the older heuristic below promotes obviously-complex work to the big model.
     """
-    Smart model routing: long, multi-step, or specialist (code/research/creative)
-    queries go to the 70B model; short commands stay on the fast default.
-    """
+    global LAST_ROUTE
+    LAST_ROUTE = None
+    try:
+        import model_router
+        if model_router.auto_enabled():
+            d = model_router.route(user_input, has_image=has_image)
+            model_router.log_route(user_input, d)
+            LAST_ROUTE = d
+            return d["model"]
+    except Exception:
+        log.debug("auto routing unavailable", exc_info=True)
+
     lower = f" {user_input.lower()} "
     complex_query = (
         len(user_input.split()) > 14
@@ -857,6 +877,9 @@ class GILBrain:
         chosen_model = _pick_model(user_input, _sub)
         if chosen_model != GROQ_MODEL:
             log.info("smart routing -> %s", chosen_model)
+        # LAST_ROUTE is left for the caller to read and surface. The brain has
+        # no window handle, and giving it one to draw a badge would be the
+        # wrong seam entirely.
 
         # Any single stored history turn that ballooned (a huge pasted error,
         # research dump, etc.) is truncated so it can't inflate the request.

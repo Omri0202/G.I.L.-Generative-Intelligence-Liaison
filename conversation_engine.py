@@ -498,6 +498,18 @@ class ConversationEngine:
                                          mode=getattr(self, "_input_mode", "voice"))
             if _aid_think is not None:
                 _activity.done(_aid_think)
+            # Auto mode: say which brain answered, but ONLY when it changed.
+            # Announcing every message would make it a nag by day two — the
+            # change is the informative event, the steady state is not.
+            try:
+                import gil_brain as _gb
+                _r = getattr(_gb, "LAST_ROUTE", None)
+                if _r and _r.get("model") != getattr(self, "_lane_model", None):
+                    self._lane_model = _r["model"]
+                    if hasattr(window, "route_badge"):
+                        window.route_badge(_r)
+            except Exception:
+                log.debug("route badge skipped", exc_info=True)
         except Exception as exc:
             log.error("Brain error", exc_info=True)
             if _aid_think is not None:
