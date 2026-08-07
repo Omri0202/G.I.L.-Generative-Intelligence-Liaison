@@ -61,12 +61,30 @@ working step by step with tools. Each turn, return ONE JSON object only:
 TOOLS:
 read_file  {"path": "...", "start": 1, "lines": 120}   read part of a file
 list_dir   {"path": "..."}                              list a folder (find real filenames)
-search     {"pattern": "...", "dir": "..."}             find TEXT INSIDE files (recursive, regex)
+search     {"pattern": "...", "dir": "..."}             find TEXT INSIDE files (recursive, regex,
+                                                        CASE-INSENSITIVE; add "case": true to force)
 run        {"command": "..."}                           PowerShell command
 edit_file  {"path": "...", "old": "...", "new": "..."}  replace EXACT text (must match once)
 write_file {"path": "...", "content": "..."}            create or overwrite a file
 plan_next  {}                                           check off the current plan step, advance to the next
 done       {"summary": "...", "success": true/false}    finish the task
+
+━━ FINDING SOMETHING THE USER NAMED ━━
+When the task quotes text they saw on screen ("remove the words 'X Y Z'"):
+• Search a SHORT DISTINCTIVE FRAGMENT, not the whole quoted phrase — one or two
+  unusual words. Users retype what they read; the source rarely matches it word
+  for word. Searching the full phrase is the commonest way to find nothing.
+• A search HIT IS THE ANSWER. `path:line: text` tells you the file AND the line.
+  Go straight to read_file on a window around that line, then edit_file. Do NOT
+  search again for something you have already located.
+• If a hit exists but the text is cased differently than the user typed it, that
+  IS the match. Edit what the FILE says, never what the request said.
+• Never say you could not find something while you are holding its path and
+  line number. If you located it, act on it or report exactly where it is.
+• Check whether the same text appears MORE THAN ONCE (a shipped copy of the web
+  UI, a duplicate asset). Fixing one of two copies is not finishing the task.
+• Never claim an edit was "rejected" unless approval was actually refused. If a
+  tool returned an error, quote the error.
 
 WORK PLAN: you are given a numbered plan and told which step is your CURRENT
 FOCUS. Do that step only. When it is genuinely satisfied, emit {"tool":"plan_next"}
@@ -632,7 +650,11 @@ _SEARCH_SKIP_DIRS = ("__pycache__", ".git", ".github", "node_modules", "dist",
                      # hold thousands of files and no source: searching the project
                      # root spent 51s and 17s inside them on a single /goal run.
                      "whatsapp_profile", "generated_images", "3d_projects",
-                     "face_db", "learning_projects", "screenshots", "site-packages")
+                     "face_db", "learning_projects", "screenshots", "site-packages",
+                     # Edge profile for the face/hand scan window. It was NOT
+                     # listed, so a failed search offered "Login Data" and
+                     # "CrashpadMetrics-active.pma" as helpful suggestions.
+                     "_scan_profile")
 _SEARCH_SKIP_EXT = (".exe", ".dll", ".pyd", ".zip", ".jpg", ".jpeg", ".png",
                     ".gif", ".db", ".ico", ".pyc", ".spec", ".bin", ".pdf",
                     ".log")   # logs are pure noise for a code search
@@ -784,6 +806,21 @@ def _t_read_file(args: dict) -> str:
 
 def _t_list_dir(args: dict) -> str:
     p = Path(args.get("path", "."))
+    # Pointing list_dir at a real file is a slip, not a mistake worth a wasted
+    # step: answer the question it was obviously asking. It used to return a
+    # bare "is not a folder" error, which burned a turn and taught nothing.
+    if p.is_file():
+        try:
+            size = p.stat().st_size
+            with p.open("r", encoding="utf-8", errors="ignore") as fh:
+                head = [next(fh, "") for _ in range(12)]
+            lines = sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
+            return (f"{p} is a FILE, not a folder ({lines} lines, "
+                    f"{size:,} bytes). Use read_file to open it, or search "
+                    f"with dir={p.parent} to find text in it. First lines:\n"
+                    + "".join(head).rstrip()[:900])
+        except Exception:
+            return (f"{p} is a FILE, not a folder — use read_file to open it.")
     if not p.is_dir():
         return f"ERROR: {p} is not a folder.{_did_you_mean(p)}"
     items = []
@@ -840,7 +877,8 @@ def _rg_path() -> str:
     return shutil.which("rg") or ""
 
 
-def _rg_search(pattern: str, root: Path, display: int, scan_cap: int):
+def _rg_search(pattern: str, root: Path, display: int, scan_cap: int,
+               case: bool = False):
     """Search with ripgrep. Returns (hits, total, filtered), or None if it
     can't run and the caller should fall back.
 
@@ -854,7 +892,10 @@ def _rg_search(pattern: str, root: Path, display: int, scan_cap: int):
     if not rg:
         return None
     cmd = [rg, "--no-heading", "--line-number", "--color", "never",
-           "--no-messages", "--max-columns", "220", "-e", pattern]
+           "--no-messages", "--max-columns", "220"]
+    if not case:
+        cmd.append("-i")
+    cmd += ["-e", pattern]
     for d in _SEARCH_SKIP_DIRS:
         cmd += ["--glob", f"!{d}/**"]
     for e in _SEARCH_SKIP_EXT:
@@ -895,7 +936,20 @@ def _t_search(args: dict) -> str:
     if not root.is_dir():
         return f"ERROR: {root} is not a folder.{_did_you_mean(root)}"
 
-    fast = _rg_search(pattern, root, 40, 600)
+    # CASE-INSENSITIVE unless the caller explicitly asks otherwise.
+    #
+    # This one default cost a fourteen-step failure. Asked to remove a piece of
+    # UI text, the agent searched for it exactly as the user had typed it; the
+    # source spells it with different capitals; the search reported no matches.
+    # Everything after that — reading an unrelated module, re-running the same
+    # query three times, and finally reporting the text could not be found
+    # while holding its file and line number — followed from two capitals.
+    #
+    # Users describe UI text the way they read it, not the way it is cased in
+    # source. Matching that is the job.
+    case = bool(args.get("case", False))
+
+    fast = _rg_search(pattern, root, 40, 600, case)
     if fast is not None and fast[0]:
         hits, total, filtered = fast
         more = (f"\n[{total}+ matches — showing first {len(hits)}; narrow the "
@@ -911,10 +965,11 @@ def _t_search(args: dict) -> str:
 
     # Whole-file (multi-line) regex so patterns that span lines actually match —
     # the old line-by-line scan silently failed on those.
+    flags = re.MULTILINE | (0 if case else re.IGNORECASE)
     try:
-        rx = re.compile(pattern, re.MULTILINE)
+        rx = re.compile(pattern, flags)
     except re.error:
-        rx = re.compile(re.escape(pattern), re.MULTILINE)
+        rx = re.compile(re.escape(pattern), flags)
 
     hits, total, filtered, DISPLAY, SCAN_CAP = [], 0, 0, 40, 600
     files = list(_iter_source_files(root))
@@ -952,6 +1007,19 @@ def _t_search(args: dict) -> str:
     # No text matched — maybe they meant a FILE by that name (a common mixup).
     # Reuses the list already walked above; re-walking the tree here is why a
     # miss cost four times what a hit did.
+    #
+    # Only for something that could BE a filename. A search for a multi-word
+    # UI string once produced fuzzy suggestions of proactive.py (it happens to
+    # contain "activ") and a browser profile's "Login Data" file — and the
+    # agent dutifully went and read proactive.py. A phrase is never a filename,
+    # so guessing one is worse than saying nothing.
+    if " " in pattern.strip() or len(pattern) > 40:
+        how = "case-sensitively" if case else "case-insensitively"
+        return (f"No matches for {pattern!r} (searched {how}).\n"
+                "That is text, not a filename — do NOT go looking for a file "
+                "called that. Try a shorter distinctive fragment of it, or "
+                + ("drop \"case\" to match any capitalisation." if case else
+                   "narrow `dir` to the part of the app it belongs to."))
     import difflib
     names = {f.name: str(f) for f in files}
     core = re.sub(r"[^\w.]", "", pattern)
@@ -2784,6 +2852,27 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                      "search": "Searching", "run": "Running",
                      "edit_file": "Editing", "write_file": "Writing"}.get(tool, why)
             _label = f"[{step}] {_verb} {_tgt}".strip() if _tgt else f"[{step}] {why}"
+            # A read-only tool called with the exact same arguments returns the
+            # exact same thing, so re-running it cannot teach the agent
+            # anything — it is a stuck loop wearing the costume of progress.
+            # In one run the same failing search went out three times and the
+            # project root was listed twice, which is six of fourteen steps
+            # spent learning nothing. Serve the answer back with a nudge.
+            _sig = (tool, json.dumps(args, sort_keys=True, default=str)[:400])
+            _seen = getattr(eng, "_agent_tool_seen", None)
+            if _seen is None:
+                _seen = eng._agent_tool_seen = {}
+            if tool in _READ_TOOLS and _sig in _seen:
+                activity.start(_kind, f"[{step}] (repeat) {_verb} {_tgt}"[:100])
+                result = (
+                    "You already ran this EXACT call earlier and it returned "
+                    "what follows. Repeating it cannot tell you anything new — "
+                    "change something: widen or shorten the pattern, search a "
+                    "different `dir`, or read the file you already located.\n\n"
+                    + _seen[_sig])
+                messages.append({"role": "user", "content": result[:4000]})
+                continue
+
             aid = activity.start(_kind, _label[:100])
             try:
                 if tool == "read_file":
@@ -2816,6 +2905,8 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
 
             ok = not result.startswith("ERROR")
             (activity.done if ok else activity.fail)(aid, result[:110])
+            if tool in _READ_TOOLS:
+                _seen[_sig] = result[:3000]
 
             # Rich Claude-Code-style tool block for the /codemode terminal:
             # header + output/diff + language, so the UI can colour it.
