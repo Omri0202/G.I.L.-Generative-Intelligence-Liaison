@@ -586,6 +586,14 @@ class WebChat:
         is_image = path.suffix.lower() in self._IMG_EXT
         if is_image:
             self.add_image_message(str(path))       # thumbnail preview in chat
+            # Tell the `look` action this exists. Without it, a follow-up like
+            # "what do you see?" reaches for the webcam and describes the user
+            # instead of the picture they just attached.
+            try:
+                import actions
+                actions.note_attached_image(str(path))
+            except Exception:
+                pass
         else:
             self.add_message(f"📎 attached **{safe}**", "user")
         threading.Thread(target=self._attach_pipeline,

@@ -1226,7 +1226,59 @@ def _add_event(target: str) -> str:
         return f"Add event error: {exc}"
 
 
+#: How recently an attachment counts as "the thing we are talking about".
+#: Long enough to cover reading a reply and typing a follow-up, short enough
+#: that yesterday's screenshot never hijacks a genuine camera request.
+RECENT_IMAGE_SECS = 180.0
+_recent_image: tuple = ()          # (path, unix time)
+
+
+def note_attached_image(path: str) -> None:
+    """Remember an image the user just attached, so `look` uses it."""
+    global _recent_image
+    _recent_image = (str(path), time.time())
+
+
+def _recent_attachment():
+    if not _recent_image:
+        return None
+    path, when = _recent_image
+    if time.time() - when > RECENT_IMAGE_SECS:
+        return None
+    return path if os.path.exists(path) else None
+
+
 def _look(question: str = "") -> str:
+    """Look at whatever the user actually means.
+
+    "What do you see" maps to this, and it used to mean the WEBCAM,
+    unconditionally — so attaching a photo and asking about it switched the
+    camera on and described the user instead of their picture. If something was
+    attached moments ago that is plainly the subject; the camera is what you
+    look through when there is nothing else to look at.
+    """
+    recent = _recent_attachment()
+    if recent:
+        try:
+            import base64
+            import io as _io
+
+            import vision_model
+            from PIL import Image
+            img = vision_model.fit_for_send(Image.open(recent))
+            buf = _io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=82)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            q = question.strip() or ("Describe this image. If it shows an "
+                                     "error, code, a document or handwriting, "
+                                     "quote the important text exactly.")
+            ok, reading, err = vision_model.chat(
+                vision_model.image_message(q, b64), max_tokens=1400, timeout=45)
+            if ok:
+                return reading
+        except Exception:
+            pass
+        # fall through to the camera rather than failing outright
     try:
         from eyes import look
         return look(question=question)
