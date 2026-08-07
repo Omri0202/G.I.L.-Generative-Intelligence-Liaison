@@ -69,12 +69,24 @@ def _hash_password(password: str) -> str:
 
 
 def register_user(username: str, password: str) -> bool:
-    """Register a new user. Returns False if username already exists."""
+    """Register a new user. False if the name is taken, in ANY capitalisation.
+
+    The UNIQUE constraint on the column is case-sensitive, so "omri" happily
+    registered alongside an existing "Omri" — two accounts, two passwords, one
+    person, and no way to tell which one a login attempt was hitting."""
+    name = (username or "").strip()
+    if not name:
+        return False
     try:
         with _get_connection() as conn:
+            taken = conn.execute(
+                "SELECT 1 FROM users WHERE lower(username) = lower(?)", (name,)
+            ).fetchone()
+            if taken:
+                return False
             conn.execute(
                 "INSERT INTO users (username, password) VALUES (?, ?)",
-                (username.strip(), _hash_password(password))
+                (name, _hash_password(password))
             )
             conn.commit()
         return True
@@ -82,37 +94,60 @@ def register_user(username: str, password: str) -> bool:
         return False
 
 
-def verify_credentials(username: str, password: str) -> bool:
-    """Return True if the username/password pair is valid. Migrates SHA-256 hashes to bcrypt on first login."""
-    with _get_connection() as conn:
-        row = conn.execute(
-            "SELECT password FROM users WHERE username = ?",
-            (username.strip(),)
-        ).fetchone()
-    if row is None:
-        return False
-
-    stored = row[0]
-
+def _check_one(stored_name: str, stored_hash: str, password: str) -> bool:
+    """Verify against one stored row, upgrading a legacy hash on success."""
     # Bcrypt hashes start with $2b$ or $2a$
-    if stored.startswith("$2"):
+    if stored_hash.startswith("$2"):
         try:
-            return bcrypt.checkpw(password.encode(), stored.encode())
+            return bcrypt.checkpw(password.encode(), stored_hash.encode())
         except Exception:
             return False
 
     # Legacy SHA-256 hash — verify then silently upgrade to bcrypt
-    if stored == hashlib.sha256(password.encode()).hexdigest():
-        new_hash = _hash_password(password)
+    if stored_hash == hashlib.sha256(password.encode()).hexdigest():
         with _get_connection() as conn:
-            conn.execute(
-                "UPDATE users SET password = ? WHERE username = ?",
-                (new_hash, username.strip())
-            )
+            conn.execute("UPDATE users SET password = ? WHERE username = ?",
+                         (_hash_password(password), stored_name))
             conn.commit()
         return True
-
     return False
+
+
+def authenticate(username: str, password: str) -> str | None:
+    """Return the STORED spelling of the user on success, else None.
+
+    Matching the username is CASE-INSENSITIVE. It used to be an exact `=`,
+    which is case-sensitive in SQLite, so typing your own name in lower case
+    reached a different account — or none. On this machine that meant "Omri"
+    signed in and "omri" did not, because a stale second account existed under
+    the lower-case spelling with an older password. The password looked broken
+    when the account was simply the wrong one.
+
+    Nobody types their name the same way twice, and a login is the worst place
+    to be strict about it.
+    """
+    name = (username or "").strip()
+    if not name or not password:
+        return None
+    with _get_connection() as conn:
+        rows = conn.execute(
+            "SELECT username, password FROM users "
+            "WHERE lower(username) = lower(?)", (name,)
+        ).fetchall()
+    # Duplicates that differ only by case can exist from before this fix. Try
+    # the modern hash first, but try them all: refusing to check the older row
+    # would lock out anyone whose password lives on it.
+    rows.sort(key=lambda r: (not str(r[1]).startswith("$2"),
+                             str(r[0]) != name))
+    for stored_name, stored_hash in rows:
+        if _check_one(stored_name, str(stored_hash), password):
+            return stored_name
+    return None
+
+
+def verify_credentials(username: str, password: str) -> bool:
+    """True if the username/password pair is valid (username case-insensitive)."""
+    return authenticate(username, password) is not None
 
 
 # ── Login GUI ─────────────────────────────────────────────────────────────────
@@ -231,8 +266,12 @@ class LoginWindow(ctk.CTk):
             return
 
         if self._mode == "login":
-            if verify_credentials(username, password):
-                self.authenticated_user = username
+            # Sign in under the STORED spelling, not what was typed: sessions,
+            # face enrolment and chat history are all keyed on this name, and
+            # "omri" and "Omri" must not become two different people.
+            who = authenticate(username, password)
+            if who:
+                self.authenticated_user = who
                 self.destroy()
             else:
                 self._set_status("Authentication failed. Invalid credentials.")
