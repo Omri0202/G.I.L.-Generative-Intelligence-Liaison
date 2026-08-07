@@ -99,6 +99,22 @@ _TRACE = re.compile(r"Traceback \(most recent|^\s+at [\w.$]+\(|"
                     r"^\w+Error:|^\w+Exception:", re.M)
 _THINK_HARD = re.compile(r"\b(think (hard|carefully|step by step)|"
                          r"take your time|be thorough|reason through)\b", re.I)
+
+#: Asking for code to be WRITTEN, as opposed to debugged. This was the gap that
+#: sent "write me code" to the small fast model and "write a python function"
+#: to the long-form one — because the corpus had plenty of debugging examples
+#: and almost none of these, while "write" is a strong long-form signal.
+_CODE_REQ = re.compile(r"""
+    \b(write|make|build|create|generate|give\s+me|need|want|do|help\s+me\s+with|
+       help\s+with|show\s+me)\b [^.?!]{0,40}?
+      \b(code|script|function|program|app|class|method|query|regex|
+         algorithm|component|endpoint|module|test|tests|snippet)\b
+  | \b(code|script|program)\s+(this|that|it|something|me)\b
+  | \b(in|using|with)\s+(python|javascript|typescript|java|c\+\+|rust|go|sql|
+      bash|powershell|html|css|react)\b
+  | \b(fix|debug|refactor|optimi[sz]e|rewrite)\b [^.?!]{0,30}?
+      \b(code|script|function|bug|error|class|query)\b
+""", re.I | re.X)
 #: Must express INTENT to look something up, never just contain a word that
 #: also means something else. A bare "search" sent "why does my binary search
 #: overflow" to the web-search model — in the tier whose whole job is to be
@@ -131,6 +147,8 @@ def tier0(prompt: str, has_image: bool = False) -> tuple[str | None, str]:
         return Lane.REASON, "the message contains code"
     if _THINK_HARD.search(t):
         return Lane.REASON, "you asked for careful reasoning"
+    if _CODE_REQ.search(t):
+        return Lane.REASON, "this is a coding job"
     if len(t.split()) > _LONG_WORDS:
         return Lane.LONGFORM, "the message is document-length"
     if _LOOKUP.search(t):
@@ -279,6 +297,19 @@ TRAIN: list[tuple[str, str]] = [
     ("how much memory does this actually use", Lane.REASON),
     ("work out the probability of three heads in five flips", Lane.REASON),
     ("is this o n log n or o n squared", Lane.REASON),
+    # asking for code to be WRITTEN, not debugged — the gap that sent
+    # "write me code" to the small model and "write a python function" to
+    # the long-form one
+    ("write me a function that reverses a string", Lane.REASON),
+    ("build me a script to rename these files", Lane.REASON),
+    ("can you code something that reads a csv", Lane.REASON),
+    ("make a class for handling users", Lane.REASON),
+    ("generate a sql query for monthly totals", Lane.REASON),
+    ("i need a python script for this", Lane.REASON),
+    ("give me the code for a rest endpoint", Lane.REASON),
+    ("do code", Lane.REASON),
+    ("help me with code", Lane.REASON),
+    ("write unit tests for this module", Lane.REASON),
 
     # ── longform: writing, summarising, style ──
     ("write me a short story about a lighthouse", Lane.LONGFORM),
