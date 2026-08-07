@@ -87,13 +87,28 @@ def main() -> None:
         # session here would sign them straight in and make that button a
         # no-op, which is exactly how it behaved.
         username = run_login(force=scanner_ran)
-        if username:
+        # Enrol a face ONLY after a real sign-in, and only for someone who has
+        # none. This used to run on every start, and with a saved session that
+        # was the whole visible login experience: the login scanner above is
+        # skipped, run_login returns instantly without asking anything, and
+        # then the ENROLMENT scanner opened — a fullscreen face window that
+        # looks exactly like the login one but is not. Pressing "Use password
+        # instead" on it cancelled enrolment and let GIL carry on, because the
+        # user had already been signed in three steps earlier. The button was
+        # working; it was on the wrong window.
+        if username and scanner_ran:
             try:
-                from face_login import enroll_user
-                if enroll_user(username):
-                    log.info("enrolled a new face for %s", username)
+                from face_id import FaceID
+                already = FaceID().has_enrolled()
             except Exception:
-                log.debug("face enrolment skipped", exc_info=True)
+                already = True          # never re-enrol on a broken check
+            if not already:
+                try:
+                    from face_login import enroll_user
+                    if enroll_user(username):
+                        log.info("enrolled a new face for %s", username)
+                except Exception:
+                    log.debug("face enrolment skipped", exc_info=True)
     if not username:
         log.warning("authentication aborted — exiting")
         sys.exit(0)

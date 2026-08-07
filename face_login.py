@@ -189,7 +189,10 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
     threading.Thread(target=httpd.serve_forever, daemon=True,
                      name="GIL-FaceLogin").start()
 
-    proc = _open_fullscreen(f"http://127.0.0.1:{port}/scan")
+    # Tell the page which job it is doing. Enrolment and login look identical
+    # otherwise, and an enrolment window offering "Use password instead" reads
+    # as a login prompt that ignores you — which is exactly how it was read.
+    proc = _open_fullscreen(f"http://127.0.0.1:{port}/scan?mode={mode}")
 
     name = None
     try:

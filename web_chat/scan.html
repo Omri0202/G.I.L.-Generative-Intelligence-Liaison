@@ -546,6 +546,16 @@ async function confirmIdentity(name) {
    recognised signed you in regardless. Asking for the password is an explicit
    decision by the person at the keyboard, and it has to beat a recognition
    already in flight. */
+/* Enrolling is not signing in — the user is already authenticated by the time
+   this runs. Offering "Use password instead" there implied the opposite, and
+   pressing it looked like a login prompt being ignored. */
+const SCAN_MODE = new URLSearchParams(location.search).get("mode") || "identify";
+if (SCAN_MODE === "enroll") {
+  const b = document.getElementById("skip");
+  if (b) b.textContent = "Skip for now";
+  document.title = "G.I.L. — remember my face";
+}
+
 let cancelling = false;
 async function usePassword() {
   if (cancelling) return;          // guard a double-click, nothing else
