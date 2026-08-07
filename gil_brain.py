@@ -352,10 +352,20 @@ No action needed: {{"speech": "...", "actions": [], "report": null}}
 ━━ REPORT FIELD — written, NEVER spoken ━━
 "report" is rendered in the chat window only; "speech" is what is read aloud.
 
-USE "report" FOR ANY ANSWER WORTH READING, not only for finished tasks. If the
-honest answer needs more than about three sentences — an explanation, a
-comparison, research, instructions, a recommendation, code, anything with parts
-— it belongs in "report", formatted. Then "speech" is ONE short spoken line that
+USE "report" FOR ANY ANSWER WORTH READING, not only for finished tasks.
+
+ANY QUESTION ABOUT A SUBJECT GETS A REPORT. "info about X", "what is X",
+"tell me about X", "explain X", "how does X work", "X vs Y" — all of them,
+every time, regardless of how short you think the answer could be. Someone
+asking about a topic wants to LEARN something. Answering "info about
+mitochondria" with "Mitochondria are the powerhouses of cells" is a failure:
+it is a slogan, it teaches nothing, and it is the one sentence they already
+knew. Give them the organelle, the ATP, the double membrane, the reason it has
+its own DNA.
+
+Do not decide by predicted length — you will always guess short. Decide by what
+was asked: a subject, a comparison, instructions, a recommendation, an
+explanation, research or code all take a report, formatted. Then "speech" is ONE short spoken line that
 STATES THE FINDING, never announces that an answer exists. "Here's the
 comparison", "I've written it up", "Let me explain" are all worthless — the
 report is already on screen, they say nothing. Say the conclusion instead:
@@ -393,6 +403,11 @@ peer in a hurry:
   render as huge banner text in this chat and wreck the page. Bold only.
 • BE CONCRETE: real numbers, real names, real before -> after. Cut every
   sentence that survives being deleted.
+• LENGTH: aim for 120-220 words unless more was asked for. This is a hard
+  budget, not a style note — a reply that runs past the token ceiling is CUT
+  OFF MID-SENTENCE and the end of your report is lost. Density beats length:
+  four sharp paragraphs teach more than twelve padded ones, and they arrive
+  whole. Finish the JSON object; never trail off.
 
 FOR FINISHED WORK — a task, a project analysis, a bug report — the same rules,
 in the shape of a staff engineer updating a peer:
@@ -1001,6 +1016,16 @@ class GILBrain:
                 resp.raise_for_status()
                 resp_json = resp.json()
                 raw = resp_json["choices"][0]["message"]["content"].strip()
+                # Truncation is why every long answer was arriving through the
+                # "partial parse" salvage path: the reply is cut mid-sentence,
+                # so the JSON string never closes and the parse fails. That was
+                # invisible — the salvage recovered enough to look fine while
+                # silently dropping the end of the report. Say so, loudly.
+                if resp_json["choices"][0].get("finish_reason") == "length":
+                    log.warning("reply hit the %s-token ceiling and was cut off "
+                                "(prompt %s tokens) — the report is incomplete",
+                                payload.get("max_tokens"),
+                                resp_json.get("usage", {}).get("prompt_tokens"))
                 # Track token usage for the context indicator
                 usage = resp_json.get("usage", {})
                 self.last_tokens_used   = usage.get("total_tokens", 0)
@@ -1291,6 +1316,41 @@ class GILBrain:
             return fallback
 
 
+def _repair_json(s: str) -> str:
+    """Escape raw control characters that appear INSIDE string literals.
+
+    A model writing a multi-paragraph markdown report puts real newlines in the
+    string rather than \\n, which is invalid JSON — so a perfectly good,
+    complete answer fell through to the salvage path on nearly every long
+    reply. Salvage recovered enough to look fine, which is exactly why nobody
+    noticed. This walks the text once, tracking whether it is inside a string,
+    and escapes the offenders in place; everything outside a string is left
+    untouched so real structure is preserved."""
+    out = []
+    in_str = False
+    esc = False
+    for ch in s:
+        if esc:
+            out.append(ch)
+            esc = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            out.append(ch)
+            continue
+        if in_str and ch in "\n\r\t":
+            out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[ch])
+            continue
+        if in_str and ord(ch) < 0x20:
+            continue                    # any other control char: drop it
+        out.append(ch)
+    return "".join(out)
+
+
 def _parse_json(raw: str) -> dict:
     cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
 
@@ -1299,6 +1359,12 @@ def _parse_json(raw: str) -> dict:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
         pass
+
+    if parsed is None:                  # the common, fixable failure
+        try:
+            parsed = json.loads(_repair_json(cleaned))
+        except json.JSONDecodeError:
+            pass
 
     if parsed is None:
         start = cleaned.find("{")

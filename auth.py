@@ -303,16 +303,21 @@ class LoginWindow(ctk.CTk):
         self.destroy()
 
 
-def run_login() -> str | None:
+def run_login(force: bool = False) -> str | None:
     """
     Return the authenticated username.
-    If a session is saved from a previous login, skip the GUI entirely.
-    Otherwise show the login window and save the session on success.
+    A saved session normally skips the GUI. `force` demands a real sign-in.
+
+    force=True is passed when the user pressed "Use password instead" on the
+    face scanner. Without it that button could never work: it cancels the scan,
+    control returns here, the saved session is found, and they are signed in
+    without ever being asked for anything — which is precisely the opposite of
+    what the button says it does.
     """
     initialize_database()
 
     saved = get_saved_session()
-    if saved:
+    if saved and not force:
         print(f"[G.I.L.] Session restored: {saved}")
         return saved
 

@@ -538,10 +538,21 @@ async function confirmIdentity(name) {
   }, 2400);
 }
 
-/* Skip biometrics and sign in the normal way. */
+/* Skip biometrics and sign in the normal way.
+
+   Deliberately NOT guarded by `finished`. confirmIdentity() sets that flag and
+   then spends 2.4 seconds showing its greeting — and for that whole window
+   this button did nothing at all, so pressing it while a face was being
+   recognised signed you in regardless. Asking for the password is an explicit
+   decision by the person at the keyboard, and it has to beat a recognition
+   already in flight. */
+let cancelling = false;
 async function usePassword() {
-  if (finished) return;
+  if (cancelling) return;          // guard a double-click, nothing else
+  cancelling = true;
   finished = true;
+  locked = true;
+  document.body.classList.remove("confirmed", "denied");
   setStatus("Switching", "opening the password sign-in");
   try { await api("scan_cancel"); } catch (e) {}
   closeScanner();

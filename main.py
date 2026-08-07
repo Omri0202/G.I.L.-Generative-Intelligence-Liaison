@@ -67,10 +67,12 @@ def main() -> None:
     # other outcome — no camera, nobody enrolled, an unfamiliar face, Esc — falls
     # through to the password window below, so this can never lock you out.
     username = None
+    scanner_ran = False
     try:
         from auth import get_saved_session
         if not get_saved_session():          # a saved session already skips login
             from face_login import scan_for_user
+            scanner_ran = True
             username = scan_for_user()
             if username:
                 from auth import save_session
@@ -80,9 +82,11 @@ def main() -> None:
         log.debug("biometric sign-in unavailable", exc_info=True)
 
     if not username:
-        # The camera didn't know them — fall back to the password window, then
-        # register their face so next time it does.
-        username = run_login()
+        # The camera didn't know them, or they pressed "Use password instead".
+        # Either way the next step must actually ASK: falling back to a saved
+        # session here would sign them straight in and make that button a
+        # no-op, which is exactly how it behaved.
+        username = run_login(force=scanner_ran)
         if username:
             try:
                 from face_login import enroll_user

@@ -157,12 +157,23 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
             elif method == "face_confirmed":
                 name = (args[0] if args else "") or ""
                 out = {"ok": True}
-                if name and not result.full():
+                # A confirmation that lands after the user asked for the
+                # password screen must not sign them in behind their back.
+                if name and not cancelled.is_set() and not result.full():
                     result.put(name)
             elif method == "scan_cancel":
-                # "Use password instead" (or Esc) — stop waiting immediately
+                # "Use password instead" (or Esc) — stop waiting immediately,
+                # and DISCARD anything recognition already queued. A face can
+                # be confirmed in the same instant the button is pressed, and
+                # the person pressing it has asked for the password route: an
+                # explicit choice outranks a match that merely arrived first.
                 out = {"ok": True}
                 cancelled.set()
+                try:
+                    while True:
+                        result.get_nowait()
+                except queue.Empty:
+                    pass
             elif method == "scan_done":
                 out = {"ok": True}
                 done.set()
@@ -205,6 +216,11 @@ def _run_scanner(mode: str = "identify", enroll_name: str = "",
             pass
         _close(proc)
 
+    # The cancel flag is authoritative at the end too, in case a match was
+    # already in hand when the button was pressed.
+    if cancelled.is_set():
+        log.info("biometric login cancelled — user asked for the password")
+        return None
     if name:
         log.info("biometric login: %s", name)
     else:
