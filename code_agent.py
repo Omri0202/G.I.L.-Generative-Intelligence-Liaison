@@ -85,6 +85,19 @@ When the task quotes text they saw on screen ("remove the words 'X Y Z'"):
   UI, a duplicate asset). Fixing one of two copies is not finishing the task.
 • Never claim an edit was "rejected" unless approval was actually refused. If a
   tool returned an error, quote the error.
+• NEVER hand the task back. "I recommend searching for X and editing the file"
+  is the job you were given, described instead of done. If you know the file
+  and the line, make the edit. If something genuinely blocks you, name the
+  blocker and what you already tried — never issue instructions to the user.
+
+━━ MAKING THE EDIT ━━
+• read_file prefixes each line with "1810: ". That prefix is DISPLAY ONLY —
+  it is not in the file. Never copy it into `old`.
+• `old` must be text copied verbatim from the file, long enough to occur once.
+  For removing words from a longer line, `old` is the whole line and `new` is
+  that same line with the words taken out — keep the rest byte for byte.
+• If edit_file reports the text was not found, it shows you what the file
+  really contains. Copy from THAT and try again; do not re-read and re-search.
 
 WORK PLAN: you are given a numbered plan and told which step is your CURRENT
 FOCUS. Do that step only. When it is genuinely satisfied, emit {"tool":"plan_next"}
@@ -850,6 +863,33 @@ def _is_search_tooling(line: str) -> bool:
 _SEARCH_MAX_BYTES = 2_000_000
 
 
+@functools.lru_cache(maxsize=4)
+def _untracked_probes(root: str) -> frozenset:
+    """Root-level `_name.py` scratch files that git does not track.
+
+    These are throwaway probes, not source. One of them contained the very
+    phrase a task was searching for and became the FIRST hit — so the agent
+    went and tried to edit a test's docstring instead of the UI. Scratch files
+    must not be able to impersonate the codebase."""
+    try:
+        p = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=10)
+        if p.returncode != 0:
+            return frozenset()
+        tracked = {n.split("/")[-1] for n in p.stdout.splitlines()}
+    except Exception:
+        return frozenset()
+    out = set()
+    try:
+        for f in Path(root).glob("_*.py"):
+            if f.name not in tracked and not f.name.startswith("__"):
+                out.add(f.name)
+    except Exception:
+        pass
+    return frozenset(out)
+
+
 def _iter_source_files(root: Path):
     """Every file worth searching, pruning skipped folders as we go.
 
@@ -857,10 +897,13 @@ def _iter_source_files(root: Path):
     every directory and lets the caller reject the results afterwards, so a
     search still walked .git, node_modules, the browser profile and the backup
     folder in full: 10,500 paths visited to keep 672 of them."""
+    probes = _untracked_probes(str(Path(__file__).parent))
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
         for name in filenames:
             if os.path.splitext(name)[1].lower() in _SEARCH_SKIP_EXT:
+                continue
+            if name in probes:
                 continue
             p = os.path.join(dirpath, name)
             try:
@@ -1204,8 +1247,37 @@ def _t_edit_file(args: dict) -> str:
     except Exception as exc:
         return f"ERROR: {exc}"
     n = src.count(old)
+
+    # read_file prefixes every line with "1810: ". Copying a line straight out
+    # of that output — the obvious thing to do — produces an `old` that can
+    # never match, and the only advice on offer was "read the file again",
+    # which returns the identical text. That is a loop, not a recovery.
+    if n == 0 and old:
+        unprefixed = re.sub(r"(?m)^[ \t]*\d+:[ \t]?", "", old)
+        if unprefixed != old and src.count(unprefixed) == 1:
+            old = unprefixed
+            n = 1
+
     if n == 0:
-        return "ERROR: old text not found — read the file again and copy it exactly"
+        # Say what the file ACTUALLY contains, verbatim, so the next attempt can
+        # copy it. An error that only says "not found" gives nothing to act on.
+        import difflib
+        probe = next((l.strip() for l in old.splitlines() if l.strip()), "")
+        probe = re.sub(r"^\d+:\s*", "", probe)
+        hay = src.splitlines()
+        near = difflib.get_close_matches(probe, hay, n=3, cutoff=0.5)
+        if not near and len(probe) > 12:
+            key = probe[:40]
+            near = [l for l in hay if key in l][:3]
+        if near:
+            shown = "\n".join(f"  line {hay.index(l) + 1}: {l}" for l in near)
+            return ("ERROR: `old` did not match. Do NOT copy the \"NNNN: \" line "
+                    "numbers from read_file — they are display only. The file "
+                    "actually contains, verbatim:\n" + shown +
+                    "\nCopy one of those lines EXACTLY as `old`.")
+        return ("ERROR: `old` text not found in the file. Search for a short "
+                "distinctive fragment of it to confirm it is really here, and "
+                "remember read_file's \"NNNN: \" prefixes are not part of the text.")
     if n > 1:
         return f"ERROR: old text appears {n} times — include more surrounding context"
     _checkpoint(p)
