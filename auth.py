@@ -330,6 +330,125 @@ class LoginWindow(ctk.CTk):
         self.destroy()
 
 
+_LOGIN_PAGE = Path(__file__).parent / "web_chat" / "login.html"
+
+
+def run_web_login(timeout: float = 300.0) -> str | None | bool:
+    """The designed sign-in page, served locally and opened full-screen.
+
+    Returns the username, None if cancelled, or False if the page could not be
+    shown at all — which is the caller's cue to fall back to the desktop
+    window. Never raises: being unable to draw a prettier login must not be
+    able to lock anyone out of their own assistant.
+    """
+    import json as _json
+    import queue
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    if not _LOGIN_PAGE.exists():
+        return False
+    try:
+        html = _LOGIN_PAGE.read_text(encoding="utf-8")
+    except Exception:
+        return False
+
+    result: queue.Queue = queue.Queue(maxsize=1)
+    cancelled = threading.Event()
+    done = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, ctype, body: bytes):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path.split("?", 1)[0] in ("/", "/login", "/login.html"):
+                self._send(200, "text/html; charset=utf-8", html.encode("utf-8"))
+            else:
+                self._send(404, "text/plain", b"no")
+
+        def do_POST(self):
+            if self.path.split("?", 1)[0] != "/api":
+                return self._send(404, "text/plain", b"no")
+            n = int(self.headers.get("Content-Length", 0) or 0)
+            try:
+                req = _json.loads(self.rfile.read(n) or b"{}")
+            except Exception:
+                req = {}
+            method, args = req.get("method", ""), req.get("args") or []
+            out = None
+            if method == "login":
+                who = authenticate(args[0] if args else "",
+                                   args[1] if len(args) > 1 else "")
+                # Deliberately the same message whether the name or the
+                # password was wrong: saying which one is a free hint about
+                # whose machine this is.
+                out = ({"ok": True, "name": who} if who else
+                       {"ok": False, "error": "That didn't match. Try again."})
+                if who and not result.full():
+                    result.put(who)
+            elif method == "cancel":
+                out = {"ok": True}
+                cancelled.set()
+            elif method == "done":
+                out = {"ok": True}
+                done.set()
+            self._send(200, "application/json",
+                       _json.dumps({"result": out}).encode("utf-8"))
+
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    except Exception:
+        return False
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True,
+                     name="GIL-Login").start()
+
+    try:
+        from face_login import _open_fullscreen
+        last = get_saved_session(max_age=None) or ""
+        proc = _open_fullscreen(f"http://127.0.0.1:{port}/login?who={last}")
+    except Exception:
+        try:
+            httpd.shutdown(); httpd.server_close()
+        except Exception:
+            pass
+        return False
+
+    name = None
+    try:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if cancelled.is_set():
+                break
+            try:
+                name = result.get(timeout=0.25)
+                break
+            except queue.Empty:
+                continue
+        if name:
+            done.wait(timeout=4.0)      # let the welcome land before we close
+    finally:
+        try:
+            httpd.shutdown(); httpd.server_close()
+        except Exception:
+            pass
+        try:
+            from face_login import _close
+            _close(proc)
+        except Exception:
+            pass
+    return name
+
+
 def run_login(force: bool = False) -> str | None:
     """
     Return the authenticated username.
@@ -347,6 +466,19 @@ def run_login(force: bool = False) -> str | None:
     if saved and not force:
         print(f"[G.I.L.] Session restored: {saved}")
         return saved
+
+    # The designed page first; the desktop window only if it cannot be shown.
+    # False means "could not display", which is different from None ("the user
+    # cancelled") — conflating them would either strand the user on a failure
+    # or ignore their decision to back out.
+    try:
+        web = run_web_login()
+    except Exception:
+        web = False
+    if web is not False:
+        if web:
+            save_session(web)
+        return web or None
 
     app = LoginWindow()
     app.mainloop()

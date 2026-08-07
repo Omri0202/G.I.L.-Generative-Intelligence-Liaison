@@ -3965,6 +3965,20 @@ class GILWindow(ctk.CTk):
         if callable(fn):
             fn(rows)
 
+    def route_badge(self, route: dict) -> None:
+        """Push the Auto model-switch notice to the web terminal.
+
+        Every web push has to be forwarded here explicitly. The caller guards
+        with hasattr(window, ...), so a method that exists only on WebChat and
+        not on this class is not an error — it is a silent no-op, and the
+        feature simply never appears. That is exactly what happened to the
+        switch notice: the routing was correct, the badge was built, and the
+        message was dropped on this line because it did not exist."""
+        win = getattr(self, "_chat_win", None)
+        fn = getattr(win, "route_badge", None)
+        if callable(fn):
+            fn(route)
+
     def _create_floating_chat_button(self) -> None:
         if not hasattr(self, "_float_btn") or not self._float_btn.winfo_exists():
             self._float_btn = _FloatingChatButton(self, self._open_chat_window)
