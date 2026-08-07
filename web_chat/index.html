@@ -984,20 +984,33 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
 #modelmenu.autoon .mopt{opacity:.5;}
 #modelmenu.autoon .mopt .mtitle{color:var(--muted);}
 
-/* the lane badge, in flow above the reply it belongs to */
-.routebadge{display:inline-flex;align-items:center;gap:9px;
-  padding:6px 14px 6px 11px;border-radius:999px;font-size:12.5px;
-  color:var(--txt);margin:2px 0 9px;
-  background:color-mix(in srgb, var(--lane) 14%, transparent);
-  border:1px solid color-mix(in srgb, var(--lane) 45%, transparent);
+/* The switch notice. A chapter marker in the transcript, not a toast: it
+   records that the conversation changed hands, so it belongs in the flow and
+   stays there when you scroll back. Centred and ruled on both sides so it
+   reads as an event between messages rather than as a message itself. */
+.routebadge{display:flex;align-items:center;gap:13px;margin:16px 0 14px;
+  animation:badgeIn .55s cubic-bezier(.22,1.15,.36,1) both;}
+.routebadge::before,.routebadge::after{content:"";flex:1;height:1px;
+  background:linear-gradient(90deg,transparent,
+             color-mix(in srgb, var(--lane) 38%, transparent));}
+.routebadge::after{background:linear-gradient(270deg,transparent,
+             color-mix(in srgb, var(--lane) 38%, transparent));}
+.routebadge .rin{display:inline-flex;align-items:center;gap:9px;flex:0 0 auto;
+  padding:6px 15px 6px 12px;border-radius:999px;font-size:12.5px;
+  color:var(--txt);white-space:nowrap;
+  background:color-mix(in srgb, var(--lane) 12%, transparent);
+  border:1px solid color-mix(in srgb, var(--lane) 40%, transparent);
   backdrop-filter:blur(14px) saturate(1.3);
-  box-shadow:0 8px 30px color-mix(in srgb, var(--lane) 22%, transparent),
-             inset 0 1px 0 rgba(255,255,255,.09);
-  animation:badgeIn .52s cubic-bezier(.22,1.2,.36,1) both;}
+  box-shadow:0 6px 26px color-mix(in srgb, var(--lane) 20%, transparent),
+             inset 0 1px 0 rgba(255,255,255,.08);}
 .routebadge .rdot{width:7px;height:7px;border-radius:50%;background:var(--lane);
-  box-shadow:0 0 10px var(--lane);animation:rpulse 1.6s ease-in-out infinite;}
-.routebadge b{font-weight:650;}
+  box-shadow:0 0 10px var(--lane);animation:rpulse 1.6s ease-in-out infinite;
+  flex:0 0 auto;}
+.routebadge b{font-weight:650;color:var(--lane);}
 .routebadge .rwhy{color:var(--muted);font-size:11.5px;}
+@media (max-width:560px){
+  .routebadge .rwhy{display:none;}       /* the reason is the first thing to go */
+}
 @keyframes badgeIn{
   0%{opacity:0;transform:translateY(-14px) scale(.94);filter:blur(4px);}
   60%{opacity:1;filter:blur(0);}
@@ -2147,8 +2160,13 @@ const gil = {
     el.className = "routebadge";
     el.style.setProperty("--lane", r.hue || "#7DDBFF");
     el.title = `${r.model} — chosen because ${r.reason || "of how it reads"}`;
-    el.innerHTML = `<span class="rdot"></span><b>${esc(r.label || "Switched")}</b>` +
-      `<span class="rwhy">${esc(r.reason || "")}</span>`;
+    // Name the ENGINE, then why. "Switched to GPT-OSS 120B" is the fact the
+    // user wants; the lane and the reason are the explanation underneath it.
+    const name = r.name || (r.model || "").split("/").pop();
+    el.innerHTML = `<span class="rin"><span class="rdot"></span>` +
+      `Switched to <b>${esc(name)}</b>` +
+      `<span class="rwhy">${esc(r.label || "")}${r.reason ? " · " + esc(r.reason) : ""}` +
+      `</span></span>`;
     $("msgs").insertBefore(el, $("typing"));
     scrollDown();
   },

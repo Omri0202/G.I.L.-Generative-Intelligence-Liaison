@@ -372,9 +372,23 @@ def route(prompt: str, has_image: bool = False, forced: str | None = None
 
     spec = LANES.get(lane, LANES[DEFAULT_LANE])
     return {"lane": lane, "model": spec["model"], "label": spec["label"],
-            "hue": spec["hue"], "reason": reason, "tier": tier,
-            "margin": round(margin, 4),
+            "name": model_name(spec["model"]), "hue": spec["hue"],
+            "reason": reason, "tier": tier, "margin": round(margin, 4),
             "took_us": int((time.perf_counter() - t0) * 1e6)}
+
+
+def model_name(model_id: str) -> str:
+    """The human name for a model id — "GPT-OSS 120B", not the API string.
+    A switch notice that reads "openai/gpt-oss-120b" is a log line, not a
+    message to a person."""
+    try:
+        import gil_brain
+        for m in gil_brain.MODELS:
+            if m["id"] == model_id:
+                return m["name"]
+    except Exception:
+        pass
+    return (model_id or "").split("/")[-1]
 
 
 def log_route(prompt: str, decision: dict) -> None:

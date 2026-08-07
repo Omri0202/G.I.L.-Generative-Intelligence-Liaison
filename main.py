@@ -70,7 +70,11 @@ def main() -> None:
     scanner_ran = False
     try:
         from auth import get_saved_session
-        if not get_saved_session():          # a saved session already skips login
+        # Only a MINUTES-OLD session skips the front door now. It used to be
+        # permanent, so after the very first sign-in GIL never looked at a face
+        # or asked for a password again — the scanner and the password window
+        # simply stopped appearing, which is what "it jumped straight in" was.
+        if not get_saved_session():
             from face_login import scan_for_user
             scanner_ran = True
             username = scan_for_user()

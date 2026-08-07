@@ -7,6 +7,8 @@ import customtkinter as ctk
 import sqlite3
 import hashlib
 import os
+import time
+
 import bcrypt
 from pathlib import Path
 
@@ -37,24 +39,49 @@ def initialize_database() -> None:
                 username TEXT    NOT NULL
             )
         """)
+        # Sessions used to be permanent, which quietly disabled the whole front
+        # door: once saved, GIL never looked at a face or asked for a password
+        # again, on any later start. Existing rows have no timestamp, so they
+        # are treated as expired — which is the safe reading.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(session)")}
+        if "created_at" not in cols:
+            conn.execute("ALTER TABLE session ADD COLUMN created_at REAL")
         conn.commit()
+
+
+#: How long a saved session is honoured. This exists to survive an immediate
+#: restart or a crash loop, NOT to remember you across the day — the face scan
+#: takes a second and is the point of having a front door at all.
+SESSION_TTL = 120.0
 
 
 def save_session(username: str) -> None:
-    """Persist the logged-in user so the login screen is skipped next run."""
+    """Persist the logged-in user so an immediate restart isn't challenged."""
     with _get_connection() as conn:
         conn.execute("""
-            INSERT INTO session (id, username) VALUES (1, ?)
-            ON CONFLICT(id) DO UPDATE SET username = excluded.username
-        """, (username,))
+            INSERT INTO session (id, username, created_at) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET username = excluded.username,
+                                          created_at = excluded.created_at
+        """, (username, time.time()))
         conn.commit()
 
 
-def get_saved_session() -> str | None:
-    """Return the remembered username, or None if no session is saved."""
+def get_saved_session(max_age: float | None = SESSION_TTL) -> str | None:
+    """The remembered username, or None if there is none or it has expired.
+
+    max_age=None returns it regardless of age, for callers that want to know
+    WHO was last here rather than to skip authentication."""
     with _get_connection() as conn:
-        row = conn.execute("SELECT username FROM session WHERE id = 1").fetchone()
-    return row[0] if row else None
+        row = conn.execute(
+            "SELECT username, created_at FROM session WHERE id = 1").fetchone()
+    if not row:
+        return None
+    name, made = row[0], row[1]
+    if max_age is None:
+        return name
+    if made is None or (time.time() - float(made)) > max_age:
+        return None                     # stale: verify who is there
+    return name
 
 
 def clear_session() -> None:
