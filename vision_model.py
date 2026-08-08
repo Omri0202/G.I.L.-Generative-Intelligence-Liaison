@@ -123,6 +123,114 @@ def _humanise(raw: str, status: int) -> str:
     return f"HTTP {status}"
 
 
+# ── second-provider fallback, for when Groq's day is spent ───────────────────
+#
+# Reached ONLY when Groq reports its daily cap, so it cannot spend anything
+# while the free allowance still has room. Both providers are inert without a
+# key, so this file behaves exactly as before on a machine that has neither.
+#
+# On the two candidates, measured rather than assumed:
+#   Google AI Studio — genuinely free and does accept image input, but Google
+#     no longer publishes free-tier numbers (the docs point you at the AI Studio
+#     dashboard), and developer reports through 2026 describe a steep cut to
+#     Flash's daily request allowance. It may well be SMALLER than the ~146
+#     scene reads a day Groq already gives. Worth having as a last resort, not
+#     as the capacity increase it would once have been.
+#   Anthropic — the key in this project's .env is valid and lists every model,
+#     but the account has no credit, so it returns 400 until credits are bought.
+#
+_GEMINI_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+_CLAUDE_MODEL = os.getenv("CLAUDE_VISION_MODEL", "claude-haiku-4-5-20251001")
+
+
+def _split_image_message(messages: list):
+    """Pull (prompt text, base64 jpeg) back out of the Groq-shaped message."""
+    for m in reversed(messages):
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        text, b64 = "", ""
+        for part in content:
+            if part.get("type") == "text":
+                text = part.get("text", "")
+            elif part.get("type") == "image_url":
+                url = (part.get("image_url") or {}).get("url", "")
+                if "base64," in url:
+                    b64 = url.split("base64,", 1)[1]
+        if b64:
+            return text, b64
+    return "", ""
+
+
+def _read_with_gemini(text: str, b64: str, max_tokens: int, timeout: int):
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+    if not key:
+        return False, "", ""
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{_GEMINI_MODEL}:generateContent")
+    try:
+        r = requests.post(url, params={"key": key}, timeout=timeout,
+                          json={"contents": [{"parts": [
+                              {"text": text or "Describe this image."},
+                              {"inline_data": {"mime_type": "image/jpeg",
+                                               "data": b64}}]}],
+                                "generationConfig": {"maxOutputTokens": max_tokens}})
+        if r.status_code != 200:
+            return False, "", f"Gemini HTTP {r.status_code}"
+        cands = r.json().get("candidates") or []
+        parts = (cands[0].get("content", {}).get("parts") or []) if cands else []
+        out = "".join(p.get("text", "") for p in parts).strip()
+        return (True, out, "") if out else (False, "", "Gemini returned nothing")
+    except Exception as exc:
+        return False, "", f"Gemini {exc.__class__.__name__}"
+
+
+def _read_with_claude(text: str, b64: str, max_tokens: int, timeout: int):
+    key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not key:
+        return False, "", ""
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages", timeout=timeout,
+                          headers={"x-api-key": key,
+                                   "anthropic-version": "2023-06-01",
+                                   "content-type": "application/json"},
+                          json={"model": _CLAUDE_MODEL, "max_tokens": max_tokens,
+                                "messages": [{"role": "user", "content": [
+                                    {"type": "image", "source": {
+                                        "type": "base64",
+                                        "media_type": "image/jpeg", "data": b64}},
+                                    {"type": "text",
+                                     "text": text or "Describe this image."}]}]})
+        if r.status_code != 200:
+            msg = ""
+            try:
+                msg = r.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+            if "credit balance" in msg.lower():
+                return False, "", "Anthropic account has no credit"
+            return False, "", f"Anthropic HTTP {r.status_code}"
+        out = "".join(c.get("text", "") for c in r.json().get("content", [])).strip()
+        return (True, out, "") if out else (False, "", "Anthropic returned nothing")
+    except Exception as exc:
+        return False, "", f"Anthropic {exc.__class__.__name__}"
+
+
+def _fallback_read(messages, max_tokens, temperature, timeout):
+    """Try the other providers, cheapest-and-freest first."""
+    text, b64 = _split_image_message(messages)
+    if not b64:
+        return False, "", ""          # not an image call — nothing to fall back to
+    errs = []
+    for fn in (_read_with_gemini, _read_with_claude):
+        ok, out, err = fn(text, b64, max_tokens, timeout)
+        if ok:
+            return True, out, ""
+        if err:
+            errs.append(err)
+    return False, "", "; ".join(errs)
+
+
 def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
          timeout: int = 60) -> tuple[bool, str, str]:
     """One vision call. Returns (ok, answer, error). The answer already has the
@@ -159,7 +267,15 @@ def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
                         if r.status_code in (400, 404):
                             break      # model itself is wrong — try the next model
                         if "for today" in last:
-                            return False, "", last   # a daily cap won't clear on retry
+                            # Groq is dry until midnight. Before giving up, try a
+                            # second provider — this is the ONLY point at which
+                            # one is used, so a fallback can never cost anything
+                            # while the free allowance still has room.
+                            ok, ans, ferr = _fallback_read(messages, max_tokens,
+                                                           temperature, timeout)
+                            if ok:
+                                return True, ans, ""
+                            return False, "", (last + (f" ({ferr})" if ferr else ""))
                         continue       # rate limit / transient — try the next key
                     body = r.json()
                     try:                   # images are the biggest token spender
