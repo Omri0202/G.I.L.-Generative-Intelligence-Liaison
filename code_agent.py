@@ -1326,10 +1326,20 @@ def _t_edit_file(args: dict) -> str:
     # never match, and the only advice on offer was "read the file again",
     # which returns the identical text. That is a loop, not a recovery.
     if n == 0 and old:
-        unprefixed = re.sub(r"(?m)^[ \t]*\d+:[ \t]?", "", old)
-        if unprefixed != old and src.count(unprefixed) == 1:
-            old = unprefixed
-            n = 1
+        # Two display prefixes get copied by accident, and both are ours:
+        #   read_file  ->  "1208: <button …"
+        #   search     ->  "web_chat\index.html:1208: <button …"
+        # A search hit is the most natural thing in the world to paste as the
+        # anchor — it is the line, and the agent has just been told it is
+        # enough to edit from. Strip either shape and any [comment] tag rather
+        # than failing on formatting the agent did not add.
+        for pat in (r"(?m)^[ \t]*\d+:[ \t]?",
+                    r"(?m)^[ \t]*[^\n:]*[/\\][^\n:]*:\d+:[ \t]?"):
+            cand = re.sub(pat, "", old)
+            cand = re.sub(r"\s*\[(?:in a trailing )?comment\]\s*$", "", cand)
+            if cand != old and src.count(cand) == 1:
+                old, n = cand, 1
+                break
 
     if n == 0:
         # Say what the file ACTUALLY contains, verbatim, so the next attempt can
@@ -2460,14 +2470,28 @@ def _finalize_report(messages: list, task: str, edits_made: int,
     ask = list(messages) + [{"role": "user", "content":
         "You are OUT OF STEPS for this task — do NOT request another tool. Reply "
         "with ONE JSON object and nothing else: "
-        '{"summary": "<final engineering report in markdown: open with one sharp '
-        "line and the number of concrete findings; then a Markdown TABLE of the "
-        "findings (columns: # | Finding | Location | Fix) so it renders as a chart; "
-        "then a numbered list, most important first, each bolding its first 3-6 "
-        "words, giving `file:line`, why it matters and the fix; end with what to "
-        "run next>\", "
-        '"success": true/false}. Ground every point in what you actually read or '
-        "ran above — no guesses, no padding."}]
+        '{"summary": "<final report in markdown>", "success": true/false}.'
+        + (
+            # A CHANGE task must report what it CHANGED. Demanding a findings
+            # table here is what produced a fabricated bug in "edit_file.py:10",
+            # a file that does not exist: told to list findings and having none,
+            # the model invented one to fill the shape it was given.
+            "\n\nThis was a task to CHANGE something, and you ran out of steps. "
+            "Report honestly, in this order: what you actually changed (if "
+            "nothing, say NOTHING WAS CHANGED in those words); exactly where you "
+            "got to; the precise next action someone should take, with the "
+            "`file:line` you already found. Do NOT produce a findings table and "
+            "do NOT report bugs — you were not asked to look for any. Never name "
+            "a file you have not actually opened."
+            if task_mode == "change" else
+            "\n\nOpen with one sharp line and the number of concrete findings; "
+            "then a Markdown TABLE (columns: # | Finding | Location | Fix); then "
+            "a numbered list, most important first, each bolding its first 3-6 "
+            "words, giving `file:line`, why it matters and the fix; end with "
+            "what to run next."
+        )
+        + " Ground every point in what you actually read or ran above — no "
+          "guesses, no padding."}]
     try:
         obj = _llm_json(ask, must_have="summary")
     except Exception:
@@ -2651,10 +2675,25 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
                     pass
             # Second-to-last step: tell GIL to land the plane himself now — a clean
             # self-authored `done` beats the forced finalize we'd otherwise do.
+            # Halfway through a CHANGE with nothing changed yet, the run is not
+            # going to recover by looking harder — that is how "add a mic
+            # button" spent twenty steps reading and ended having edited
+            # nothing. Say it once, while there is still budget to act.
+            if (task_mode == "change" and edits_made == 0
+                    and step == max(4, _MAX_STEPS // 2)):
+                messages.append({"role": "user", "content":
+                    f"You are {step} steps into {_MAX_STEPS} and have changed "
+                    "NOTHING yet. Stop gathering. Make your best edit_file call "
+                    "now with a line you have actually seen; if it fails, the "
+                    "error quotes the file's real text — copy from that and try "
+                    "again. An imperfect edit you can iterate on beats a "
+                    "perfect plan you run out of steps to apply."})
             if step == _MAX_STEPS - 1:
                 messages.append({"role": "user", "content":
                     "You are on your SECOND-TO-LAST step. Do not start new work — "
-                    "finish NOW with `done` and your full findings report."})
+                    "finish NOW with `done`. If this was a task to CHANGE "
+                    "something, report what you changed and where you got to; do "
+                    "not invent findings to fill a report."})
             action = _llm(messages, on_thought=thought_cb,
                           effort=prof["effort"], max_tokens=prof["max_tokens"])
             _end_thought()           # settle the live thought line for this step
