@@ -2024,8 +2024,8 @@ const gil = {
     txt.textContent = Math.round(used * 100) + "%";
     wrap.className = used >= 0.95 ? "hot" : used >= 0.8 ? "warn" : "";
     $("usagebtn").title = mine.length
-      ? `${this.shortModel()} — ${Math.round(used * 100)}% of its budget used`
-      : `${this.shortModel()} — nothing spent yet`;
+      ? `${this.shortModel()} — ${Math.round(used * 100)}% of today's tokens used`
+      : `${this.shortModel()} — nothing spent today`;
     if ($("usagepanel").classList.contains("on")) this.renderUsage();
   },
 
@@ -2037,21 +2037,20 @@ const gil = {
     return m.split("/").pop();
   },
 
-  /* Every budget currently in play, flattened and sorted by how close it is
-     to biting. A minute window refills by itself; a day does not, so ties
-     break toward the day. */
+  /* The DAY budget for each model, and only that.
+     There is also a per-minute cap. It is still enforced — the brain falls
+     back to another model when it bites — but it is never shown, because
+     mixing two periods made the percentage unreadable: the ring jumped
+     between them with no visible cause, reading 12% one moment and 85% the
+     next. A per-minute rate limit is a billing detail nobody can act on, and
+     it resets before you could. The number that means something is how much
+     of today is gone. */
   usageRows() {
     const rows = (this._usage && this._usage.models) || [];
-    const out = [];
-    rows.forEach(m => {
-      const short = (m.model || "").split("/").pop();
-      if (m.day && m.day.limit)
-        out.push({name: short, win: "today", rank: 0, ...m.day});
-      if (m.minute && m.minute.limit)
-        out.push({name: short, win: "this minute", rank: 1, ...m.minute});
-    });
-    return out.filter(r => r.used > 0)
-              .sort((a, b) => (b.pct - a.pct) || (a.rank - b.rank));
+    return rows
+      .filter(m => m.day && m.day.limit && m.day.used > 0)
+      .map(m => ({name: (m.model || "").split("/").pop(), ...m.day}))
+      .sort((a, b) => b.pct - a.pct);
   },
 
   toggleUsage(ev) {
@@ -2065,9 +2064,9 @@ const gil = {
   renderUsage() {
     const p = $("usagepanel"), rows = this.usageRows();
     if (!rows.length) {
-      p.innerHTML = `<div class="uhead"><span>Token budget</span></div>
-        <div class="uempty">Nothing spent yet. The ring fills in as GIL thinks —
-        it tracks the real API allowance, per model, per minute and per day.</div>`;
+      p.innerHTML = `<div class="uhead"><span>Today's tokens</span></div>
+        <div class="uempty">Nothing spent yet today. The ring fills in as GIL
+        thinks, and resets at midnight.</div>`;
       return;
     }
     const warn = (this._usage && this._usage.warning) || "";
@@ -2076,21 +2075,21 @@ const gil = {
     // top rows, and they should be where the eye lands
     rows.sort((a, b) => (b.name === cur) - (a.name === cur));
     p.innerHTML =
-      `<div class="uhead"><span>Token budget</span><span>${esc(cur)}</span></div>` +
+      `<div class="uhead"><span>Today's tokens</span><span>${esc(cur)}</span></div>` +
       rows.map(r => {
         const pct = Math.max(0, Math.min(1, r.pct || 0));
         const cls = pct >= 0.95 ? "hot" : pct >= 0.8 ? "warn" : "";
-        const now = r.name === cur ? " ← in use" : "";
+        const now = r.name === cur ? " · in use" : "";
         return `<div class="urow ${cls}" ${r.name === cur ? 'style="opacity:1"'
                                                           : 'style="opacity:.62"'}>
-          <div class="uname"><span>${esc(r.name)} · ${esc(r.win)}${now}</span>
+          <div class="uname"><span>${esc(r.name)}${now}</span>
             <span>${fmtTok(r.used)} / ${fmtTok(r.limit)}</span></div>
           <div class="ubar"><i style="width:${(pct * 100).toFixed(1)}%"></i></div>
         </div>`;
       }).join("") +
       `<div class="ufoot">${warn ? esc(warn)
-        : "The ring shows how much of <b>" + esc(cur) + "</b>'s budget is used. "
-          + "Other models are listed dimmed."}</div>`;
+        : "How much of today's allowance <b>" + esc(cur) + "</b> has used. "
+          + "Resets at midnight."}</div>`;
   },
 
   /* ── which brain GIL thinks with ──────────────────────────────────────── */

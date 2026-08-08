@@ -143,8 +143,17 @@ def all_status() -> list:
 
 
 def _check_warnings_locked(model: str, st: dict):
-    """Return a message when a budget first crosses a warning level."""
-    for scope, label in (("day", "today's"), ("minute", "this minute's")):
+    """Return a message when the DAY budget first crosses a warning level.
+
+    Day only, deliberately. The per-minute cap is still enforced — exhausted()
+    checks it and the brain falls back to another model when it bites — but it
+    is never mentioned to the user. Reporting two budgets with different
+    periods made the percentage meaningless: it jumped between them with no
+    visible cause, reading 12% one moment and 85% the next. A per-minute rate
+    limit is a detail of how the provider bills; it is not something anyone can
+    act on, and it resets before you could.
+    """
+    for scope, label in (("day", "today's"),):
         pct = st[scope]["pct"]
         for level in _WARN_AT:
             key = f"{model}:{scope}:{level}"
@@ -154,8 +163,7 @@ def _check_warnings_locked(model: str, st: dict):
                 short = model.split("/")[-1]
                 if pct >= 1.0:
                     return (f"I've used all of {label} tokens for `{short}`. "
-                            + ("They reset at midnight."
-                               if scope == "day" else "Give it a minute."))
+                            "They reset at midnight.")
                 return (f"Heads up — {int(pct * 100)}% of {label} tokens for "
                         f"`{short}` are gone.")
     return None
