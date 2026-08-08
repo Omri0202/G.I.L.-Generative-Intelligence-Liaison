@@ -90,6 +90,41 @@ When the task quotes text they saw on screen ("remove the words 'X Y Z'"):
   and the line, make the edit. If something genuinely blocks you, name the
   blocker and what you already tried — never issue instructions to the user.
 
+━━ WHEN YOU CANNOT FIND IT ━━
+If the user is looking at a thing on their screen, THE THING EXISTS. A failed
+search means your query was wrong, not that the feature is missing. "I couldn't
+find the send button" is never true — it is on screen; you searched for the
+wrong string. Work down this ladder and do not stop early:
+
+1. LOOK AT WHAT YOU DID FIND. Hits marked [comment] are prose ABOUT the thing,
+   not the thing. Three comments mentioning "the send button" prove it exists
+   and prove you are searching in English instead of in code. Never read around
+   a comment hit and conclude the feature is absent.
+
+2. TRANSLATE THE HUMAN NAME INTO A CODE NAME. People describe interfaces by
+   what they see; source names them by what they are. Try, in this order:
+     the id or class      id="send"   class="send-btn"   #send
+     the ACTION it does   sendOrStop  onSend  handleSend  submit
+     the visible glyph    the actual character on the button
+     the neighbour        an element you CAN find that sits beside it
+   For "the send button" the winning query is `id="send"` — one search.
+
+3. SEARCH FOR THE CONTAINER, NOT THE ELEMENT. To put something NEXT TO a thing
+   you need its parent anyway. Find the row, toolbar or wrapper that holds it,
+   read that block, and every sibling is in front of you at once.
+
+4. USE A NEIGHBOUR AS A LANDMARK. If one control is hard to name and another is
+   easy — an attach button, a text input, a placeholder string — find the easy
+   one and read twenty lines around it. Controls live together.
+
+5. GO STRUCTURAL. If text search keeps failing, stop searching and READ. In a
+   UI file the markup is one block; open it and look. list_dir on the file
+   gives its size and first lines so you can aim.
+
+6. STATE WHAT YOU TRIED. If you genuinely cannot locate something, say which
+   queries you ran and what each returned. "I could not find it" with no
+   working shown is not a report, and it is nearly always wrong.
+
 ━━ MAKING THE EDIT ━━
 • read_file prefixes each line with "1810: ". That prefix is DISPLAY ONLY —
   it is not in the file. Never copy it into `old`.
@@ -914,6 +949,31 @@ def _iter_source_files(root: Path):
             yield Path(p)
 
 
+_COMMENT_RE = re.compile(r"""^\s*(//|\#|/\*|\*|<!--|--\s)""")
+
+
+def _hit_kind(line: str) -> str:
+    """Label a search hit so prose can be told apart from code.
+
+    Asked to put a button beside the send button, the agent searched "send
+    button", hit a CSS comment that happened to say "…stays on the send button
+    only", read around it, found no button and concluded the send button did
+    not exist. The element was 700 lines away, named id="send".
+
+    A match inside a comment or a string is EVIDENCE ABOUT the thing; a match
+    in code IS the thing. The agent could not see the difference, so it treated
+    the first hit as the answer."""
+    s = line.strip()
+    if _COMMENT_RE.match(s):
+        return " [comment]"
+    # a trailing comment on a code line, where the match sits after the marker
+    for marker in ("//", "/*", "<!--", "#"):
+        i = s.find(marker)
+        if i > 0:
+            return " [in a trailing comment]"
+    return ""
+
+
 @functools.lru_cache(maxsize=1)
 def _rg_path() -> str:
     """ripgrep, if installed. Cached — this sits on the hot path."""
@@ -965,7 +1025,7 @@ def _rg_search(pattern: str, root: Path, display: int, scan_cap: int,
             continue
         total += 1
         if len(hits) < display:
-            hits.append(f"{path}:{ln}: {line.strip()[:140]}")
+            hits.append(f"{path}:{ln}: {line.strip()[:140]}{_hit_kind(line)}")
         if total >= scan_cap:
             break
     return hits, total, filtered
@@ -1037,7 +1097,9 @@ def _t_search(args: dict) -> str:
             if len(hits) < DISPLAY:
                 ln = text.count("\n", 0, m.start()) + 1
                 snippet = text[m.start():m.start() + 160].splitlines()[0]
-                hits.append(f"{f}:{ln}: {snippet.strip()[:140]}")
+                # `line` is the WHOLE line; the snippet begins AT the match, so
+                # a comment marker to its left would be invisible to _hit_kind
+                hits.append(f"{f}:{ln}: {snippet.strip()[:140]}{_hit_kind(line)}")
         if total >= SCAN_CAP:
             break
     if hits:
