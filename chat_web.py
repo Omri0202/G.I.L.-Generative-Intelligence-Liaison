@@ -610,7 +610,7 @@ class WebChat:
             if is_image:
                 import vision_model
                 from PIL import Image
-                img = vision_model.fit_for_send(Image.open(path))
+                img = vision_model.fit_for_send(Image.open(path), detail="scene")
                 buf = io.BytesIO()
                 img.convert("RGB").save(buf, format="JPEG", quality=82)
                 b64 = base64.b64encode(buf.getvalue()).decode()

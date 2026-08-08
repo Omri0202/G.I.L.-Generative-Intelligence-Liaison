@@ -51,16 +51,35 @@ SEND_WIDTH = 760
 SEND_MAX_PIXELS = 350_000
 
 
-def fit_for_send(img):
+#: Budget for images where nobody is trying to read small text — a photo the
+#: user attached, "what is this?", a picture of a thing rather than of a screen.
+#:
+#: Measured on this account: a 788x443 capture costs 2,426 prompt tokens and a
+#: 326x183 one costs 786, which fits cost ≈ 450 + 0.0057 per pixel. Against the
+#: 200,000 tokens-per-DAY vision limit that is 82 reads a day at full detail
+#: against roughly 150 here — and running out of them is the actual complaint.
+#: Screen captures keep the larger budget, because there the entire job is
+#: reading text that is already small.
+SCENE_MAX_PIXELS = 160_000
+
+
+def fit_for_send(img, detail: str = "text"):
     """Downscale a PIL image to the token-safe pixel budget, preserving aspect.
-    Never upscales — a small window is sent at native resolution."""
+    Never upscales — a small window is sent at native resolution.
+
+    detail="text"   full budget, for screen captures where small type has to
+                    stay legible. The Visual Bug Inspector depends on this.
+    detail="scene"  a smaller budget for ordinary photos and attachments, where
+                    the answer does not hinge on reading four-pixel glyphs.
+    """
     from PIL import Image
     import math
+    budget = SCENE_MAX_PIXELS if detail == "scene" else SEND_MAX_PIXELS
     w, h = img.size
     area = w * h
-    if area <= SEND_MAX_PIXELS or area <= 0:
+    if area <= budget or area <= 0:
         return img
-    s = math.sqrt(SEND_MAX_PIXELS / area)
+    s = math.sqrt(budget / area)
     return img.resize((max(1, int(w * s)), max(1, int(h * s))), Image.LANCZOS)
 
 

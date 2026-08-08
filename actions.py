@@ -1265,7 +1265,7 @@ def _look(question: str = "") -> str:
 
             import vision_model
             from PIL import Image
-            img = vision_model.fit_for_send(Image.open(recent))
+            img = vision_model.fit_for_send(Image.open(recent), detail="scene")
             buf = _io.BytesIO()
             img.convert("RGB").save(buf, format="JPEG", quality=82)
             b64 = base64.b64encode(buf.getvalue()).decode()
