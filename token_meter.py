@@ -87,6 +87,23 @@ def subscribe(fn):
         _listeners.append(fn)
 
 
+def mark_day_full(model: str) -> None:
+    """Record that the provider itself says this model's day is spent.
+
+    The meter only ever sees what GIL spends, so anything else on the same
+    account — another tool, a script, a second app — is invisible to it. That
+    is how the ring came to read 48% while Groq was refusing calls at 99%: the
+    number was honest about GIL's own usage and useless as a picture of the
+    account. When the provider tells us the truth outright, believe it over our
+    own bookkeeping."""
+    with _lock:
+        _roll_day()
+        model = model or "unknown"
+        lim = LIMITS.get(model, _DEFAULT)["tpd"]
+        _state["daily"][model] = max(int(_state["daily"].get(model, 0)), lim)
+        _save()
+
+
 def record(model: str, tokens: int, prompt: int = 0, completion: int = 0):
     """Log real usage from one API call."""
     if not tokens or tokens <= 0:

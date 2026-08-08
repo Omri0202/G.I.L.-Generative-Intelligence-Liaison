@@ -107,6 +107,24 @@ def available() -> bool:
 _STARVED = "model returned only reasoning, no answer"
 
 
+def _pretty_wait(raw: str) -> str:
+    """"6m49.104s" → "7 minutes". Nobody needs milliseconds to know whether to
+    wait or go and do something else."""
+    try:
+        secs = 0.0
+        for val, unit in re.findall(r"([0-9.]+)\s*([hms])", raw):
+            secs += float(val) * {"h": 3600, "m": 60, "s": 1}[unit]
+        if secs <= 0:
+            return raw
+        if secs < 90:
+            return f"{int(secs)} seconds"
+        if secs < 5400:
+            return f"{round(secs / 60)} minutes"
+        return f"{secs / 3600:.1f} hours"
+    except Exception:
+        return raw
+
+
 def _humanise(raw: str, status: int) -> str:
     """Turn a provider error into something a person can act on.
 
@@ -114,8 +132,16 @@ def _humanise(raw: str, status: int) -> str:
     ("Limit 200000,.7"), which tells the user nothing about what to do."""
     low = (raw or "").lower()
     if "tokens per day" in low or "tpd" in low:
-        return ("I've used up today's image-reading allowance on the free tier. "
-                "It resets tomorrow.")
+        # NOT "resets tomorrow". Groq's daily budget is a ROLLING window, so it
+        # frees up continuously as old usage ages out — the provider's own reply
+        # says "try again in 6m49s" while the old wording sent the user away for
+        # the rest of the day. Quote the real wait when it is offered.
+        m = re.search(r"try again in ([0-9hms.]+)", raw or "", re.I)
+        if m:
+            return (f"My image-reading allowance is full right now — it frees up "
+                    f"again in about {_pretty_wait(m.group(1))}.")
+        return ("My image-reading allowance is full right now. It frees up "
+                "gradually over the next few hours.")
     if "tokens per minute" in low or "tpm" in low or status == 429:
         return "I'm over my per-minute limit for images — try again in a minute."
     if status == 413:
@@ -377,11 +403,23 @@ def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
                         last = _humanise(raw_err, r.status_code)
                         if r.status_code in (400, 404):
                             break      # model itself is wrong — try the next model
-                        if "for today" in last:
-                            # Groq is dry until midnight. Before giving up, try a
-                            # second provider — this is the ONLY point at which
-                            # one is used, so a fallback can never cost anything
-                            # while the free allowance still has room.
+                        # Test the RAW provider error, not the sentence built for
+                        # the user. This guard used to read `"for today" in last`
+                        # while _humanise produced "today's image-reading
+                        # allowance" — a substring that never matched, so the
+                        # daily cap was never recognised and the whole fallback
+                        # was unreachable. Phrasing meant for a person must never
+                        # be load-bearing for control flow.
+                        low = (raw_err or "").lower()
+                        if "tokens per day" in low or "(tpd)" in low:
+                            # The provider just told us the truth about the day;
+                            # believe it over our own bookkeeping, which only
+                            # ever sees what GIL itself spent.
+                            try:
+                                import token_meter
+                                token_meter.mark_day_full(model)
+                            except Exception:
+                                pass
                             ok, ans, ferr = _fallback_read(
                                 messages, max_tokens, temperature, timeout,
                                 source_image)
