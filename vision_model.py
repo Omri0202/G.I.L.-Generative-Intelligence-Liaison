@@ -23,6 +23,8 @@ from __future__ import annotations
 import os
 import re
 
+from pathlib import Path
+
 import requests
 
 from logger import get as _get_log
@@ -142,6 +144,21 @@ def _humanise(raw: str, status: int) -> str:
 _GEMINI_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
 _CLAUDE_MODEL = os.getenv("CLAUDE_VISION_MODEL", "claude-haiku-4-5-20251001")
 
+#: Paid providers are OFF unless explicitly allowed. A valid key sitting in .env
+#: is not consent to spend money — the Anthropic key here is exactly that case,
+#: and if credit ever lands on it for something else GIL must not quietly start
+#: billing image reads to it. Set GIL_ALLOW_PAID_VISION=1 to opt in.
+def _paid_allowed() -> bool:
+    return os.getenv("GIL_ALLOW_PAID_VISION", "").strip() in ("1", "true", "yes")
+
+
+#: Groq bills vision by TOKEN, so image area is what costs there and everything
+#: is downscaled hard. Google's free tier is bounded by REQUESTS PER DAY, and a
+#: request costs one unit whether the image is 300px or 1000px wide. So once we
+#: are on the fallback, shrinking the picture buys nothing and only throws away
+#: detail — send it large and get a better reading for the same quota.
+GEMINI_MAX_PIXELS = 1_200_000
+
 
 def _split_image_message(messages: list):
     """Pull (prompt text, base64 jpeg) back out of the Groq-shaped message."""
@@ -216,14 +233,51 @@ def _read_with_claude(text: str, b64: str, max_tokens: int, timeout: int):
         return False, "", f"Anthropic {exc.__class__.__name__}"
 
 
-def _fallback_read(messages, max_tokens, temperature, timeout):
-    """Try the other providers, cheapest-and-freest first."""
+def _encode_for_gemini(source_image):
+    """Re-encode the ORIGINAL at Gemini's budget, since a request there costs
+    one unit regardless of size. Returns base64, or "" if unavailable."""
+    if source_image is None:
+        return ""
+    try:
+        import base64 as _b64
+        import io as _io
+        import math
+        from PIL import Image
+        img = Image.open(source_image) if isinstance(source_image, (str, Path)) \
+            else source_image
+        w, h = img.size
+        area = w * h
+        if area > GEMINI_MAX_PIXELS:
+            s = math.sqrt(GEMINI_MAX_PIXELS / area)
+            img = img.resize((max(1, int(w * s)), max(1, int(h * s))),
+                             Image.LANCZOS)
+        buf = _io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=88)
+        return _b64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
+def _fallback_read(messages, max_tokens, temperature, timeout,
+                   source_image=None):
+    """Try the other providers, freest first."""
     text, b64 = _split_image_message(messages)
     if not b64:
         return False, "", ""          # not an image call — nothing to fall back to
+
     errs = []
-    for fn in (_read_with_gemini, _read_with_claude):
-        ok, out, err = fn(text, b64, max_tokens, timeout)
+    # Google first, and at full detail: it is free, and its free tier is
+    # bounded by requests per day rather than tokens, so a bigger picture
+    # costs the same quota and reads far better.
+    ok, out, err = _read_with_gemini(text, _encode_for_gemini(source_image) or b64,
+                                     max_tokens, timeout)
+    if ok:
+        return True, out, ""
+    if err:
+        errs.append(err)
+
+    if _paid_allowed():
+        ok, out, err = _read_with_claude(text, b64, max_tokens, timeout)
         if ok:
             return True, out, ""
         if err:
@@ -232,7 +286,7 @@ def _fallback_read(messages, max_tokens, temperature, timeout):
 
 
 def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
-         timeout: int = 60) -> tuple[bool, str, str]:
+         timeout: int = 60, source_image=None) -> tuple[bool, str, str]:
     """One vision call. Returns (ok, answer, error). The answer already has the
     reasoning block stripped. Rotates API keys and model fallbacks on failure.
 
@@ -271,8 +325,9 @@ def chat(messages: list, max_tokens: int = 2400, temperature: float = 0.2,
                             # second provider — this is the ONLY point at which
                             # one is used, so a fallback can never cost anything
                             # while the free allowance still has room.
-                            ok, ans, ferr = _fallback_read(messages, max_tokens,
-                                                           temperature, timeout)
+                            ok, ans, ferr = _fallback_read(
+                                messages, max_tokens, temperature, timeout,
+                                source_image)
                             if ok:
                                 return True, ans, ""
                             return False, "", (last + (f" ({ferr})" if ferr else ""))

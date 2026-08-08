@@ -1273,7 +1273,8 @@ def _look(question: str = "") -> str:
                                      "error, code, a document or handwriting, "
                                      "quote the important text exactly.")
             ok, reading, err = vision_model.chat(
-                vision_model.image_message(q, b64), max_tokens=1400, timeout=45)
+                vision_model.image_message(q, b64), max_tokens=1400,
+                timeout=45, source_image=recent)
             if ok:
                 return reading
         except Exception:

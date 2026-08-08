@@ -617,8 +617,13 @@ class WebChat:
                 q = text.strip() or ("Describe this image. If it shows an error, "
                                      "code, a document or handwriting, quote the "
                                      "important text exactly.")
+                # hand over the ORIGINAL too: if Groq is dry and we fall back to
+                # Google, a request there costs the same whatever the size, so
+                # the fallback should send the full picture rather than the
+                # copy that was shrunk to save Groq tokens.
                 ok, reading, err = vision_model.chat(
-                    vision_model.image_message(q, b64), max_tokens=1400, timeout=45)
+                    vision_model.image_message(q, b64), max_tokens=1400,
+                    timeout=45, source_image=path)
                 self._push("gil.hideTyping")
                 if ok:
                     self.add_message(reading, "gil")
