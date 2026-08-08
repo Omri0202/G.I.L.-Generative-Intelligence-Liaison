@@ -406,6 +406,58 @@ def dispatch(
         threading.Thread(target=_webgen, daemon=True, name="GIL-WebGen").start()
         return True
 
+    # ── Image generation ─────────────────────────────────────────────────────
+    # This branch did not exist. The brain has always known the action — it is
+    # in the vocabulary and it emits it correctly — but only autonomous.py and
+    # missions.py could carry it out. From an ordinary chat message it fell
+    # past every branch here, reached the extra-actions loop as an unknown
+    # verb, and did nothing at all. GIL said "Creating the image, Sir" and
+    # meant it; there was simply no code on the other side of the promise.
+    elif action == "generate_image":
+        if not engine.creation_allowed():
+            log.info("generate_image suppressed — not addressed")
+            window.set_state("listening")
+            return True
+
+        def _imagegen(desc=target or text):
+            from ears import unmute
+            import time as _t
+            ack = "On it — about twenty seconds."
+            window.set_state("speaking", said=ack)
+            last_spoke_at[0] = _t.time() + 120
+            speak(ack)
+            last_spoke_at[0] = _t.time()
+            last_said[0] = ack
+            aid, img = None, None
+            try:
+                import activity
+                aid = activity.start("image", f"Generating image — {desc[:60]}")
+            except Exception:
+                pass
+            try:
+                from image_gen import generate as _ig, infer_dimensions
+                w, h = infer_dimensions(desc)
+                img = _ig(desc, width=w, height=h)
+                result = "Here it is."
+            except Exception as exc:
+                result = f"Image generation failed — {exc.__class__.__name__}."
+                log.error("generate_image failed", exc_info=True)
+            try:
+                import activity
+                (activity.done if img else activity.fail)(aid, result[:110])
+            except Exception:
+                pass
+            unmute()
+            window.set_state("speaking", said=result)
+            speak(result)
+            last_spoke_at[0] = _t.time() - 1.5
+            last_said[0] = result
+            window.set_state("listening")
+            if img:
+                window.send_rich_to_chat("image", img)
+        threading.Thread(target=_imagegen, daemon=True, name="GIL-ImageGen").start()
+        return True
+
     # ── Autonomous task loop (plan → act → observe → repeat until done) ──────
     elif action == "autonomous_task":
         if not engine.creation_allowed():
