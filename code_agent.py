@@ -125,6 +125,13 @@ wrong string. Work down this ladder and do not stop early:
    queries you ran and what each returned. "I could not find it" with no
    working shown is not a report, and it is nearly always wrong.
 
+ONCE YOU HAVE FOUND IT, STOP LOOKING. A search hit gives you the file, the line
+number AND the full line — that is everything an edit needs. Read ONCE around
+it for context, then edit. Reading the same file a third and fourth time is not
+diligence, it is a stall: you already have what you need and the budget you are
+spending is the budget the edit needed. A run that ends "I found it at line
+1208 but did not manage to change it" is a worse outcome than not looking.
+
 ━━ MAKING THE EDIT ━━
 • read_file prefixes each line with "1810: ". That prefix is DISPLAY ONLY —
   it is not in the file. Never copy it into `old`.
@@ -1096,10 +1103,14 @@ def _t_search(args: dict) -> str:
             total += 1
             if len(hits) < DISPLAY:
                 ln = text.count("\n", 0, m.start()) + 1
-                snippet = text[m.start():m.start() + 160].splitlines()[0]
-                # `line` is the WHOLE line; the snippet begins AT the match, so
-                # a comment marker to its left would be invisible to _hit_kind
-                hits.append(f"{f}:{ln}: {snippet.strip()[:140]}{_hit_kind(line)}")
+                # Show the WHOLE line, not the tail from the match onward.
+                # Starting at the match hid the front of it: searching id="send"
+                # returned `id="send" onclick=…>↑</button>` with the leading
+                # `<button ` cut away, so the agent could not see the element it
+                # had just found, could not use the text as an edit anchor, and
+                # went back to reading the file in chunks to recover what the
+                # search already knew.
+                hits.append(f"{f}:{ln}: {line.strip()[:200]}{_hit_kind(line)}")
         if total >= SCAN_CAP:
             break
     if hits:
@@ -3041,6 +3052,25 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
             (activity.done if ok else activity.fail)(aid, result[:110])
             if tool in _READ_TOOLS:
                 _seen[_sig] = result[:3000]
+
+            # Reading the SAME FILE over and over with different line ranges is
+            # not a repeat, so the identical-call guard never catches it — and
+            # it is exactly how a run ends with "repeated attempts to read the
+            # HTML file without progress". Four looks at one file is enough to
+            # act on; say so, once, rather than letting the step budget drain.
+            if tool == "read_file" and task_mode == "change":
+                _path = str(args.get("path", ""))
+                _reads = eng._agent_read_counts = getattr(
+                    eng, "_agent_read_counts", {})
+                _reads[_path] = _reads.get(_path, 0) + 1
+                if _reads[_path] == 4:
+                    messages.append({"role": "user", "content":
+                        f"You have now read {_path} four times. You are "
+                        "gathering, not deciding. You already know the file "
+                        "and the line — make the edit_file call now, using a "
+                        "line you have actually seen as `old`. If an edit "
+                        "failed, its error told you what the file really "
+                        "contains: copy from THAT rather than reading again."})
 
             # Rich Claude-Code-style tool block for the /codemode terminal:
             # header + output/diff + language, so the UI can colour it.
