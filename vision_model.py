@@ -144,6 +144,20 @@ def _humanise(raw: str, status: int) -> str:
 _GEMINI_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
 _CLAUDE_MODEL = os.getenv("CLAUDE_VISION_MODEL", "claude-haiku-4-5-20251001")
 
+#: OpenRouter, free tier. Added because Google AI Studio refuses to mint a key
+#: for a lot of people — it hangs off Google Cloud IAM, so a work or school
+#: account whose admin has not granted the right roles just gets "permission
+#: denied". OpenRouter needs no Google account and no card for the ":free"
+#: models, and it speaks the same OpenAI-shaped API as Groq, so the message
+#: built for Groq can be forwarded verbatim.
+#:
+#: Model verified present and vision-capable by querying OpenRouter's own
+#: catalogue, not from memory: input_modalities includes "image" and both
+#: prompt and completion price are zero.
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+_OPENROUTER_MODEL = os.getenv("OPENROUTER_VISION_MODEL",
+                              "google/gemma-4-31b-it:free")
+
 #: Paid providers are OFF unless explicitly allowed. A valid key sitting in .env
 #: is not consent to spend money — the Anthropic key here is exactly that case,
 #: and if credit ever lands on it for something else GIL must not quietly start
@@ -200,6 +214,38 @@ def _read_with_gemini(text: str, b64: str, max_tokens: int, timeout: int):
         return (True, out, "") if out else (False, "", "Gemini returned nothing")
     except Exception as exc:
         return False, "", f"Gemini {exc.__class__.__name__}"
+
+
+def _read_with_openrouter(text: str, b64: str, max_tokens: int, timeout: int):
+    """OpenRouter's free tier. Same wire format as Groq, so the message that
+    was built for Groq is forwarded unchanged."""
+    key = os.getenv("OPENROUTER_API_KEY", "")
+    if not key:
+        return False, "", ""
+    try:
+        r = requests.post(_OPENROUTER_URL, timeout=timeout,
+                          headers={"Authorization": f"Bearer {key}",
+                                   "Content-Type": "application/json",
+                                   # OpenRouter asks callers to identify
+                                   # themselves; it also improves rate limits.
+                                   "X-Title": "G.I.L."},
+                          json={"model": _OPENROUTER_MODEL,
+                                "max_tokens": max_tokens,
+                                "messages": image_message(text or
+                                                          "Describe this image.",
+                                                          b64)})
+        if r.status_code != 200:
+            msg = ""
+            try:
+                msg = (r.json().get("error", {}) or {}).get("message", "")
+            except Exception:
+                pass
+            return False, "", f"OpenRouter {r.status_code}{': ' + msg[:70] if msg else ''}"
+        out = strip_thinking(
+            r.json()["choices"][0]["message"].get("content") or "")
+        return (True, out, "") if out else (False, "", "OpenRouter returned nothing")
+    except Exception as exc:
+        return False, "", f"OpenRouter {exc.__class__.__name__}"
 
 
 def _read_with_claude(text: str, b64: str, max_tokens: int, timeout: int):
@@ -266,15 +312,16 @@ def _fallback_read(messages, max_tokens, temperature, timeout,
         return False, "", ""          # not an image call — nothing to fall back to
 
     errs = []
-    # Google first, and at full detail: it is free, and its free tier is
-    # bounded by requests per day rather than tokens, so a bigger picture
-    # costs the same quota and reads far better.
-    ok, out, err = _read_with_gemini(text, _encode_for_gemini(source_image) or b64,
-                                     max_tokens, timeout)
-    if ok:
-        return True, out, ""
-    if err:
-        errs.append(err)
+    # Both free providers get the FULL-SIZE picture. Their free tiers are
+    # bounded by requests per day, not tokens, so a bigger image costs the same
+    # quota and reads far better — the opposite of Groq, where area is the bill.
+    big = _encode_for_gemini(source_image) or b64
+    for fn in (_read_with_gemini, _read_with_openrouter):
+        ok, out, err = fn(text, big, max_tokens, timeout)
+        if ok:
+            return True, out, ""
+        if err:
+            errs.append(err)
 
     if _paid_allowed():
         ok, out, err = _read_with_claude(text, b64, max_tokens, timeout)
