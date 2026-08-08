@@ -398,6 +398,32 @@ class WebChat:
         except Exception:
             return {"current": "", "options": [], "auto": False, "lanes": []}
 
+    # ── what GIL is plugged into ─────────────────────────────────────────────
+    def _rpc_connections(self, force=False):
+        try:
+            import connections
+            return {"services": connections.status(force=bool(force))}
+        except Exception as exc:
+            return {"services": [], "error": str(exc)[:120]}
+
+    def _rpc_connect_service(self, service_id=""):
+        """Start a connection. OAuth opens a browser and BLOCKS until the user
+        finishes, so it runs off-thread — holding the RPC would freeze the
+        whole chat behind a window the user is still filling in."""
+        def _go():
+            try:
+                import connections
+                res = connections.connect(service_id)
+                self.add_message(res.get("message", ""), "gil")
+                self._push("gil.connections",
+                           {"services": connections.status(force=True)})
+            except Exception as exc:
+                self.add_message(f"Couldn't connect that — {type(exc).__name__}.",
+                                 "gil")
+        threading.Thread(target=_go, daemon=True,
+                         name=f"GIL-Connect-{service_id}").start()
+        return {"ok": True, "started": True}
+
     def _rpc_set_auto(self, on=False):
         """Auto mode: let GIL pick the brain per message."""
         try:

@@ -30,7 +30,7 @@
   --btn-txt:#0A1014; --code-bg:#14151B; --shadow:rgba(0,0,0,.45);
 }
 [data-theme="light"] {
-  --page:#FAF9F5; --side:#F0EEE5; --surf:#F4F2EB; --input:#FFFFFF;
+  --page:#FAF9F5; --side:#F0EEE5; --surf:#F4F2EB; --input:#F8F9FA;
   --border:#E5E3D9; --hover:#E9E6DA; --sep:#E5E3D9;
   --txt:#141413; --muted:#8D8A7F; --dim:#6E6B60;
   --accent:#0B9CB8; --purple:#7C5CDB; --ok:#16A34A; --fail:#DC2626;
@@ -946,6 +946,51 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
 #usage.warn #usagebtn,#usage.hot #usagebtn{color:var(--txt);}
 #usagetxt{font-variant-numeric:tabular-nums;letter-spacing:.01em;}
 
+/* ── connections: what GIL is plugged into ─────────────────────────────────
+   Sits with the brain picker and the usage ring because it answers the same
+   kind of question — not "what shall I say" but "what can this thing do". */
+#connbtn .cplug{width:7px;height:7px;border-radius:50%;flex:0 0 auto;
+  background:var(--ok,#16A34A);box-shadow:0 0 7px var(--ok,#16A34A);}
+#conns.some #connbtn .cplug{background:#FBBF24;box-shadow:0 0 7px #FBBF24;}
+#conns.none #connbtn .cplug{background:var(--muted);box-shadow:none;}
+#connpanel{display:none;position:absolute;bottom:calc(100% + 8px);left:0;
+  z-index:60;width:370px;max-height:min(62vh,520px);overflow-y:auto;
+  background:var(--input);border:1px solid var(--border);border-radius:14px;
+  box-shadow:0 10px 40px var(--shadow),0 0 0 1px rgba(0,0,0,.2);
+  animation:rise .14s ease both;scrollbar-width:thin;}
+#connpanel.on{display:block;}
+#connpanel .chead{position:sticky;top:0;background:var(--input);z-index:1;
+  padding:12px 15px 9px;border-bottom:1px solid var(--border);
+  font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);display:flex;justify-content:space-between;}
+#connpanel .crow{display:flex;gap:12px;align-items:flex-start;padding:12px 15px;
+  border-bottom:1px solid rgba(255,255,255,.035);}
+#connpanel .crow:last-child{border-bottom:0;}
+#connpanel .cdot{width:9px;height:9px;border-radius:50%;margin-top:5px;
+  flex:0 0 9px;background:var(--svc);}
+#connpanel .crow.off  .cdot{background:transparent;
+  box-shadow:inset 0 0 0 1.5px var(--muted);}
+#connpanel .crow.on   .cdot{box-shadow:0 0 9px var(--svc);}
+#connpanel .crow.broken .cdot{background:#F87171;box-shadow:0 0 9px #F87171;}
+#connpanel .cmain{flex:1;min-width:0;}
+#connpanel .cname{font-size:13.5px;color:var(--txt);font-weight:600;
+  display:flex;align-items:center;gap:8px;}
+#connpanel .cstate{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+  font-weight:700;padding:1.5px 6px;border-radius:4px;}
+#connpanel .crow.on     .cstate{background:rgba(22,163,74,.15);color:#4ADE80;}
+#connpanel .crow.off    .cstate{background:var(--hover);color:var(--muted);}
+#connpanel .crow.broken .cstate{background:rgba(248,113,113,.14);color:#F87171;}
+#connpanel .cdoes{font-size:11.5px;color:var(--muted);line-height:1.5;
+  margin-top:3px;}
+#connpanel .cdetail{font-size:11px;color:var(--dim);margin-top:3px;}
+#connpanel .cgo{margin-top:7px;font-size:11.5px;padding:5px 11px;border-radius:8px;
+  border:1px solid var(--border);background:transparent;color:var(--txt);
+  cursor:pointer;font-family:inherit;transition:background .15s,border-color .15s;}
+#connpanel .cgo:hover{background:var(--hover);border-color:var(--accent);}
+#connpanel .cgo:disabled{opacity:.5;cursor:default;}
+#connpanel .cfoot{padding:11px 15px;font-size:11px;color:var(--muted);
+  border-top:1px solid var(--border);line-height:1.55;}
+
 /* popovers rise from the control, never cover the input */
 #modelmenu,#usagepanel{display:none;position:absolute;bottom:calc(100% + 8px);
   z-index:60;background:var(--input);border:1px solid var(--border);
@@ -1171,6 +1216,13 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
             <span class="mdot"></span><span id="modelname">…</span><span class="mcar">⌄</span>
           </button>
           <div id="modelmenu"></div>
+        </div>
+        <div id="conns">
+          <button id="connbtn" onclick="gil.toggleConns(event)"
+                  title="What GIL is connected to">
+            <span class="cplug"></span><span id="conncount">…</span>
+          </button>
+          <div id="connpanel"></div>
         </div>
         <div id="usage">
           <button id="usagebtn" onclick="gil.toggleUsage(event)"
@@ -2092,6 +2144,63 @@ const gil = {
           + "Resets at midnight."}</div>`;
   },
 
+  /* ── what GIL is plugged into ─────────────────────────────────────────── */
+  _conns: null,
+  connections(info) {
+    this._conns = info || {services: []};
+    const rows = this._conns.services || [];
+    const on = rows.filter(r => r.state === "on").length;
+    const wrap = $("conns");
+    wrap.className = !rows.length ? "" :
+      on === rows.length ? "" : on ? "some" : "none";
+    $("conncount").textContent = rows.length ? `${on}/${rows.length}` : "—";
+    $("connbtn").title = rows.length
+      ? `${on} of ${rows.length} connected` : "Connections";
+    if ($("connpanel").classList.contains("on")) this.renderConns();
+  },
+
+  toggleConns(ev) {
+    if (ev) ev.stopPropagation();
+    const p = $("connpanel"), on = p.classList.toggle("on");
+    $("connbtn").classList.toggle("on", on);
+    ["modelmenu", "usagepanel"].forEach(id => $(id).classList.remove("on"));
+    ["modelbtn", "usagebtn"].forEach(id => $(id).classList.remove("on"));
+    if (on) { this.renderConns(); api("connections").then(i => this.connections(i)); }
+  },
+
+  renderConns() {
+    const p = $("connpanel");
+    const rows = (this._conns && this._conns.services) || [];
+    if (!rows.length) {
+      p.innerHTML = `<div class="chead"><span>Connections</span></div>
+        <div class="cfoot">Checking what GIL can reach…</div>`;
+      return;
+    }
+    const on = rows.filter(r => r.state === "on").length;
+    const WORD = {on: "connected", off: "not connected", broken: "needs attention"};
+    p.innerHTML =
+      `<div class="chead"><span>Connections</span><span>${on}/${rows.length} live</span></div>` +
+      rows.map(r => `
+        <div class="crow ${esc(r.state)}" style="--svc:${esc(r.hue || "#7DDBFF")}">
+          <div class="cdot"></div>
+          <div class="cmain">
+            <div class="cname">${esc(r.name)}
+              <span class="cstate">${WORD[r.state] || esc(r.state)}</span></div>
+            <div class="cdoes">${esc(r.does || "")}</div>
+            <div class="cdetail">${esc(r.detail || "")}</div>
+            ${r.state === "on" ? "" :
+              `<button class="cgo" data-id="${esc(r.id)}">
+                 ${r.state === "broken" ? "Reconnect" : "Connect"}</button>`}
+          </div>
+        </div>`).join("") +
+      `<div class="cfoot">Checked just now, not remembered — a saved sign-in
+        can expire without telling you.</div>`;
+    p.querySelectorAll(".cgo").forEach(b => b.onclick = () => {
+      b.disabled = true; b.textContent = "Opening…";
+      api("connect_service", b.dataset.id);
+    });
+  },
+
   /* ── which brain GIL thinks with ──────────────────────────────────────── */
   _models: null,
   setModels(info) {
@@ -2540,6 +2649,7 @@ const gil = {
     {cmd: "/tasks",    desc: "Status of background tasks",                kind: "meta"},
     {cmd: "/workspace",desc: "Float your windows in space (hand or mouse)", kind: "arg"},
     {cmd: "/spatial",  desc: "Hand control — on · off · tutorial",        kind: "arg"},
+    {cmd: "/connect",  desc: "See and manage what GIL is connected to",   kind: "meta"},
     {cmd: "/mobile",   desc: "Use GIL on your phone (scan a QR code)",    kind: "meta"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
@@ -2724,6 +2834,13 @@ const gil = {
     const sp = text.indexOf(" ");
     const cmd = (sp < 0 ? text : text.slice(0, sp)).toLowerCase();
     const arg = sp < 0 ? "" : text.slice(sp + 1).trim();
+    // Connections live entirely in the panel — there is nothing useful to say
+    // in chat that the panel does not show better, so /connect just opens it.
+    if (cmd === "/connect") {
+      $("inp").value = ""; this.grow();
+      if (!$("connpanel").classList.contains("on")) this.toggleConns();
+      return;
+    }
     const known = this.COMMANDS.find(c => c.cmd === cmd);
     if (!known) {   // unknown /command → just send as text
       $("inp").value = ""; this.grow();
@@ -2989,6 +3106,7 @@ function boot() {
     if (st.current) gil.loadMessages(st.current);
     // start the ring populated rather than waiting for the first API call
     api("token_meter").then(m => m && gil.tokenMeter(m));
+    api("connections").then(c => c && gil.connections(c));
   });
 }
 
@@ -2999,6 +3117,10 @@ document.addEventListener("click", ev => {
     $("modelmenu").classList.remove("on");
     $("modelbtn").classList.remove("on");
   }
+  if (!ev.target.closest("#conns")) {
+    $("connpanel").classList.remove("on");
+    $("connbtn").classList.remove("on");
+  }
   if (!ev.target.closest("#usage")) {
     $("usagepanel").classList.remove("on");
     $("usagebtn").classList.remove("on");
@@ -3006,8 +3128,8 @@ document.addEventListener("click", ev => {
 });
 document.addEventListener("keydown", ev => {
   if (ev.key !== "Escape") return;
-  ["modelmenu", "usagepanel"].forEach(id => $(id).classList.remove("on"));
-  ["modelbtn", "usagebtn"].forEach(id => $(id).classList.remove("on"));
+  ["modelmenu", "usagepanel", "connpanel"].forEach(id => $(id).classList.remove("on"));
+  ["modelbtn", "usagebtn", "connbtn"].forEach(id => $(id).classList.remove("on"));
 });
 
 boot();

@@ -837,6 +837,18 @@ class GILBrain:
             camera_state=camera_state,
         ) + project_block + extra_str
 
+        # What GIL is ACTUALLY plugged into, checked live. Without this the
+        # brain guesses at its own reach, and it guesses low: asked to look at
+        # a Google Calendar that was connected and returning real events, it
+        # replied that it could not do that.
+        try:
+            import connections
+            note = connections.capability_note()
+            if note:
+                system += "\n\n━━ WHAT YOU ARE CONNECTED TO ━━\n" + note
+        except Exception:
+            log.debug("capability note unavailable", exc_info=True)
+
         # Typed chat deserves full, rich answers - the 1-3 sentence rule
         # exists for spoken TTS replies only.
         if mode == "chat":
