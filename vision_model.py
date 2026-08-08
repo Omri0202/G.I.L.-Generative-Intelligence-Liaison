@@ -151,12 +151,22 @@ _CLAUDE_MODEL = os.getenv("CLAUDE_VISION_MODEL", "claude-haiku-4-5-20251001")
 #: models, and it speaks the same OpenAI-shaped API as Groq, so the message
 #: built for Groq can be forwarded verbatim.
 #:
-#: Model verified present and vision-capable by querying OpenRouter's own
-#: catalogue, not from memory: input_modalities includes "image" and both
-#: prompt and completion price are zero.
+#: Model chosen by testing every free vision-capable model in OpenRouter's live
+#: catalogue on the job GIL actually needs — reading an exception, a filename
+#: and a line number off a screenshot. Results:
+#:
+#:   openrouter/free                     15.5s  all three, plus the code line
+#:   google/gemma-4-26b-a4b-it:free      27.9s  all three
+#:   nvidia/nemotron-3-nano-omni-…:free  46.2s  all three
+#:   google/gemma-4-31b-it:free         163.4s  unusable
+#:   nvidia/nemotron-3.5-content-safety  —      a safety classifier, not a reader
+#:   google/lyria-3-*                    —      402, not actually free here
+#:
+#: openrouter/free is an auto-router across the free pool, which matters as much
+#: as the speed: a single free model returns 429 the moment it is busy, and this
+#: steers around whichever one is currently contended.
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_MODEL = os.getenv("OPENROUTER_VISION_MODEL",
-                              "google/gemma-4-31b-it:free")
+_OPENROUTER_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "openrouter/free")
 
 #: Paid providers are OFF unless explicitly allowed. A valid key sitting in .env
 #: is not consent to spend money — the Anthropic key here is exactly that case,
