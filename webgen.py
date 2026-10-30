@@ -369,7 +369,7 @@ def _generate_groq(user_prompt: str, api_keys: list[str]) -> str:
     import time as _t
     import requests as _rq
     _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-    _MODELS   = ["llama-3.3-70b-versatile", "gemma2-9b-it", "llama-3.1-8b-instant"]
+    _MODELS   = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]   # all three old ones were retired in 2026
     messages  = [{"role": "system", "content": _SYSTEM},
                  {"role": "user",   "content": user_prompt}]
     # Two rounds: if every model is rate-limited, wait and try once more —
@@ -381,7 +381,7 @@ def _generate_groq(user_prompt: str, api_keys: list[str]) -> str:
         for model in _MODELS:
             print(f"[G.I.L. WEBGEN] Trying {model}...")
             payload = {"model": model, "messages": messages,
-                       "max_tokens": 14000 if model.startswith("llama-3.3") else 8000,
+                       "max_tokens": 14000 if "gpt-oss-120b" in model else 8000,
                        "temperature": 0.7}
             for key in api_keys:
                 hdrs = {"Authorization": f"Bearer {key}",
@@ -672,7 +672,7 @@ def classify_intent(description: str) -> str:
     for key in _groq_keys():
         try:
             r = _rq.post("https://api.groq.com/openai/v1/chat/completions",
-                         json={"model": "llama-3.1-8b-instant",
+                         json={"model": "qwen/qwen3.8-27b",
                                "messages": [{"role": "user", "content": prompt}],
                                "temperature": 0, "max_tokens": 4},
                          headers={"Authorization": f"Bearer {key}",

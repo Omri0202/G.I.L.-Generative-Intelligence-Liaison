@@ -1790,7 +1790,7 @@ class ChatWindow(ctk.CTkToplevel):
             from gil_brain import GROQ_MODEL
             badges.append(("robot", GROQ_MODEL[:18], self._ACCENT, "#0D0B2E", "#1E1840", True))
         except Exception:
-            badges.append(("robot", "llama-3.1", self._ACCENT, "#0D0B2E", "#1E1840", True))
+            badges.append(("robot", "gpt-oss", self._ACCENT, "#0D0B2E", "#1E1840", True))
 
         # Dev mode
         try:
@@ -3167,7 +3167,7 @@ class ChatWindow(ctk.CTkToplevel):
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json={
-                    "model": "llama-3.1-8b-instant",
+                    "model": "qwen/qwen3.8-27b",
                     "messages": [
                         {"role": "system", "content":
                             "Given this exchange, suggest exactly 3 short, natural follow-up "

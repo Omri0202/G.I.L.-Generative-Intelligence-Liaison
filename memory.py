@@ -5,7 +5,7 @@ Persistent memory system — SQLite + FTS5 full-text search.
 Three layers:
 1. Memories   — facts, preferences, decisions GIL extracts from conversation
 2. Session    — last task, last active (lightweight KV in same DB)
-3. Extraction — background Ollama call after every turn to learn automatically
+3. Extraction — background Groq call after every turn to learn automatically
 """
 
 import json
@@ -326,7 +326,7 @@ def _run_extraction(user_text: str, gil_response: str) -> None:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "llama-3.1-8b-instant",
+                "model": "qwen/qwen3.8-27b",
                 "messages": [
                     {"role": "system", "content": "You extract memorable facts from conversations. Return only a JSON array, nothing else."},
                     {"role": "user", "content": prompt},

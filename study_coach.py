@@ -32,14 +32,15 @@ def _groq_json(messages: list, max_tokens: int = 3000) -> dict | None:
     import requests
     keys = [k for k in (os.getenv("GROQ_API_KEY", ""),
                         os.getenv("GROQ_API_KEY_2", "")) if k]
-    for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+    for model in ("qwen/qwen3.8-27b", "openai/gpt-oss-20b"):
         for key in keys:
             try:
                 r = requests.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     json={"model": model, "messages": messages,
                           "temperature": 0.4, "max_tokens": max_tokens,
-                          "response_format": {"type": "json_object"}},
+                          "response_format": {"type": "json_object"},
+                          **({"reasoning_effort": "low"} if "gpt-oss" in model else {})},
                     headers={"Authorization": f"Bearer {key}",
                              "Content-Type": "application/json"},
                     timeout=60)

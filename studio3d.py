@@ -24,7 +24,7 @@ if not _PYTHONW.exists():
     _PYTHONW = Path(sys.executable)
 
 GROQ_URL      = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_3D_MODEL = "deepseek-r1-distill-llama-70b"
+GROQ_3D_MODEL = "openai/gpt-oss-120b"   # deepseek-r1-distill was retired; the strongest coder left
 
 _VENDOR_DIR = Path(__file__).parent / "data" / "vendor"
 _LIBS = {

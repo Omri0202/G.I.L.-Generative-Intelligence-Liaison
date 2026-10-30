@@ -23,8 +23,9 @@ def test_fallback_list_excludes_the_decommissioned_gemma():
 
 def test_fallback_list_is_non_empty_and_reasonable():
     assert gb._FALLBACK_MODELS
-    # llama-3.3-70b is the strong text fallback
-    assert any("llama-3.3-70b" in m for m in gb._FALLBACK_MODELS)
+    # a fallback identical to the default brain shares its rate limit, so it
+    # can't rescue a rate-limited reply. Live-ness: tests/test_models_live.py
+    assert gb._SMART_MODEL not in gb._FALLBACK_MODELS
 
 
 # ── parser salvages a prose reply instead of dropping it to empty ─────────────

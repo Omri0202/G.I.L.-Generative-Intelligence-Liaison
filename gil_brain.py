@@ -1,7 +1,7 @@
 """
-gil_brain.py â€” Project G.I.L.
-Cognitive core powered by Ollama (local Mistral 7B).
-Runs entirely on your machine â€” no API key, no internet required for AI.
+gil_brain.py — Project G.I.L.
+Cognitive core. Talks to Groq (gpt-oss-120b by default) with key rotation,
+routing between models, and fallbacks when a model is busy or retired.
 """
 
 import json
@@ -102,13 +102,12 @@ GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions"
 _session = requests.Session()
 _session.headers.update({"Content-Type": "application/json"})
 
-# Fallback models tried in order when all keys are 429'd on the primary model.
+# Fallback models, tried in order when the primary is rate-limited or retired.
 # Each model has its own independent rate-limit quota on Groq.
-# NOTE: these MUST be models the account actually serves. gemma2-9b-it was
-# decommissioned by Groq and now 400s — and the fallback loop was accepting that
-# 400 as a "success", so a rate-limited Hebrew query dead-ended with no answer.
-_FALLBACK_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-                    "openai/gpt-oss-20b"]
+# NOTE: these MUST be models the account actually serves. Groq retires models
+# without notice — gemma2-9b-it, then both Llamas in 2026 — and a dead
+# fallback is no fallback. model_health.py checks this list at startup.
+_FALLBACK_MODELS = ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
 
 
 def _load_model() -> str:
@@ -129,20 +128,15 @@ GROQ_MODEL = _load_model()
 # /v1/models rather than written from memory. gemma2-9b-it and
 # mixtral-8x7b-32768 are deliberately ABSENT: both were still offered by the
 # desktop settings menu and neither is served any more, so choosing either
-# silently broke every reply with a 400.
+# silently broke every reply with a 400. Groq then retired Llama 3.1 8B, Llama
+# 3.3 70B, compound and qwen3.6 in 2026, which emptied half of this list.
 MODELS = [
     {"id": "openai/gpt-oss-120b",     "name": "GPT-OSS 120B",
      "note": "Strongest. The default brain.",              "tag": "default"},
     {"id": "openai/gpt-oss-20b",      "name": "GPT-OSS 20B",
      "note": "Same family, quicker to first word.",        "tag": "fast"},
-    {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B",
-     "note": "Strong all-rounder with a different voice.", "tag": ""},
-    {"id": "llama-3.1-8b-instant",    "name": "Llama 3.1 8B",
-     "note": "Fastest. Best for short commands.",          "tag": "fast"},
-    {"id": "groq/compound",           "name": "Compound",
-     "note": "Searches the web and runs code on its own.", "tag": "tools"},
-    {"id": "qwen/qwen3.6-27b",        "name": "Qwen3.6 27B",
-     "note": "Reads images as well as text.",              "tag": "vision"},
+    {"id": "qwen/qwen3.8-27b",        "name": "Qwen3.8 27B",
+     "note": "No hidden reasoning, a different voice, reads images.", "tag": "vision"},
 ]
 MODEL_IDS = {m["id"] for m in MODELS}
 
@@ -928,6 +922,11 @@ class GILBrain:
         # and short (900-token) replies aren't starved by reasoning tokens.
         if "gpt-oss" in chosen_model:
             payload["reasoning_effort"] = "low"
+        # Live search deliberately does NOT happen here. With browser_search on
+        # this ~5.7K-token prompt, gpt-oss skipped the tool about half the time
+        # and the search results pushed requests over the 8K-tokens-a-minute
+        # limit (one answer took 88 s). Current questions go to web_research,
+        # and research.py searches with a short prompt of its own.
         # Hard budget: if the whole request is still too big, drop the oldest
         # history turns until it fits (keeps the system prompt + newest turns).
         _MAX_CHARS = 90000
@@ -950,6 +949,7 @@ class GILBrain:
         _response_saved = False
         # Groq is the one and only brain (Anthropic removed — costs money).
         raw = ""
+        answered_by = chosen_model
         try:
             if not raw:
                 with _groq_key_lock:
@@ -981,10 +981,20 @@ class GILBrain:
                     log.warning("Groq key rate-limited, rotating")
                     resp = _try_groq(GROQ_KEYS[_cur_idx % len(GROQ_KEYS)])
 
-                if resp.status_code == 429:
-                    log.warning("All Groq keys rate-limited — trying fallback models")
+                # A 404, or a 400 naming the model, means Groq no longer serves
+                # it. No key rotation or retry fixes that: retrying re-routed to
+                # the same dead model six times, and the user waited ~2.5 min
+                # for "unreachable". Go straight to the fallbacks instead.
+                model_gone = resp.status_code == 404 or (
+                    resp.status_code == 400 and "model" in resp.text.lower())
+                if resp.status_code == 429 or model_gone:
+                    log.warning("%s — trying fallback models",
+                                f"{chosen_model} is unavailable ({resp.status_code})"
+                                if model_gone else "All Groq keys rate-limited")
                     fallback_resp = None
                     for fb_model in _FALLBACK_MODELS:
+                        if fb_model == chosen_model:
+                            continue          # already failed above
                         for key in GROQ_KEYS:
                             fb_payload = {**payload, "model": fb_model}
                             # Non-gpt-oss models reject reasoning_effort (400).
@@ -1011,6 +1021,12 @@ class GILBrain:
                             break
                         if fallback_resp is not None:
                             break
+                    if fallback_resp is None and model_gone:
+                        return {"speech": f"The model I'm set to use, {chosen_model}, "
+                                          "isn't available any more and none of my "
+                                          "fallbacks answered. Pick another brain in "
+                                          "the model menu.",
+                                "action": None, "target": None, "report": None}
                     if fallback_resp is None:
                         # Silent recovery: wait out the rate-limit window and
                         # retry — user sees the typing indicator, not an error.
@@ -1028,6 +1044,9 @@ class GILBrain:
                 resp.raise_for_status()
                 resp_json = resp.json()
                 raw = resp_json["choices"][0]["message"]["content"].strip()
+                # Log who ANSWERED, not who was routed to: after a fallback
+                # those differ, and the health log claimed a retired model was ok.
+                answered_by = resp_json.get("model") or chosen_model
                 # Truncation is why every long answer was arriving through the
                 # "partial parse" salvage path: the reply is cut mid-sentence,
                 # so the JSON string never closes and the parse fails. That was
@@ -1088,7 +1107,7 @@ class GILBrain:
         log.debug("raw response: %s", raw[:200])
         try:
             _payload_est = (len(system) + sum(len(m["content"]) for m in self.history)) // 4
-            _health("ok", chosen_model, _payload_est)
+            _health("ok", answered_by, _payload_est)
         except Exception:
             pass
         parsed = _parse_json(raw)
@@ -1268,7 +1287,7 @@ class GILBrain:
                    "messages": [{"role": "system", "content": sys},
                                 {"role": "user", "content": usr}],
                    "temperature": 0.2, "max_tokens": 300}
-        for model in (_SMART_MODEL, "llama-3.1-8b-instant"):
+        for model in (_SMART_MODEL, "qwen/qwen3.8-27b"):
             payload["model"] = model
             for key in GROQ_KEYS:
                 try:
@@ -1306,7 +1325,7 @@ class GILBrain:
             for label, status, detail in results
         )
         payload = {
-            "model": "llama-3.1-8b-instant",
+            "model": "qwen/qwen3.8-27b",
             "messages": [
                 {"role": "system", "content":
                  "You are G.I.L., a JARVIS-style assistant. Summarize the mission "

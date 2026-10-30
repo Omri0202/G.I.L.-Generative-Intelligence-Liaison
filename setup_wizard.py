@@ -445,7 +445,7 @@ class SetupWizard(ctk.CTk):
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {key}",
                              "Content-Type": "application/json"},
-                    json={"model": "llama-3.1-8b-instant",
+                    json={"model": "qwen/qwen3.8-27b",
                           "messages": [{"role": "user", "content": "hi"}],
                           "max_tokens": 5},
                     timeout=8,

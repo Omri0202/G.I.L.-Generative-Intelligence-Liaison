@@ -85,15 +85,76 @@ def _search_tavily(query: str, n: int) -> list[dict]:
             for it in r.json().get("results", []) if it.get("url")]
 
 
+_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def _search_live(query: str, n: int) -> list[dict]:
+    """A live web search through Groq: gpt-oss with the browser_search tool,
+    run on Groq's side and free with the same key. This is what makes "price
+    of Bitcoin right now" come back with today's number and its source,
+    instead of the figure in a days-old news article.
+
+    The prompt is short on purpose. Inside GIL's ~5.7K-token brain prompt the
+    model skipped the tool about half the time, and prompt plus search results
+    overflowed the 8K-tokens-a-minute limit. On its own like this it searched
+    every time.
+
+    Returns one result whose "text" is already the answer, so _gather doesn't
+    fetch a JavaScript-heavy price page that would come back unreadable."""
+    keys = [k for k in (os.getenv("GROQ_API_KEY", ""),
+                        os.getenv("GROQ_API_KEY_2", "")) if k]
+    today = datetime.now().strftime("%B %d, %Y")
+    for key in keys:
+        r = requests.post(
+            _GROQ_URL, timeout=60,
+            headers={"Authorization": f"Bearer {key}",
+                     "Content-Type": "application/json"},
+            json={"model": "openai/gpt-oss-20b", "reasoning_effort": "low",
+                  "max_tokens": 1500, "tools": [{"type": "browser_search"}],
+                  "messages": [
+                      {"role": "system", "content":
+                       f"Today is {today}. Search the web and report the facts "
+                       "that answer the question: numbers, dates and names "
+                       "exactly as the sources give them, in plain sentences."},
+                      {"role": "user", "content": query}]})
+        if r.status_code == 429:
+            continue
+        r.raise_for_status()
+        body = r.json()
+        try:
+            import token_meter
+            u = body.get("usage") or {}
+            token_meter.record(body.get("model", "openai/gpt-oss-20b"),
+                               int(u.get("total_tokens") or 0),
+                               int(u.get("prompt_tokens") or 0),
+                               int(u.get("completion_tokens") or 0))
+        except Exception:
+            pass
+        msg = (body.get("choices") or [{}])[0].get("message", {})
+        answer = re.sub(r"【[^】]*】", "", msg.get("content") or "").strip()
+        sources = [it for tool in (msg.get("executed_tools") or [])
+                   for it in ((tool.get("search_results") or {}).get("results") or [])
+                   if it.get("url")]
+        if not answer or not sources:
+            return []        # it answered without searching: not a live result
+        cited = "\n".join(f"- {s.get('title', '')[:100]} ({s['url']})"
+                          for s in sources[:5])
+        return [{"title": "Live web search", "url": sources[0]["url"],
+                 "snippet": answer[:400], "text": f"{answer}\n\nFound on:\n{cited}"}]
+    return []
+
+
 def _search(query: str, n: int = 6) -> list[dict]:
-    """Live web results: Tavily (best) → Google News RSS → Wikipedia."""
+    """Live web results: Groq browser_search (live, cited) → Tavily → Google
+    News RSS → Wikipedia. A live answer is enough on its own: padding it with
+    news articles would hand the writer older, conflicting figures."""
     out = []
-    for fn in (_search_tavily, _search_google_news, _search_wikipedia):
+    for fn in (_search_live, _search_tavily, _search_google_news, _search_wikipedia):
         try:
             out += fn(query, n)
         except Exception as exc:
             log.warning("search via %s failed: %s", fn.__name__, exc)
-        if len(out) >= n:
+        if len(out) >= n or (fn is _search_live and out):
             break
     return out[:n + 2]
 
@@ -118,13 +179,14 @@ def _fetch_text(url: str, cap: int = 3500) -> str:
 def _groq(messages: list, max_tokens: int = 1400) -> str | None:
     keys = [k for k in (os.getenv("GROQ_API_KEY", ""),
                         os.getenv("GROQ_API_KEY_2", "")) if k]
-    for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+    for model in ("qwen/qwen3.8-27b", "openai/gpt-oss-20b"):
         for key in keys:
             try:
                 r = requests.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     json={"model": model, "messages": messages,
-                          "temperature": 0.25, "max_tokens": max_tokens},
+                          "temperature": 0.25, "max_tokens": max_tokens,
+                          **({"reasoning_effort": "low"} if "gpt-oss" in model else {})},
                     headers={"Authorization": f"Bearer {key}",
                              "Content-Type": "application/json"},
                     timeout=30)
@@ -159,7 +221,7 @@ def _gather(query: str, want: int = 5) -> tuple[list, list]:
             rid = activity.start("web", f"Reading {res['url'][:70]}")
         except Exception:
             rid = None
-        body = _fetch_text(res["url"])
+        body = res.get("text") or _fetch_text(res["url"])   # live results come pre-read
         if not body and res.get("snippet"):
             body = res["snippet"]        # RSS/description fallback
         if body:

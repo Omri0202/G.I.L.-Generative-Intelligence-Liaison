@@ -43,13 +43,14 @@ class Lane:
 
 
 #: Which model serves each lane, and how it is described to the user.
-#: Latencies were measured on this account (median of 3, streaming).
+#: Latencies were measured on this account (median of 3, streaming), and
+#: re-measured 2026-10-30 after Groq retired the Llamas, qwen3.6 and compound.
 LANES = {
     Lane.FAST: {
-        "model": "llama-3.1-8b-instant", "label": "Quick answer",
-        "hue": "#4ED8C0", "ttft": 401, "rate": 864,
-        "why": "Fastest sustained output by a wide margin — right when the "
-               "answer is short and quality headroom is irrelevant.",
+        "model": "openai/gpt-oss-20b", "label": "Quick answer",
+        "hue": "#4ED8C0", "ttft": 467, "rate": 801,
+        "why": "The quickest model left that answers well, at low reasoning "
+               "effort. Llama 3.1 8B held this lane until Groq retired it.",
     },
     Lane.BALANCED: {
         "model": "openai/gpt-oss-20b", "label": "Balanced",
@@ -64,26 +65,26 @@ LANES = {
                "fastest to first token.",
     },
     Lane.LONGFORM: {
-        "model": "llama-3.3-70b-versatile", "label": "Long-form",
-        "hue": "#F0A868", "ttft": 527, "rate": 585,
-        "why": "A genuinely different prose voice from the gpt-oss family.",
+        "model": "qwen/qwen3.8-27b", "label": "Long-form",
+        "hue": "#F0A868", "ttft": 640, "rate": 498,
+        "why": "A different prose voice from the gpt-oss family, no hidden "
+               "reasoning eating the length budget, and a 131K context.",
     },
     Lane.VISION: {
-        "model": "qwen/qwen3.6-27b", "label": "Reading the image",
-        "hue": "#6FCFF0", "ttft": 395, "rate": 472,
-        "why": "The only model here that reads images. Also the fastest first "
-               "token on the account.",
+        "model": "qwen/qwen3.8-27b", "label": "Reading the image",
+        "hue": "#6FCFF0", "ttft": 640, "rate": 498,
+        "why": "The only model here that reads images.",
     },
     Lane.TOOLS: {
-        "model": "groq/compound-mini", "label": "Looking it up",
-        "hue": "#7BD88F", "ttft": 798, "rate": 440,
-        "why": "Searches the web and runs code itself, replacing a multi-step "
-               "agent loop — so it wins end to end despite the slowest start.",
+        "model": "openai/gpt-oss-20b", "label": "Looking it up",
+        "hue": "#7BD88F", "ttft": 467, "rate": 801,
+        "why": "Hands the question to live web research (research.py, which "
+               "searches through Groq's browser_search) instead of answering "
+               "from memory.",
     },
 }
-#: groq/compound is deliberately ABSENT. It returned no content in streaming
-#: mode across three attempts; a lane that silently answers nothing is worse
-#: than a missing lane. Re-add once its tool-step response shape is handled.
+#: groq/compound and compound-mini were retired by Groq in 2026. Their web
+#: search now lives in research.py, which uses gpt-oss's browser_search.
 
 DEFAULT_LANE = Lane.BALANCED
 

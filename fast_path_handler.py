@@ -1072,6 +1072,11 @@ _LIVE_SIGNALS = (
     "right now", "this week", "this season", "this year", "released",
     "election", "who won", "did they win", "fixture", "injur",
     "signed", "signing", "signings", "sold", "loaned", "sacked", "hired",
+    # Current conditions and prices. Answering these from memory, the brain
+    # invented a Tel Aviv forecast and quoted a years-old Bitcoin price.
+    "weather", "forecast", "headlines", "top headline", "bitcoin",
+    "exchange rate", "מזג האוויר", "מזג אוויר", "תחזית", "חדשות", "כותרות",
+    "ביטקוין", "שער הדולר", "שער היורו", "מי ניצח",
 )
 _FOLLOWUP_WORDS = ("they", "them", "their", "he", "she", "it", "that",
                    "those", "and what", "what about", "how about")
@@ -1094,6 +1099,9 @@ _QUESTION_WORDS = (
     "is ", "are ", "was ", "were ", "do ", "does ", "did ", "can ", "could ",
     "should ", "will ", "would ", "tell me", "look up", "search", "find out",
     "do you know", "any news", "what's the", "whats the", "give me the latest",
+    # Hebrew: without these a spoken Hebrew question (no "?") read as a
+    # statement, so it never reached live research.
+    "מה ", "מי ", "מתי", "איפה", "כמה", "איך", "למה", "האם", "תגיד לי", "ספר לי",
 )
 
 

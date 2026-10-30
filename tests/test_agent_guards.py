@@ -84,10 +84,13 @@ def test_reviewer_degrades_gracefully_without_keys(monkeypatch):
                             {"path": "x.py", "old": "a", "new": "b"})
     assert out["verdict"] == "approve" and "unavailable" in out["reason"]
 
-def test_agent_models_defaults_to_safe_fallback():
+def test_agent_models_end_in_fallbacks_from_another_pool():
+    # Naming specific models here is what let this test keep passing while
+    # Groq retired every one of them. Check the shape instead; whether the
+    # names are still served is tests/test_models_live.py's job.
     models = ca._agent_models()
-    assert models[-1] == "llama-3.1-8b-instant"
-    assert "llama-3.3-70b-versatile" in models
+    assert models[-len(ca._FALLBACK_MODELS):] == ca._FALLBACK_MODELS
+    assert len(set(ca._FALLBACK_MODELS)) == len(ca._FALLBACK_MODELS) >= 2
 
 
 # ── search must actually work: multi-line patterns + filename help ────────────

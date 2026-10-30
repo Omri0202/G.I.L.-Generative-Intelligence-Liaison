@@ -760,7 +760,7 @@ def web_research(query: str) -> str:
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.1-8b-instant",
+                "model": "qwen/qwen3.8-27b",
                 "messages": [
                     {"role": "system", "content": "Summarize the key finding in 2 short spoken sentences. No markdown, no bullets. Conversational."},
                     {"role": "user", "content": f"Query: {query}\n\nWeb results:\n{combined}"},

@@ -64,19 +64,25 @@ def _keys() -> list[str]:
 
 
 def analyze(error_text: str, screen_context: str = "") -> dict | None:
-    """Ask the 70B model to diagnose the error. Returns the parsed dict or None."""
+    """Ask the model to diagnose the error. Returns the parsed dict or None."""
     user = f"ERROR / PROBLEM:\n{error_text.strip()[:2000]}"
     if screen_context:
         user += f"\n\nWHAT'S ON SCREEN RIGHT NOW:\n{screen_context[:1500]}"
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "qwen/qwen3.8-27b",
         "messages": [{"role": "system", "content": _ANALYZE_SYSTEM},
                      {"role": "user",   "content": user}],
         "temperature": 0.2,
         "max_tokens": 700,
     }
-    for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+    for model in ("qwen/qwen3.8-27b", "openai/gpt-oss-20b"):
         payload["model"] = model
+        # gpt-oss spends max_tokens on hidden reasoning before the answer;
+        # low effort keeps the JSON from being starved. qwen has no such field.
+        if "gpt-oss" in model:
+            payload["reasoning_effort"] = "low"
+        else:
+            payload.pop("reasoning_effort", None)
         for key in _keys():
             try:
                 r = requests.post(

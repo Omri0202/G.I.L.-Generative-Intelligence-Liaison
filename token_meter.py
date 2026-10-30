@@ -29,9 +29,9 @@ _lock = threading.Lock()
 LIMITS = {
     "openai/gpt-oss-120b":  {"tpm": 8_000,  "tpd": 500_000},
     "openai/gpt-oss-20b":   {"tpm": 8_000,  "tpd": 500_000},
-    "qwen/qwen3.6-27b":     {"tpm": 8_000,  "tpd": 200_000},
-    "llama-3.3-70b-versatile": {"tpm": 12_000, "tpd": 500_000},
-    "llama-3.1-8b-instant": {"tpm": 6_000,  "tpd": 500_000},
+    # qwen3.8's daily figure is assumed equal to the qwen3.6 it replaced: Groq's
+    # headers report per-minute tokens and daily requests, not daily tokens.
+    "qwen/qwen3.8-27b":     {"tpm": 8_000,  "tpd": 200_000},
 }
 _DEFAULT = {"tpm": 8_000, "tpd": 200_000}
 

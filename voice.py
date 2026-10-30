@@ -201,6 +201,7 @@ def _speak_edge_tts(text: str) -> None:
 # ── ElevenLabs (optional premium) ────────────────────────────────────────────
 
 def _speak_elevenlabs(text: str) -> None:
+    global _el_key_valid
     try:
         from elevenlabs.client import ElevenLabs
         client    = ElevenLabs(api_key=ELEVENLABS_API_KEY)
@@ -226,7 +227,14 @@ def _speak_elevenlabs(text: str) -> None:
             except Exception:
                 pass
     except Exception as exc:
-        log.warning("ElevenLabs error: %s", exc)
+        # A rejected key fails identically on every sentence, so trying it
+        # first each time only delayed speech. Give up on it for the session.
+        if getattr(exc, "status_code", None) in (401, 403) or any(
+                s in str(exc).lower() for s in ("401", "unauthorized", "invalid_api_key")):
+            _el_key_valid = False
+            log.warning("ElevenLabs rejected the API key — using edge-tts for this session")
+        else:
+            log.warning("ElevenLabs error: %s", exc)
         _speak_edge_tts(text)
 
 

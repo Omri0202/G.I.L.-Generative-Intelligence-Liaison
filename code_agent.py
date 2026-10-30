@@ -273,12 +273,11 @@ def _keys() -> list[str]:
 
 
 # The "smart" tier GIL reasons with. Change `agent_model` in data/gil_config.json
-# to try a stronger free Groq model WITHOUT a rebuild — e.g.
-#   "moonshotai/kimi-k2-instruct"   (strong at agentic coding)
-#   "openai/gpt-oss-120b"           (strong general reasoning)
-#   "qwen/qwen3-32b"                (solid, fast)
-# It's always tried FIRST and falls back to the proven Llama models on any error.
-_FALLBACK_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
+# to try another Groq model WITHOUT a rebuild. It's always tried FIRST and
+# falls back to these on any error. Groq retires models without notice — in
+# 2026 it took both Llamas, kimi-k2 and qwen3-32b, which left this list dead —
+# so model_health.py checks it against /v1/models at startup.
+_FALLBACK_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b")
 
 
 def _agent_models() -> tuple[str, ...]:

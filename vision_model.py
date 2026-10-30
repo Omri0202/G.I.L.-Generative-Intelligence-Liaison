@@ -8,14 +8,13 @@ silently (every call 404s), so GIL's whole "Vision" capability was dead while
 still being advertised in the UI. Naming the model once means the next
 decommission is a one-line change here.
 
-Current model: qwen/qwen3.6-27b — at time of writing the only image-capable
-model left on the account. Verified to identify colours it could not have
-guessed and to OCR a traceback (file name + line number + exception) exactly.
+Current model: qwen/qwen3.8-27b — the only image-capable model left on the
+account after Groq retired qwen3.6-27b in 2026 (which, as above, broke vision
+everywhere at once). Verified to read a test image's text and border colour.
 
-IMPORTANT: qwen3.6 is a REASONING model. It emits a <think>…</think> block
-before its answer, so callers must (a) allow a generous max_tokens or the
-budget is spent thinking and the answer is truncated away, and (b) strip the
-block before parsing. `chat()` handles both.
+qwen3.6 reasoned in a <think>…</think> block before answering; qwen3.8 hasn't
+been seen to. `chat()` still allows a generous max_tokens and strips such a
+block, so a reasoning model can be dropped in here without breaking callers.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ log = _get_log("vision")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 #: The vision model. Change here and every vision feature follows.
-MODEL = "qwen/qwen3.6-27b"
+MODEL = "qwen/qwen3.8-27b"
 
 #: Tried in order if MODEL is unavailable (e.g. decommissioned again).
 FALLBACKS: list[str] = []

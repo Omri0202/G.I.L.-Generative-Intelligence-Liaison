@@ -26,6 +26,8 @@ log = _get_log("dev.screen")
 # ── Config ────────────────────────────────────────────────────────────────────
 _INTERVAL    = 30       # seconds between screen checks
 _COOLDOWN    = 90       # don't re-alert for same issue within N seconds
+_MIN_GAP     = 90       # never send the vision model a screen more often than this
+_CHANGED     = 0.02     # share of the screen's fingerprint that must differ to look again
               # vision model: see vision_model.py (single source of truth)
 _GROQ_URL    = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -35,6 +37,8 @@ _last_issue  = ""
 _last_alert  = 0.0
 _speak_fn    = None
 _window_ref  = None
+_last_thumb: list | None = None   # fingerprint of the last screen actually analysed
+_last_look   = 0.0
 
 
 # ── Screen capture ────────────────────────────────────────────────────────────
@@ -54,6 +58,39 @@ def _capture() -> bytes | None:
     except Exception as exc:
         log.debug("screen capture failed: %s", exc)
         return None
+
+
+# ── Change gate ───────────────────────────────────────────────────────────────
+
+def _thumb(image_bytes: bytes) -> list | None:
+    """A 64x36 grayscale fingerprint of the screen."""
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes)).convert("L").resize((64, 36))
+        return list(img.getdata())
+    except Exception:
+        return None
+
+
+def _worth_a_look(image_bytes: bytes) -> bool:
+    """Every analysis is an image on the vision model — the same one that
+    reads the user's attached pictures. Sent every 30 s regardless, it spent
+    the day's vision budget in a couple of hours and would pass the daily
+    request cap by evening. So: look again only when enough of the screen has
+    really changed since the last screen analysed, and never inside _MIN_GAP.
+    Comparing against the last ANALYSED screen (not the last capture) means a
+    slow build-up of change still gets looked at eventually."""
+    global _last_thumb, _last_look
+    now = time.time()
+    if now - _last_look < _MIN_GAP:
+        return False
+    thumb = _thumb(image_bytes)
+    if thumb is not None and _last_thumb is not None and len(thumb) == len(_last_thumb):
+        moved = sum(1 for a, b in zip(thumb, _last_thumb) if abs(a - b) > 24)
+        if moved / len(thumb) < _CHANGED:
+            return False
+    _last_thumb, _last_look = thumb, now
+    return True
 
 
 # ── Vision analysis ───────────────────────────────────────────────────────────
@@ -106,7 +143,7 @@ def get_fix_suggestion(description: str) -> str:
     if not groq_key:
         return "Could not reach AI for fix suggestion."
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "qwen/qwen3.8-27b",
         "messages": [
             {"role": "system",
              "content": "You are a senior developer. Give a concise fix (2-3 sentences max) for the issue described. Be direct."},
@@ -140,7 +177,7 @@ def _loop():
             break
 
         img = _capture()
-        if not img:
+        if not img or not _worth_a_look(img):
             continue
 
         result = _analyse(img)

@@ -29,7 +29,7 @@ FACTS = [
     # Project G.I.L.
     ("project",     "Omri's main project is Project G.I.L. — a JARVIS-style voice-controlled desktop AI, located at C:\\Users\\Omri\\project_gil\\.", 10),
     ("project",     "Project G.I.L. architecture: main.py (audio loop), gil_brain.py (Groq LLM), memory.py (SQLite FTS5), proactive.py (rules engine), gestures.py (MediaPipe), camera_viewer.py, voice.py (ElevenLabs TTS), ears.py (wake phrase), actions.py, context_engine.py, modes.py, webgen.py.", 9),
-    ("project",     "GIL uses Groq API (llama-3.1-8b-instant primary, fallbacks: gemma2-9b-it, llama-3.3-70b-versatile). Omri has at least 2 Groq API keys.", 8),
+    ("project",     "GIL uses the Groq API: gpt-oss-120b is the brain; gpt-oss-20b and qwen3.8-27b handle quick work, fallbacks and vision. Omri has 2 Groq API keys on separate accounts.", 8),
     ("project",     "GIL's wake phrase is 'Hello G.I.L.'", 9),
     ("project",     "GIL uses ElevenLabs for TTS. If ElevenLabs fails, falls back to Windows SAPI.", 8),
     ("project",     "GIL has proactive rules: battery low/critical, meeting soon, unsaved file detection, CPU hot, late night, idle check, schedule learning.", 7),

@@ -283,7 +283,7 @@ def _auto_name_session(session_id: str) -> None:
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.1-8b-instant",
+                "model": "qwen/qwen3.8-27b",
                 "messages": [
                     {"role": "system", "content":
                         "You write a short 3-5 word topic label for a chat, based on "

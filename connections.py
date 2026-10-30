@@ -95,6 +95,12 @@ def _probe_vision():
         import vision_model
         if not vision_model.keys():
             return "off", "no Groq key"
+        # A key proves nothing about the model: this said "on" for months
+        # while Groq 404'd every image because it had retired qwen3.6.
+        import model_health
+        served = model_health.live()
+        if served is not None and vision_model.MODEL not in served:
+            return "broken", f"Groq no longer serves {vision_model.MODEL}"
         extra = []
         if os.getenv("OPENROUTER_API_KEY"):
             extra.append("OpenRouter")

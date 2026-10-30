@@ -46,6 +46,8 @@ data/user_profile.json
 data/learning_projects/
 data/tasks.json
 data/triggers.json
+data/vigil.json
+data/vigil.json.*
 data/dev_config.json
 data/session_memory.json
 data/missions.json
@@ -85,3 +87,13 @@ android/local.properties
 data/_scan_profile/
 data/spatial_tutorial_done
 data/hand_calibration.json
+
+# Personal runtime data that GIL writes as it runs (not covered above)
+data/route_log.jsonl
+data/voice_notes.json
+data/autonomous_log.json
+data/token_usage.json
+data/gil.log.*
+sysinfo.txt
+build_log.txt
+emoji_scan.txt
