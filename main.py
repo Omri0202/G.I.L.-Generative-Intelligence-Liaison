@@ -200,6 +200,32 @@ def main() -> None:
     except Exception as exc:
         log.warning("WhatsApp recap disabled: %s", exc)
 
+    # ── Vigil: standing orders, checked in the background ─────────────────────
+    try:
+        import vigil
+        vigil.set_show_callback(lambda text: window.add_chat_message(text, "gil"))
+        vigil.set_busy_check(lambda: (
+            engine.processing_lock.locked()
+            or bool(getattr(engine, "_agent_running", False))
+            or (time.time() - engine._last_addressed_at[0]) < ConversationEngine.ATTENTION_SECS))
+        vigil.start()
+    except Exception as exc:
+        log.warning("Vigil disabled: %s", exc)
+
+    # ── Model health: Groq retires models without warning ─────────────────────
+    # It retired five GIL depended on and nothing noticed for months. One free
+    # request at startup, and the user hears about it the same day.
+    def _model_check():
+        try:
+            import model_health
+            note = model_health.report()
+            if note:
+                log.warning(note)
+                window.add_chat_message(note, "gil")
+        except Exception:
+            log.debug("model health check failed", exc_info=True)
+    threading.Thread(target=_model_check, daemon=True, name="GIL-ModelHealth").start()
+
     try:
         import notes as _notes_mod
         _notes_mod.start_clipboard_watcher()
@@ -246,7 +272,7 @@ def main() -> None:
             if not groq_key:
                 return
             payload = {
-                "model": "llama-3.1-8b-instant",
+                "model": "qwen/qwen3.8-27b",
                 "messages": [
                     {"role": "system", "content":
                         "Reply with ONLY a JSON array of 2-5 short topic strings (2-4 words each). "

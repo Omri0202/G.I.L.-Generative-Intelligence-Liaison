@@ -191,6 +191,7 @@ HIDDEN = [
     "spellchecker", "chat_web", "research", "autonomous", "file_access",
     "gil_config", "study_coach", "study_syllabus", "error_watch",
     "file_access",
+    "vigil", "notify", "model_health",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",
 ]
