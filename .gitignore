@@ -44,6 +44,8 @@ database/
 # Personal user data — each install creates its own profile
 data/user_profile.json
 data/learning_projects/
+data/tasks.json
+data/triggers.json
 data/dev_config.json
 data/session_memory.json
 data/missions.json
