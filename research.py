@@ -139,7 +139,9 @@ def _search_live(query: str, n: int) -> list[dict]:
             return []        # it answered without searching: not a live result
         cited = "\n".join(f"- {s.get('title', '')[:100]} ({s['url']})"
                           for s in sources[:5])
-        return [{"title": "Live web search", "url": sources[0]["url"],
+        top = sources[0]
+        title = (top.get("title") or "").strip()[:100] or re.sub(r"^www\.", "", top["url"].split("/")[2])
+        return [{"title": title, "url": top["url"],
                  "snippet": answer[:400], "text": f"{answer}\n\nFound on:\n{cited}"}]
     return []
 
