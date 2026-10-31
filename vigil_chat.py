@@ -96,6 +96,7 @@ _STATIC = {"gil_icon.png": "image/png", "favicon.ico": "image/x-icon",
 SW = WEB / "vigil_sw.js"
 TASK_NOTICE_SECS = 30        # a job on the PC this long gets "working on it…" on the phone
 MIRROR_CHARS = 1_500
+MAX_POST = 20_000_000        # a voice message of your own, base64, with room to spare
 
 _db_lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -1546,6 +1547,15 @@ def api_phone(on: bool = True, wifi: bool = False) -> dict:
     return view
 
 
+def api_phone_check() -> dict:
+    """While the QR code is up: has a phone joined the Tailscale network yet,
+    and which account should it sign in with."""
+    import tailscale_link
+    st = tailscale_link.status(fresh=True)
+    return {"account": st.get("account", ""), "phones": st.get("phones", []),
+            "running": st["running"]}
+
+
 def api_phone_notify(mode: str = "always") -> dict:
     """When the phone gets notifications: always, only while away from the PC, or never."""
     if mode in ("always", "away", "off"):
@@ -1607,9 +1617,10 @@ _API = {"state": api_state, "older": api_older, "send": api_send,
         "phone": api_phone, "open": api_open, "react": api_react,
         "phone_notify": api_phone_notify, "push_key": api_push_key,
         "push_subscribe": api_push_subscribe, "push_status": api_push_status,
-        "push_unsubscribe": api_push_unsubscribe, "push_test": api_push_test}
+        "push_unsubscribe": api_push_unsubscribe, "push_test": api_push_test,
+        "phone_check": api_phone_check}
 #: Only a window on this PC may do these — never a phone, even a paired one.
-_LOCAL_ONLY = {"phone", "open"}
+_LOCAL_ONLY = {"phone", "open", "phone_check"}
 
 
 # ── the server ────────────────────────────────────────────────────────────────
@@ -1777,6 +1788,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def do_POST(self):
+        # Read the body first, even for a refusal: answering before it's read
+        # makes Windows reset the connection, and the client then sees "can't
+        # reach the PC" instead of the 403 that says why.
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if n > MAX_POST:
+            self.close_connection = True
+            return self._send(413)
+        body = self.rfile.read(n) if n > 0 else b""
         # X-Vigil: a header a web page can't add to a cross-site request
         # without asking first (and this server never says yes) — so no other
         # site open in the user's browser can post to the chat.
@@ -1785,8 +1807,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/api":
             return self._send(404)
         try:
-            n = int(self.headers.get("Content-Length", 0))
-            req = json.loads(self.rfile.read(n) or b"{}")
+            req = json.loads(body or b"{}")
             method = req.get("method", "")
             if method in _LOCAL_ONLY and not self._local():
                 return self._send(403)

@@ -79,8 +79,15 @@ def parse_status(raw: str) -> dict:
         why = f"Tailscale is {state.lower()}"
     elif not name:
         why = "turn on MagicDNS in the Tailscale admin page"
+    user = (st.get("User") or {}).get(str(me.get("UserID"))) or {}
+    # Phones on the same private network: the one thing a phone needs before
+    # the address opens. Without Tailscale on it, the address leads nowhere.
+    phones = [{"name": p.get("HostName") or "phone", "online": bool(p.get("Online"))}
+              for p in (st.get("Peer") or {}).values()
+              if str(p.get("OS", "")).lower() in ("android", "ios")]
     return {"installed": True, "running": state == "Running", "name": name,
-            "https": bool(name) and name in certs, "why": why}
+            "https": bool(name) and name in certs, "why": why,
+            "account": user.get("LoginName") or "", "phones": phones}
 
 
 def status(fresh: bool = False) -> dict:

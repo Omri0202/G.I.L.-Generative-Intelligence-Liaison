@@ -521,6 +521,11 @@ a:hover { text-decoration:underline; }
 #notifBar .icon { width:30px; height:30px; flex:none; }
 #notifBar .icon .ic { width:18px; height:18px; }
 .sheet-lead { margin-bottom:10px; font-size:13.5px; line-height:1.5; }
+.ts-status {
+  margin-bottom:12px; padding:9px 12px; border-radius:8px; background:var(--hover);
+  font-size:13px; line-height:1.45;
+}
+.ts-status.ok { background:color-mix(in srgb, var(--online) 15%, transparent); color:var(--online); font-weight:500; }
 .sheet-card ol a, .sheet-lead a { color:var(--accent); font-weight:500; }
 .sheet-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .sheet-actions button { padding:8px 14px; border-radius:8px; background:var(--hover); color:var(--accent); font-weight:500; }
@@ -1512,9 +1517,12 @@ function renderSheet(v) {
   let html;
   if (v.on) {
     // The QR is drawn by G.I.L. itself, never taken from a page.
-    html = `<div id="qr">${v.qr || ""}</div><a id="qrLink">${esc(v.url)}</a>` + (v.via === "tailscale" ? `
+    const account = ts.account ? `<b>${esc(ts.account)}</b>, the same account as this PC` : "the same account as this PC";
+    const joined = (ts.phones || []).some(p => p.online);
+    html = (v.via === "tailscale" ? `<p class="ts-status${joined ? " ok" : ""}" id="tsPhone">${phoneLine(ts)}</p>` : "") +
+      `<div id="qr">${v.qr || ""}</div><a id="qrLink">${esc(v.url)}</a>` + (v.via === "tailscale" ? `
       <ol>
-        <li>On your phone, install ${ext(v.phone_app, "Tailscale")} and sign in with the same account as this PC.</li>
+        <li>On your phone, install ${ext(v.phone_app, "Tailscale")}, sign in as ${account}, and turn it on.</li>
         <li>Scan this code with the phone's camera.</li>
         <li>In Chrome, tap <b>⋮ → Install app</b> (or <b>Add to Home screen</b>).</li>
         <li>Open G.I.L. from your home screen and tap <b>Turn on notifications</b>.</li>
@@ -1549,6 +1557,25 @@ function renderSheet(v) {
   }
   $("#sheetBody").innerHTML = html;
   $("#phoneOff").hidden = !v.on;
+  clearInterval(S.tsPoll);
+  if (v.on && v.via === "tailscale") S.tsPoll = setInterval(checkPhone, 4000);
+}
+/* The address only opens on a phone that's on the same Tailscale network —
+   the step people miss. Watch for it while the code is up. */
+function phoneLine(ts) {
+  const phones = ts.phones || [];
+  const on = phones.find(p => p.online);
+  if (on) return `✓ ${esc(on.name)} is connected — scan the code.`;
+  if (phones.length) return `${esc(phones[0].name)} is on your Tailscale network, but Tailscale is off on it — open Tailscale on the phone and turn it on.`;
+  return `Waiting for your phone… The code only opens on a phone that's on your Tailscale network: install Tailscale on it and sign in${ts.account ? ` as <b>${esc(ts.account)}</b>` : ""}. This updates by itself.`;
+}
+async function checkPhone() {
+  if ($("#sheet").hidden || !$("#tsPhone")) return clearInterval(S.tsPoll);
+  const st = await api("phone_check");
+  if (!st) return;
+  const el = $("#tsPhone");
+  el.classList.toggle("ok", !!(st.phones || []).find(p => p.online));
+  el.innerHTML = phoneLine(st);
 }
 $("#sheetBody").addEventListener("click", e => {
   const b = e.target.closest("[data-sheet]"); if (!b) return;

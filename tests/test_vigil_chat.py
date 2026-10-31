@@ -623,7 +623,12 @@ class TestPhone(ChatCase):
         self.assertNotEqual(vc._phone()["token"], token)
 
     def test_a_phone_cant_open_phone_access_or_windows(self):
-        self.assertEqual(vc._LOCAL_ONLY, {"phone", "open"})
+        self.assertEqual(vc._LOCAL_ONLY, {"phone", "open", "phone_check"})
+
+    def test_the_qr_screen_watches_for_the_phone(self):
+        self.ts_state.update(account="omri@example.com", phones=[{"name": "pixel-8", "online": True}])
+        self.assertEqual(vc.api_phone_check(), {"account": "omri@example.com", "running": True,
+                                                "phones": [{"name": "pixel-8", "online": True}]})
 
 
 class TestPhoneNotifications(ChatCase):

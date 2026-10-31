@@ -9,7 +9,9 @@ import tailscale_link as ts
 
 
 STATUS = {"BackendState": "Running",
-          "Self": {"DNSName": "omri-pc.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.7"]},
+          "Self": {"DNSName": "omri-pc.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.7"],
+                   "UserID": 77},
+          "User": {"77": {"LoginName": "omri@example.com"}},
           "CertDomains": ["omri-pc.tail1234.ts.net"]}
 
 
@@ -34,7 +36,16 @@ class TestTailscale(unittest.TestCase):
     def test_running_with_https(self):
         st = ts.parse_status(json.dumps(STATUS))
         self.assertEqual(st, {"installed": True, "running": True, "name": "omri-pc.tail1234.ts.net",
-                              "https": True, "why": ""})
+                              "https": True, "why": "", "account": "omri@example.com",
+                              "phones": []})
+
+    def test_phones_on_the_network(self):
+        peers = {"a": {"HostName": "pixel-8", "OS": "android", "Online": True},
+                 "b": {"HostName": "laptop", "OS": "windows", "Online": True},
+                 "c": {"HostName": "old-phone", "OS": "android", "Online": False}}
+        st = ts.parse_status(json.dumps({**STATUS, "Peer": peers}))
+        self.assertEqual(st["phones"], [{"name": "pixel-8", "online": True},
+                                        {"name": "old-phone", "online": False}])
 
     def test_signed_out_off_and_no_magicdns(self):
         self.assertEqual(ts.parse_status(json.dumps({**STATUS, "BackendState": "NeedsLogin"}))["why"],
