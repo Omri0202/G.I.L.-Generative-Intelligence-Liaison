@@ -279,6 +279,101 @@ class TestNewPowers(VigilCase):
         self.assertEqual(vigil.pref("phone"), {"on": True})
 
 
+class TestMailAndLearning(VigilCase):
+    """A dead Gmail login is said out loud; reactions teach a watch; the
+    activity log shows every check."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_deliver = vigil._deliver_fn
+        self.notices = []
+        vigil.set_deliver(self.notices.append)
+
+    def tearDown(self):
+        vigil._deliver_fn = self._orig_deliver
+        super().tearDown()
+
+    def fail_gmail(self, why="Gmail isn't connected"):
+        def broken(src):
+            raise vigil._SourceError(why)
+        vigil._FETCHERS["gmail"] = broken
+
+    def test_a_dead_login_is_said_once(self):
+        self.fail_gmail()
+        self.assertEqual(self.run_it(), "error")
+        self.assertEqual(len(self.notices), 1)
+        self.assertIn("Gmail isn't connected", self.notices[0]["message"])
+        self.assertEqual(self.notices[0]["trouble"], "Gmail isn't connected")
+        self.run_it(); self.run_it()
+        self.assertEqual(len(self.notices), 1)                   # not every retry
+
+    def test_passing_trouble_waits_for_three_in_a_row(self):
+        self.fail_gmail("gmail: Timeout")
+        self.run_it(); self.run_it()
+        self.assertEqual(self.notices, [])
+        self.run_it()
+        self.assertEqual(len(self.notices), 1)
+
+    def test_working_again_resets_it(self):
+        self.fail_gmail()
+        self.run_it()
+        vigil._FETCHERS["gmail"] = lambda src: list(self.items)
+        self.replies.append(_reply())
+        self.run_it()
+        o = vigil.get(self.order["id"])
+        self.assertNotIn("trouble_told", o)
+        self.fail_gmail()
+        self.run_it()
+        self.assertEqual(len(self.notices), 2)                   # a new outage is told again
+
+    def test_the_real_gmail_source_fails_loudly(self):
+        import gmail_recap
+        orig = gmail_recap._get_service, vigil._FETCHERS["gmail"]
+        gmail_recap._get_service = lambda: None
+        vigil._FETCHERS["gmail"] = vigil._fetch_gmail
+        try:
+            with self.assertRaises(vigil._SourceError):
+                vigil._fetch_gmail({"type": "gmail"})
+            with self.assertRaises(vigil._SourceError):
+                vigil._fetch_replies({"type": "replies"})
+        finally:
+            gmail_recap._get_service, vigil._FETCHERS["gmail"] = orig
+
+    def test_replies_source(self):
+        import gmail_reader
+        orig = gmail_reader.unanswered
+        gmail_reader.unanswered = lambda days=14: [
+            {"thread": "t1", "id": "m9", "days": 3, "from": "Dana", "subject": "Can you send it?",
+             "snippet": "the form"}]
+        try:
+            items = vigil._fetch_replies({"type": "replies"})
+        finally:
+            gmail_reader.unanswered = orig
+        self.assertEqual(items[0][0], "reply:t1:m9")
+        self.assertIn("Unanswered for 3 days — from Dana", items[0][1])
+        o = vigil.add("Replies", "what I owe", [{"type": "replies"}])
+        self.assertEqual(vigil._checking_label(o), "checking what's waiting on your reply…")
+
+    def test_reactions_teach_the_watch(self):
+        vigil.add_feedback(self.order["id"], "Python 3.14.1 is out", "down")
+        vigil.add_feedback(self.order["id"], "Your call-up date is set", "up")
+        self.replies.append(_reply())
+        self.items.append(("mail:2", "new"))
+        self.run_it()
+        self.assertIn("NOT WORTH TELLING: “Python 3.14.1 is out”", self.last_prompt)
+        self.assertIn("GLAD YOU TOLD THEM: “Your call-up date is set”", self.last_prompt)
+        vigil.add_feedback(self.order["id"], "Python 3.14.1 is out", None)       # taken back
+        self.assertEqual(len(vigil.get(self.order["id"])["feedback"]), 1)
+
+    def test_activity_newest_first(self):
+        self.replies.append(_reply())
+        self.run_it()
+        self.run_it()
+        rows = vigil.activity()
+        self.assertEqual([r["outcome"] for r in rows], ["unchanged", "silent"])
+        self.assertEqual(rows[0]["title"], "Army mail")
+
+
 class TestToast(unittest.TestCase):
 
     def test_untrusted_text_never_reaches_the_command(self):

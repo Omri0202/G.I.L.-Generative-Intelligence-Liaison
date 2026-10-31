@@ -71,7 +71,9 @@ HISTORY_KEEP = 30
 HELD_KEEP = 20
 INBOX_KEEP = 50
 URGENCIES = ("low", "normal", "urgent")
-SOURCE_TYPES = ("gmail", "calendar", "url", "needs")
+SOURCE_TYPES = ("gmail", "calendar", "url", "needs", "replies")
+FEEDBACK_KEEP = 8
+TROUBLE_AFTER = 3           # failed checks in a row before Vigil says it can't check
 
 _lock = threading.RLock()
 _show_callback: Callable[[str], None] | None = None
@@ -83,7 +85,7 @@ _thread: threading.Thread | None = None
 
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 _UPDATABLE = ("title", "brief", "attention", "forbidden", "every_min",
-              "active_hours", "change_only", "at", "voice", "actions")
+              "active_hours", "change_only", "at", "voice", "actions", "scratch")
 
 
 # ── state ─────────────────────────────────────────────────────────────────────
@@ -452,11 +454,29 @@ def _visible_text(html: str) -> str:
 
 
 def _fetch_gmail(src: dict) -> list[tuple[str, str]]:
-    import gmail_recap
-    mails = gmail_recap.get_unread_summary(max_results=int(src.get("max", 8)))
-    return [(f"mail:{m.get('id')}",
-             f"From {m.get('sender', '?')}: {m.get('subject', '')} — {m.get('snippet', '')}")
-            for m in mails or []]
+    # A dead Google login must fail the check, not read as an empty inbox:
+    # that silence once hid months of mail from a watch.
+    import gmail_reader
+    try:
+        mails = gmail_reader.unread(int(src.get("max", 8)))
+    except gmail_reader.MailboxError as exc:
+        raise _SourceError(str(exc)) from exc
+    return [(f"mail:{m['id']}", f"From {m['from']}: {m['subject']} — {m['snippet']}")
+            for m in mails]
+
+
+def _fetch_replies(src: dict) -> list[tuple[str, str]]:
+    """Emails from people still waiting on the user's reply. Keyed by the
+    thread's newest message, so a new message in the thread counts as new."""
+    import gmail_reader
+    try:
+        waiting = gmail_reader.unanswered(days=int(src.get("days", 14)))
+    except gmail_reader.MailboxError as exc:
+        raise _SourceError(str(exc)) from exc
+    return [(f"reply:{m['thread']}:{m['id']}",
+             f"Unanswered for {m['days']} day{'s' if m['days'] != 1 else ''} — from "
+             f"{m['from']}: {m['subject']} — {m['snippet']}")
+            for m in waiting]
 
 
 def _fetch_calendar(src: dict) -> list[tuple[str, str]]:
@@ -491,7 +511,7 @@ def _fetch_needs(src: dict) -> list[tuple[str, str]]:
 
 
 _FETCHERS = {"gmail": _fetch_gmail, "calendar": _fetch_calendar, "url": _fetch_url,
-             "needs": _fetch_needs}
+             "needs": _fetch_needs, "replies": _fetch_replies}
 
 
 def _collect(order: dict) -> list[tuple[str, str, str]]:
@@ -569,9 +589,49 @@ def _brief(order: dict, snapshot: str) -> str:
             f"ALLOWED ACTIONS: {vigil_actions.for_model(order.get('actions') or [])}\n"
             f"{routine}"
             f"NOW: {datetime.now().strftime('%A %d %B %Y, %H:%M')}\n\n"
+            f"{_feedback_lines(order)}"
             f"YOUR NOTES FROM EARLIER CHECKS:\n"
             f"{order.get('scratch') or '(none yet: this is the first check)'}\n\n"
             f"WHAT THE SOURCES SHOW NOW:\n{snapshot}")
+
+
+def _feedback_lines(order: dict) -> str:
+    """How the user reacted to this order's earlier messages — the way it
+    learns what's worth a ping, in plain sight in the order itself."""
+    marks = order.get("feedback") or []
+    if not marks:
+        return ""
+    lines = [f"- {'GLAD YOU TOLD THEM' if m['verdict'] == 'up' else 'NOT WORTH TELLING'}: "
+             f"“{m['message']}”" for m in marks]
+    return ("THEIR REACTIONS TO YOUR EARLIER MESSAGES (tell them more like the first kind, "
+            "stay quiet about things like the second):\n" + "\n".join(lines) + "\n\n")
+
+
+def add_feedback(order_id: str, message: str, verdict: str | None) -> bool:
+    """👍 (up) / 👎 (down) on one of this order's messages; None takes it back."""
+    message = _clip(message, 200)
+    with _lock:
+        state = _load()
+        order = _find(state, order_id)
+        if order is None:
+            return False
+        marks = [m for m in order.get("feedback") or [] if m["message"] != message]
+        if verdict in ("up", "down"):
+            marks.append({"verdict": verdict, "message": message, "at": round(time.time())})
+        order["feedback"] = marks[-FEEDBACK_KEEP:]
+        _save(state)
+    return True
+
+
+def activity(limit: int = 40) -> list[dict]:
+    """Every order's recent checks, newest first: what Vigil did while you
+    weren't looking, check by check."""
+    rows = []
+    for o in orders():
+        for h in reversed(o.get("history") or []):        # newest first, even within a second
+            rows.append({**h, "order_id": o["id"], "title": o["title"]})
+    rows.sort(key=lambda r: r.get("at", 0), reverse=True)  # stable: ties keep that order
+    return rows[:limit]
 
 
 def _keys() -> list[str]:
@@ -680,7 +740,8 @@ def _ask_model(messages: list[dict]) -> tuple[dict | None, int, str]:
 
 # ── one check ─────────────────────────────────────────────────────────────────
 
-_SOURCE_LABELS = {"gmail": "your inbox", "calendar": "your calendar"}
+_SOURCE_LABELS = {"gmail": "your inbox", "calendar": "your calendar",
+                  "needs": "your list", "replies": "what's waiting on your reply"}
 
 
 def _checking_label(order: dict) -> str:
@@ -713,6 +774,8 @@ def _finish(order_id: str, now: float, outcome: str, tokens: int = 0, note: str 
         else:
             order["last_run"] = now
             order.pop("retry_at", None)
+            order.pop("errors_in_row", None)          # working again
+            order.pop("trouble_told", None)
             # A wake-up is used up by any real run; the reply may ask for a new one.
             again = (reply or {}).get("check_again_min") or 0
             if again:
@@ -759,12 +822,35 @@ def run_order(order_id: str, force: bool = False) -> dict:
         _status(None)
 
 
+def _trouble(order: dict, why: str, now: float) -> None:
+    """A source that keeps failing — or a login that's gone, which won't fix
+    itself — is said in the chat once, not discovered months later."""
+    with _lock:
+        state = _load()
+        saved = _find(state, order["id"])
+        if saved is None:
+            return
+        saved["errors_in_row"] = int(saved.get("errors_in_row", 0)) + 1
+        tell = (not saved.get("trouble_told")
+                and (saved["errors_in_row"] >= TROUBLE_AFTER or "isn't connected" in why))
+        if tell:
+            saved["trouble_told"] = True
+        _save(state)
+    if tell:
+        log.warning("order %s can't be checked: %s", order["id"], why)
+        _deliver({"id": uuid.uuid4().hex[:8], "order_id": order["id"], "title": order["title"],
+                  "message": f"I can't check “{order['title']}” right now — {why}.",
+                  "urgency": "normal", "keep": False, "voice": False, "action": None,
+                  "trouble": why, "at": round(now)})
+
+
 def _check(order: dict, now: float) -> dict:
     order_id = order["id"]
     seen = set(order.get("seen", []))
     try:
         items = _collect(order)
     except _SourceError as exc:
+        _trouble(order, str(exc), now)
         return _finish(order_id, now, "error", note=str(exc), retry=True)
     keys = [key for _, key, _ in items]
     # A daily routine runs at its time whatever changed — that's what it's for.
