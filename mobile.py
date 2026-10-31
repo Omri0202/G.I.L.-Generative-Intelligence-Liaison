@@ -14,6 +14,7 @@ nothing extra has to be bundled and it works offline).
 
 from __future__ import annotations
 
+import hmac
 import secrets
 import socket
 
@@ -88,4 +89,5 @@ def authorized(host: str, presented_token: str, enabled: bool,
         return True
     if not enabled or not real_token:
         return False
-    return bool(presented_token) and presented_token == real_token
+    return bool(presented_token) and hmac.compare_digest(
+        presented_token.encode(), real_token.encode())

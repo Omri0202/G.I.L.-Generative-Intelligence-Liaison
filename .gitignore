@@ -47,6 +47,10 @@ data/learning_projects/
 data/tasks.json
 data/triggers.json
 data/vigil.json
+data/vigil_chat.db
+data/vigil_voice/
+data/_vigil_profile/
+data/_vigil_port.txt
 data/vigil.json.*
 data/dev_config.json
 data/session_memory.json

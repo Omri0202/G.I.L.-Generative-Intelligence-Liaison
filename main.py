@@ -19,6 +19,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── A Vigil notification was clicked (gil-vigil:open, in the built app) ───────
+# Bring the Vigil window forward through whichever process hosts it. If none
+# does, carry on and start GIL, which then opens Vigil.
+_OPEN_VIGIL = "--open-vigil" in sys.argv
+if _OPEN_VIGIL:
+    try:
+        import vigil_chat as _vc
+        if _vc.open_from_outside():
+            sys.exit(0)
+    except Exception:
+        pass
+
 # ── Single-instance guard ─────────────────────────────────────────────────────
 import sys
 
@@ -200,17 +212,29 @@ def main() -> None:
     except Exception as exc:
         log.warning("WhatsApp recap disabled: %s", exc)
 
-    # ── Vigil: standing orders, checked in the background ─────────────────────
-    try:
+    # ── Vigil: standing orders, checked in the background, and the separate
+    #    chat where GIL texts you about them ("open vigil", /vigil, or the tray).
+    #    While GIL was closed the watcher kept Vigil going; it hands over once
+    #    it sees GIL, and until then GIL opens the watcher's chat.
+    def _host_vigil():
         import vigil
-        vigil.set_show_callback(lambda text: window.add_chat_message(text, "gil"))
+        import vigil_chat
+        while vigil_chat.start(username) != "host":
+            time.sleep(3)
         vigil.set_busy_check(lambda: (
             engine.processing_lock.locked()
             or bool(getattr(engine, "_agent_running", False))
             or (time.time() - engine._last_addressed_at[0]) < ConversationEngine.ATTENTION_SECS))
         vigil.start()
-    except Exception as exc:
-        log.warning("Vigil disabled: %s", exc)
+        if _OPEN_VIGIL:
+            vigil_chat.open_window()
+
+    def _host_vigil_safely():
+        try:
+            _host_vigil()
+        except Exception as exc:
+            log.warning("Vigil disabled: %s", exc)
+    threading.Thread(target=_host_vigil_safely, daemon=True, name="GIL-VigilHost").start()
 
     # ── Model health: Groq retires models without warning ─────────────────────
     # It retired five GIL depended on and nothing noticed for months. One free

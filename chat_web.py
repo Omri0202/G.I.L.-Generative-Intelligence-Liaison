@@ -424,6 +424,22 @@ class WebChat:
                          name=f"GIL-Connect-{service_id}").start()
         return {"ok": True, "started": True}
 
+    # ── Vigil: GIL keeps watch and texts you, in its own window ──────────────
+    def _rpc_open_vigil(self):
+        try:
+            import vigil_chat
+            return vigil_chat.open_window()
+        except Exception:
+            log.warning("could not open the Vigil chat", exc_info=True)
+            return False
+
+    def _rpc_vigil_unread(self):
+        try:
+            import vigil_chat
+            return vigil_chat.unread_count()
+        except Exception:
+            return 0
+
     def _rpc_set_auto(self, on=False):
         """Auto mode: let GIL pick the brain per message."""
         try:

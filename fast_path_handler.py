@@ -1047,6 +1047,25 @@ def _voice_toggle(text: str, lower: str, eng) -> bool:
     return False
 
 
+_VIGIL_OPEN = ("open vigil", "vigil mode", "start vigil", "activate vigil",
+               "open the vigil", "go to vigil", "show vigil", "show me vigil",
+               "תפתח את ויג'יל", "פתח את ויג'יל", "תפתח את ויגיל", "פתח את ויגיל")
+
+
+def _vigil_open(text: str, lower: str, eng) -> bool:
+    """'open vigil' — the separate chat where GIL texts you what he's watching."""
+    t = lower.strip(" .!?")
+    if t != "vigil" and not any(p in t for p in _VIGIL_OPEN):
+        return False
+    if len(t.split()) > 6:        # a sentence that only mentions Vigil isn't a command
+        return False
+    import vigil_chat
+    ok = vigil_chat.open_window()
+    eng.window.add_chat_message("Opening Vigil — I'll text you there 👀" if ok else
+                                "I couldn't open the Vigil window just now.", "gil")
+    return True
+
+
 def _undo_agent(text: str, lower: str, eng) -> bool:
     """'undo your changes' — restore every file the code agent touched."""
     if not any(p in lower for p in ("undo your changes", "undo the changes",
@@ -1249,6 +1268,7 @@ _HANDLERS = [
     _fix_confirm,        # pending error-fix yes/no — must win when armed
     _auto_control,       # stop / toggle the autonomous loop
     _voice_toggle,
+    _vigil_open,
     _undo_agent,
     _remember_fact,      # "remember that…" → store, never search
     _research_fast,      # live facts before the brain can answer from memory

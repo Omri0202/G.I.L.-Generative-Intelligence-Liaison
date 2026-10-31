@@ -104,6 +104,39 @@ def _wake_gil() -> None:
         _launch_gil()
 
 
+# ── Vigil while GIL is closed ─────────────────────────────────────────────────
+# Vigil's watches shouldn't stop because GIL is closed. One process hosts it at
+# a time: GIL when it's running, this watcher when it isn't. The watcher steps
+# aside as soon as GIL starts and takes over again when GIL closes.
+
+def _vigil_keeper() -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(_DIR, ".env"))
+        if _DIR not in sys.path:
+            sys.path.insert(0, _DIR)
+        import vigil
+        import vigil_chat
+    except Exception as exc:
+        print(f"[GIL-WATCHER] Vigil unavailable: {exc}")
+        return
+    hosting = False
+    while True:
+        try:
+            if hosting and _gil_is_running():
+                vigil_chat.stop_hosting()
+                hosting = False
+                print("[GIL-WATCHER] GIL is up — handing Vigil over.")
+            elif not hosting and not _gil_is_running():
+                if vigil_chat.start() == "host":
+                    vigil.start()
+                    hosting = True
+                    print("[GIL-WATCHER] Hosting Vigil while GIL is closed.")
+        except Exception as exc:
+            print(f"[GIL-WATCHER] Vigil keeper error: {exc}")
+        time.sleep(3 if hosting else 20)
+
+
 # ── Clap detection ────────────────────────────────────────────────────────────
 
 SAMPLERATE        = 16000
@@ -265,4 +298,5 @@ if __name__ == "__main__":
 
     print("[GIL-WATCHER] Running. Listening for claps and 'Hello G.I.L.'...")
     _install_startup()   # ensure registered every run
+    threading.Thread(target=_vigil_keeper, daemon=True, name="GIL-VigilKeeper").start()
     _listen_loop()       # blocks forever

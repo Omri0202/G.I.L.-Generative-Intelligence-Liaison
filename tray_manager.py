@@ -31,6 +31,13 @@ def start_tray(window) -> None:
     def _show(icon, _):
         window.after(0, window.show_window)
 
+    def _vigil(icon, _):
+        try:
+            import vigil_chat
+            vigil_chat.open_window()
+        except Exception as exc:
+            print(f"[G.I.L.] Vigil failed to open: {exc}")
+
     def _settings(icon, _):
         window.after(0, window.open_settings)
 
@@ -40,6 +47,7 @@ def start_tray(window) -> None:
 
     menu = pystray.Menu(
         pystray.MenuItem("Show G.I.L.", _show, default=True),
+        pystray.MenuItem("Vigil",       _vigil),
         pystray.MenuItem("Settings",    _settings),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit",        _exit),

@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'">
+<title>Vigil — G.I.L.</title>
+<meta name="theme-color" content="#15171D">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Vigil">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/gil_icon.png">
+<link rel="apple-touch-icon" href="/gil_icon.png">
+<style>
+/* ── Vigil chat · GIL texting you. WhatsApp's shape, GIL's colours. ───────── */
+:root, [data-theme="dark"] {
+  --bg:#0B0D11; --wall:rgba(255,255,255,.034);
+  --bar:#15171D; --bar-line:#21242C;
+  --in:#1C1F27; --out:#0E4856;
+  --txt:#E9EAF2; --sub:#8B91A5; --sub-out:#9EC6CF;
+  --accent:#58C4DD; --accent-ink:#04212A; --online:#3DDC84;
+  --read:#58C4DD; --urgent:#F47C7C;
+  --chip:#181B22; --chip-txt:#9AA0B4; --notice:#E8C46A;
+  --input:#20232B; --ph:#6D7387;
+  --panel:#0F1115; --card:#16191F; --line:#22252D;
+  --q-in:#15181E; --q-out:#0A3945;
+  --wave:#5A6175; --wave-out:#5F9BA9;
+  --shadow:0 1px .5px rgba(0,0,0,.4); --hover:rgba(255,255,255,.055);
+  --menu:#1D2028;
+}
+[data-theme="light"] {
+  --bg:#EBE6DC; --wall:rgba(80,64,40,.075);
+  --bar:#F6F5F0; --bar-line:#E1DED4;
+  --in:#FFFFFF; --out:#D0EEF5;
+  --txt:#111B21; --sub:#667781; --sub-out:#4D7480;
+  --accent:#0B9CB8; --accent-ink:#FFFFFF; --online:#1FAE5E;
+  --read:#0B9CB8; --urgent:#D23D3D;
+  --chip:#FFFFFF; --chip-txt:#54656F; --notice:#8A6A16;
+  --input:#FFFFFF; --ph:#8C98A0;
+  --panel:#F2F0EA; --card:#FFFFFF; --line:#E7E4DB;
+  --q-in:#F3F2ED; --q-out:#BCE3EC;
+  --wave:#B2BAC0; --wave-out:#77A9B5;
+  --shadow:0 1px .5px rgba(11,20,26,.14); --hover:rgba(0,0,0,.045);
+  --menu:#FFFFFF;
+}
+
+* { box-sizing:border-box; margin:0; padding:0; }
+html, body { height:100%; }
+body {
+  font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  font-size:14.5px; line-height:1.38; color:var(--txt); background:var(--bg);
+  overflow:hidden; -webkit-font-smoothing:antialiased;
+}
+button { font:inherit; color:inherit; background:none; border:none; cursor:pointer; }
+/* Components below set their own display; `hidden` must still win. */
+[hidden] { display:none !important; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+::selection { background:color-mix(in srgb, var(--accent) 35%, transparent); }
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--sub) 35%, transparent); border-radius:3px; }
+::-webkit-scrollbar-track { background:transparent; }
+.ic { width:24px; height:24px; fill:currentColor; flex:none; }
+
+#app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+#top {
+  position:relative; z-index:5; display:flex; align-items:center; gap:4px;
+  height:62px; padding:0 6px 0 8px; background:var(--bar);
+  border-bottom:1px solid var(--bar-line);
+}
+#who {
+  flex:1; min-width:0; display:flex; align-items:center; gap:12px;
+  padding:6px 8px; border-radius:12px; text-align:left;
+}
+#who:hover { background:var(--hover); }
+.avatar { position:relative; width:42px; height:42px; flex:none; }
+.avatar img, .v-avatar img, .p-avatar {
+  width:100%; height:100%; border-radius:50%; object-fit:cover;
+  background:radial-gradient(circle at 35% 30%, #1B5566, #0A1B21);
+}
+.presence {
+  position:absolute; right:-1px; bottom:-1px; width:12px; height:12px;
+  border-radius:50%; background:var(--online); border:2px solid var(--bar);
+  transition:background .3s;
+}
+#app.paused .presence { background:var(--sub); }
+.who-text { min-width:0; }
+.who-text b { display:block; font-size:16px; font-weight:600; letter-spacing:.01em; }
+#status {
+  display:block; font-size:12.5px; color:var(--sub);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color .2s;
+}
+#status.busy { color:var(--accent); }
+.icon {
+  width:40px; height:40px; flex:none; border-radius:50%;
+  display:grid; place-items:center; color:var(--sub);
+}
+.icon:hover { background:var(--hover); color:var(--txt); }
+#menu {
+  position:absolute; top:54px; right:10px; z-index:20; min-width:210px;
+  padding:6px 0; border-radius:10px; background:var(--menu);
+  box-shadow:0 10px 30px rgba(0,0,0,.38); transform-origin:top right;
+  animation:menuIn .14s ease-out;
+}
+#menu button { display:block; width:100%; padding:10px 20px; text-align:left; font-size:14.5px; }
+#menu button:hover { background:var(--hover); }
+@keyframes menuIn { from { opacity:0; transform:scale(.94); } }
+
+/* ── chat ───────────────────────────────────────────────────────────────── */
+#chatwrap { position:relative; flex:1; min-height:0; }
+#chat {
+  position:absolute; inset:0; overflow-y:auto; overflow-x:hidden;
+  background-color:var(--bg); background-size:300px 300px;
+}
+#list { display:flex; flex-direction:column; padding:8px 5.5% 10px; }
+.more { align-self:center; margin:6px 0; font-size:12.5px; color:var(--sub); }
+
+.day {
+  align-self:center; margin:14px 0 8px;
+  padding:5px 12px; border-radius:8px; background:var(--chip); color:var(--chip-txt);
+  font-size:12px; font-weight:500; box-shadow:var(--shadow);
+}
+.sys {
+  align-self:center; max-width:88%; margin:8px 0; padding:6px 12px; border-radius:8px;
+  background:var(--chip); color:var(--chip-txt); font-size:12.5px; text-align:center;
+  box-shadow:var(--shadow); line-height:1.45;
+}
+.sys.notice { color:var(--notice); display:flex; gap:7px; align-items:flex-start; text-align:left; max-width:82%; }
+.sys.notice .ic { width:15px; height:15px; margin-top:1px; }
+.unread-div {
+  align-self:stretch; margin:12px -6%; padding:5px 0; text-align:center;
+  background:color-mix(in srgb, var(--chip) 70%, transparent);
+}
+.unread-div span {
+  display:inline-block; padding:4px 14px; border-radius:12px; background:var(--chip);
+  color:var(--chip-txt); font-size:12px; font-weight:500; box-shadow:var(--shadow);
+}
+
+.row { position:relative; display:flex; margin-top:2px; }
+.row.first { margin-top:10px; }
+.row.in { justify-content:flex-start; }
+.row.out { justify-content:flex-end; }
+.bubble {
+  position:relative; max-width:min(80%, 540px); min-width:76px;
+  padding:6px 8px 8px 9px; border-radius:8px; background:var(--in);
+  box-shadow:var(--shadow); overflow-wrap:anywhere;
+}
+.row.out .bubble { background:var(--out); }
+.row.tail.in .bubble { border-top-left-radius:0; }
+.row.tail.out .bubble { border-top-right-radius:0; }
+.row.tail .bubble::before {
+  content:""; position:absolute; top:0; width:9px; height:13px; background:inherit;
+}
+.row.tail.in .bubble::before { left:-8px; clip-path:path("M9 0H1.6C.4 0 0 1.4 .9 2.2L9 13z"); }
+.row.tail.out .bubble::before { right:-8px; clip-path:path("M0 0h7.4c1.2 0 1.6 1.4.7 2.2L0 13z"); }
+.row.fresh .bubble { animation:pop .2s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes pop { from { opacity:0; transform:translateY(8px) scale(.97); } }
+.row.flash .bubble { animation:flash 1.3s ease-out; }
+@keyframes flash { 0%,40% { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); } }
+
+.content { position:relative; }
+.text { white-space:normal; }
+.text .spacer { display:inline-block; width:46px; height:1px; }
+.row.out .text .spacer { width:64px; }
+.text.rtl { padding-bottom:12px; }
+.text.rtl .spacer { display:none; }
+.text strong { font-weight:600; }
+.text code {
+  font-family:"Cascadia Code",Consolas,monospace; font-size:13px; padding:1px 5px;
+  border-radius:4px; background:var(--hover);
+}
+.text .li { display:block; position:relative; padding-left:14px; }
+.text .li::before { content:"•"; position:absolute; left:2px; color:var(--sub); }
+.meta {
+  position:absolute; right:-1px; bottom:-4px; display:flex; align-items:center; gap:3px;
+  font-size:11px; line-height:1; color:var(--sub); white-space:nowrap; pointer-events:none;
+}
+.row.out .meta { color:var(--sub-out); }
+.tick { width:16px; height:16px; }
+.tick.read { color:var(--read); }
+
+.label {
+  display:flex; align-items:center; gap:4px; margin:-1px 0 3px;
+  font-size:12px; color:var(--sub); font-style:italic;
+}
+.label .ic { width:14px; height:14px; }
+.label.urgent {
+  font-style:normal; font-weight:700; font-size:11px; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--urgent);
+}
+.label.urgent i { width:7px; height:7px; border-radius:50%; background:var(--urgent); }
+.bubble.urgent { box-shadow:var(--shadow), inset 3px 0 0 var(--urgent); }
+
+.quote {
+  display:block; margin:-2px -4px 6px -5px; padding:5px 9px 6px; border-radius:6px;
+  background:var(--q-in); border-left:4px solid var(--accent); cursor:pointer; font-size:13px;
+}
+.row.out .quote { background:var(--q-out); }
+.quote b { display:block; color:var(--accent); font-size:12.5px; font-weight:600; }
+.quote span {
+  color:var(--sub); display:-webkit-box; -webkit-line-clamp:3;
+  -webkit-box-orient:vertical; overflow:hidden;
+}
+.row.out .quote span { color:var(--sub-out); }
+
+.reply-btn {
+  position:absolute; top:50%; width:30px; height:30px; margin-top:-15px; border-radius:50%;
+  display:grid; place-items:center; color:var(--sub); background:var(--chip);
+  box-shadow:var(--shadow); opacity:0; transition:opacity .15s;
+}
+.reply-btn .ic { width:17px; height:17px; }
+.row.in .reply-btn { right:calc(20% - 40px); }
+.row.out .reply-btn { left:calc(20% - 40px); }
+.row:hover .reply-btn { opacity:1; }
+.row.in .bubble + .reply-btn { position:static; margin:auto 0 auto 8px; }
+.row.out .reply-btn { order:-1; position:static; margin:auto 8px auto 0; }
+
+/* cards: a watch that was just set up, something that needs you */
+.bubble.b-card { min-width:270px; }
+.card-head {
+  display:flex; align-items:center; gap:6px; margin-bottom:5px; color:var(--accent);
+  font-size:11.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+}
+.card-head .ic { width:16px; height:16px; }
+.card-title { font-size:15px; font-weight:600; margin-bottom:3px; }
+.card-body { color:var(--sub); font-size:13.5px; }
+.btns { margin:9px -8px -8px -9px; }
+.btns button {
+  display:block; width:100%; padding:10px; border-top:1px solid var(--line);
+  color:var(--accent); font-weight:500; font-size:14px; text-align:center;
+}
+.row.out .btns button { border-color:color-mix(in srgb, var(--sub-out) 25%, transparent); }
+.btns button:hover { background:var(--hover); }
+.btns button:last-child { border-radius:0 0 8px 8px; }
+.resolved {
+  margin:8px -8px 4px -9px; padding:8px 10px 2px; border-top:1px solid var(--line);
+  text-align:center; font-size:12.5px; color:var(--sub);
+}
+
+/* “Can I?” — an action waiting on a yes */
+.b-card.act .card-head { color:var(--notice); }
+.card-from {
+  display:flex; align-items:center; gap:5px; margin-top:7px; color:var(--sub); font-size:12px;
+}
+.card-from .ic { width:14px; height:14px; }
+.btns button[data-btn="approve"], .btns button[data-btn="allow_yes"] { font-weight:600; }
+.btns button[data-btn="deny"], .btns button[data-btn="allow_no"] { color:var(--sub); }
+
+/* voice messages */
+.bubble.b-voice { min-width:290px; padding:6px 8px 7px 8px; }
+.voice { display:flex; align-items:center; gap:10px; padding:2px 2px 12px 0; }
+.v-avatar { position:relative; width:48px; height:48px; flex:none; }
+.v-avatar .mic {
+  position:absolute; right:-4px; bottom:-2px; width:20px; height:20px;
+  color:var(--accent); filter:drop-shadow(0 0 1.5px var(--in));
+}
+.voice.played .v-avatar .mic { color:var(--sub); }
+.v-speed {
+  width:48px; height:48px; flex:none; border-radius:50%; display:none; place-items:center;
+  background:color-mix(in srgb, var(--sub) 22%, transparent); font-size:13px; font-weight:600;
+}
+.voice.playing .v-avatar { display:none; }
+.voice.playing .v-speed { display:grid; }
+.row.out .voice.playing .v-speed { display:none; }
+.v-play { width:32px; height:32px; flex:none; display:grid; place-items:center; color:var(--sub); }
+.row.out .v-play { color:var(--sub-out); }
+.v-play .ic { width:30px; height:30px; }
+.v-main { position:relative; flex:1; min-width:0; }
+.v-wave {
+  position:relative; display:flex; align-items:center; gap:2px; height:32px; cursor:pointer;
+}
+.v-wave span {
+  flex:1; min-width:2px; max-width:3px; border-radius:2px; background:var(--wave);
+  transition:background .08s;
+}
+.row.out .v-wave span { background:var(--wave-out); }
+.v-wave span.on { background:var(--accent) !important; }
+.voice.played .v-wave span.on { background:var(--read) !important; }
+.v-thumb {
+  position:absolute; top:50%; left:0; width:13px; height:13px; margin:-6.5px 0 0 -6.5px;
+  border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--in);
+}
+.row.out .v-thumb { box-shadow:0 0 0 2px var(--out); }
+.v-sub {
+  position:absolute; left:0; right:0; top:35px; display:flex; align-items:center; gap:10px;
+  font-size:11px; color:var(--sub);
+}
+.row.out .v-sub { color:var(--sub-out); }
+.v-time { font-variant-numeric:tabular-nums; }
+.tx-btn { font-size:11.5px; font-weight:600; color:var(--accent); }
+.tx-btn:hover { text-decoration:underline; }
+.tx-wait { font-style:italic; }
+.tx { margin:4px 0 14px; padding-top:7px; border-top:1px solid var(--line); font-size:13.5px; }
+.row.out .tx { border-color:color-mix(in srgb, var(--sub-out) 25%, transparent); }
+
+/* GIL is typing / recording */
+#typing { display:flex; padding:0 5.5% 12px; }
+#typing .bubble { min-width:0; padding:11px 14px; border-top-left-radius:0; }
+#typing .bubble::before {
+  content:""; position:absolute; top:0; left:-8px; width:9px; height:13px; background:inherit;
+  clip-path:path("M9 0H1.6C.4 0 0 1.4 .9 2.2L9 13z");
+}
+.dots { display:flex; gap:4px; }
+.dots span {
+  width:7px; height:7px; border-radius:50%; background:var(--sub);
+  animation:blink 1.25s infinite ease-in-out;
+}
+.dots span:nth-child(2) { animation-delay:.17s; }
+.dots span:nth-child(3) { animation-delay:.34s; }
+@keyframes blink { 0%,60%,100% { opacity:.3; transform:translateY(0); } 30% { opacity:1; transform:translateY(-3px); } }
+.rec-pill { display:flex; align-items:center; gap:7px; color:var(--accent); font-size:13px; }
+.rec-pill .ic { width:18px; height:18px; animation:pulse 1.1s infinite; }
+
+#down {
+  position:absolute; right:16px; bottom:16px; z-index:4; width:42px; height:42px;
+  border-radius:50%; display:grid; place-items:center; background:var(--chip);
+  color:var(--sub); box-shadow:0 2px 10px rgba(0,0,0,.3);
+  transition:transform .18s, opacity .18s;
+}
+#down.gone { transform:scale(.6); opacity:0; pointer-events:none; }
+#down .badge {
+  position:absolute; top:-7px; right:-5px; min-width:20px; height:20px; padding:0 6px;
+  border-radius:10px; display:grid; place-items:center; background:var(--accent);
+  color:var(--accent-ink); font-size:11.5px; font-weight:700;
+}
+#down .badge:empty { display:none; }
+
+/* ── composer ───────────────────────────────────────────────────────────── */
+#bottom { padding:8px 10px 10px; background:var(--bar); border-top:1px solid var(--bar-line); }
+#chips { display:flex; gap:8px; overflow-x:auto; padding:0 2px 9px; scrollbar-width:none; }
+#chips::-webkit-scrollbar { display:none; }
+#chips:empty { display:none; }
+#chips button {
+  flex:none; padding:7px 14px; border-radius:18px; border:1px solid var(--line);
+  background:var(--card); font-size:13px; white-space:nowrap;
+  transition:border-color .15s, color .15s;
+}
+#chips button:hover { border-color:var(--accent); color:var(--accent); }
+#replyBar {
+  display:flex; align-items:stretch; gap:10px; margin:0 2px 8px; padding:7px 8px 7px 10px;
+  border-radius:10px; background:var(--input); animation:slideUp .16s ease-out;
+}
+@keyframes slideUp { from { opacity:0; transform:translateY(8px); } }
+.rb-line { width:4px; flex:none; border-radius:2px; background:var(--accent); }
+.rb-body { flex:1; min-width:0; font-size:13px; }
+.rb-body b { display:block; color:var(--accent); font-size:12.5px; }
+.rb-body span { display:block; color:var(--sub); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#composer { display:flex; align-items:flex-end; gap:8px; }
+#field {
+  flex:1; min-width:0; display:flex; align-items:flex-end; min-height:46px;
+  padding:3px 8px 3px 18px; border-radius:23px; background:var(--input);
+  box-shadow:var(--shadow);
+}
+#input {
+  flex:1; min-width:0; resize:none; border:none; outline:none; background:transparent;
+  color:var(--txt); font:inherit; font-size:15px; line-height:1.38;
+  max-height:150px; padding:10px 0;
+}
+#input::placeholder { color:var(--ph); }
+#rec {
+  flex:1; display:flex; align-items:center; gap:12px; min-height:46px; padding:0 8px 0 6px;
+  border-radius:23px; background:var(--input); box-shadow:var(--shadow);
+}
+#rec .icon { width:36px; height:36px; color:var(--sub); }
+#rec .icon:hover { color:var(--urgent); }
+.rec-dot { width:10px; height:10px; border-radius:50%; background:var(--urgent); animation:pulse 1s infinite; }
+@keyframes pulse { 50% { opacity:.25; } }
+#recTime { font-variant-numeric:tabular-nums; font-size:14.5px; min-width:38px; }
+#recLevels { flex:1; display:flex; align-items:center; gap:2px; height:26px; overflow:hidden; }
+#recLevels span { flex:none; width:3px; border-radius:2px; background:var(--sub); }
+.round {
+  width:46px; height:46px; flex:none; border-radius:50%; display:grid; place-items:center;
+  background:var(--accent); color:var(--accent-ink); box-shadow:var(--shadow);
+  transition:transform .12s, filter .15s;
+}
+.round:hover { filter:brightness(1.08); }
+.round:active { transform:scale(.92); }
+.round .ic { width:23px; height:23px; }
+.round.swap .ic { animation:swap .18s ease-out; }
+@keyframes swap { from { transform:scale(.4) rotate(-30deg); opacity:0; } }
+
+/* ── contact info ───────────────────────────────────────────────────────── */
+#panel {
+  position:fixed; inset:0; z-index:30; display:flex; flex-direction:column;
+  background:var(--panel); transform:translateX(102%);
+  transition:transform .26s cubic-bezier(.2,.8,.2,1); visibility:hidden;
+}
+#panel.open { transform:none; visibility:visible; }
+.p-head {
+  display:flex; align-items:center; gap:12px; height:62px; padding:0 8px; flex:none;
+  background:var(--bar); border-bottom:1px solid var(--bar-line); font-size:16px; font-weight:500;
+}
+.p-scroll { flex:1; overflow-y:auto; padding-bottom:28px; }
+.p-hero {
+  display:flex; flex-direction:column; align-items:center; padding:26px 16px 20px;
+  background:var(--card); margin-bottom:10px;
+}
+.p-avatar { width:112px; height:112px; margin-bottom:14px; box-shadow:0 6px 24px rgba(0,0,0,.25); }
+.p-hero h2 { font-size:23px; font-weight:500; }
+.p-hero p { margin-top:2px; color:var(--sub); font-size:13.5px; }
+.pill {
+  margin-top:12px; padding:4px 13px; border-radius:13px; font-size:12px; font-weight:600;
+  background:color-mix(in srgb, var(--online) 16%, transparent); color:var(--online);
+}
+.pill.off { background:var(--hover); color:var(--sub); }
+.p-sec { margin-bottom:10px; background:var(--card); }
+.p-sec h3 {
+  display:flex; justify-content:space-between; padding:14px 20px 6px;
+  font-size:13px; font-weight:600; color:var(--accent);
+}
+.p-sec h3 small { color:var(--sub); font-weight:400; }
+.p-row { display:flex; align-items:center; gap:14px; padding:11px 20px; }
+.p-row + .p-row { border-top:1px solid var(--line); }
+.p-ico {
+  width:38px; height:38px; flex:none; border-radius:50%; display:grid; place-items:center;
+  background:color-mix(in srgb, var(--accent) 13%, transparent); color:var(--accent);
+}
+.p-ico .ic { width:20px; height:20px; }
+.p-main { flex:1; min-width:0; }
+.p-main b { display:block; font-weight:500; font-size:14.5px; }
+.p-main small {
+  display:block; color:var(--sub); font-size:12.5px; line-height:1.4;
+  overflow:hidden; text-overflow:ellipsis;
+}
+.p-main.clamp small { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.p-actions { display:flex; gap:4px; padding:0 20px 10px 72px; }
+.mini {
+  padding:5px 10px; border-radius:7px; font-size:12.5px; font-weight:500; color:var(--accent);
+}
+.mini:hover { background:var(--hover); }
+.mini.danger { color:var(--urgent); }
+.empty { padding:6px 20px 16px; color:var(--sub); font-size:13.5px; line-height:1.5; }
+.switch { position:relative; width:40px; height:22px; flex:none; }
+.switch input { position:absolute; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; z-index:1; }
+.switch span {
+  position:absolute; inset:0; border-radius:11px; background:color-mix(in srgb, var(--sub) 45%, transparent);
+  transition:background .2s;
+}
+.switch span::after {
+  content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%;
+  background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); transition:transform .2s;
+}
+.switch input:checked + span { background:var(--accent); }
+.switch input:checked + span::after { transform:translateX(18px); }
+.usage { padding:4px 20px 16px; }
+.usage .bar { height:6px; border-radius:3px; background:var(--hover); overflow:hidden; }
+.usage .bar i { display:block; height:100%; width:0; border-radius:3px; background:var(--accent); transition:width .4s; }
+.usage small { display:block; margin-top:7px; color:var(--sub); font-size:12.5px; }
+.seg {
+  display:flex; gap:2px; margin-top:8px; padding:2px; border-radius:9px; background:var(--hover);
+}
+.seg button {
+  flex:1; padding:6px 4px; border-radius:7px; font-size:12.5px; color:var(--sub); white-space:nowrap;
+  transition:background .15s, color .15s;
+}
+.seg button:hover { color:var(--txt); }
+.seg button[aria-checked="true"] { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+.p-note { padding:4px 20px 14px 72px; color:var(--sub); font-size:12.5px; line-height:1.45; }
+
+#sheet {
+  position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:16px;
+  background:rgba(0,0,0,.55); animation:fade .15s ease-out;
+}
+@keyframes fade { from { opacity:0; } }
+.sheet-card {
+  width:100%; max-width:380px; max-height:100%; overflow-y:auto; padding:22px 22px 16px;
+  border-radius:14px; background:var(--card); box-shadow:0 18px 50px rgba(0,0,0,.45);
+}
+.sheet-card h3 { font-size:17px; font-weight:600; margin-bottom:14px; }
+#qr { display:grid; place-items:center; margin:0 auto 12px; width:216px; height:216px;
+      padding:8px; border-radius:10px; background:#fff; }
+#qr svg { width:100%; height:100%; }
+#qrLink {
+  display:block; margin:0 auto 14px; max-width:100%; color:var(--sub); font-size:11.5px;
+  text-align:center; word-break:break-all; user-select:all;
+}
+.sheet-card ol { margin:0 0 12px 18px; font-size:13.5px; line-height:1.6; }
+.sheet-note { margin-bottom:8px; color:var(--sub); font-size:12.5px; line-height:1.45; }
+.sheet-btns { display:flex; justify-content:space-between; gap:8px; margin-top:14px; }
+.sheet-btns button { padding:8px 14px; border-radius:8px; font-weight:500; color:var(--accent); }
+.sheet-btns button:hover { background:var(--hover); }
+.sheet-btns .danger { color:var(--urgent); }
+.denied { padding:40px 28px; text-align:center; color:var(--sub); line-height:1.6; }
+.denied b { display:block; margin-bottom:6px; color:var(--txt); font-size:16px; font-weight:600; }
+
+.p-foot {
+  display:flex; gap:8px; justify-content:center; align-items:flex-start; padding:14px 28px;
+  color:var(--sub); font-size:12.5px; text-align:center; line-height:1.5;
+}
+.p-foot .ic { width:15px; height:15px; margin-top:1px; }
+
+#snack {
+  position:fixed; left:50%; bottom:92px; z-index:40; max-width:88%;
+  padding:10px 16px; border-radius:9px; background:#2B2F3A; color:#F2F3F7;
+  font-size:13.5px; box-shadow:0 8px 24px rgba(0,0,0,.35);
+  transform:translateX(-50%); animation:slideUp .18s ease-out;
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <button id="who" aria-label="Contact info">
+      <span class="avatar"><img src="/gil_icon.png" alt=""><i class="presence"></i></span>
+      <span class="who-text"><b>G.I.L.</b><span id="status">connecting…</span></span>
+    </button>
+    <button class="icon" id="menuBtn" aria-label="Menu"></button>
+    <div id="menu" hidden>
+      <button data-menu="info">Contact info</button>
+      <button data-menu="master" id="menuMaster">Pause Vigil</button>
+      <button data-menu="read">Mark all as read</button>
+      <button data-menu="phone" id="menuPhone">Use on your phone</button>
+    </div>
+  </header>
+
+  <div id="chatwrap">
+    <main id="chat">
+      <div id="list"></div>
+      <div id="typing" hidden><div class="bubble"><div class="dots"><span></span><span></span><span></span></div></div></div>
+    </main>
+    <button id="down" class="gone" aria-label="Jump to the latest message"><span class="badge"></span></button>
+  </div>
+
+  <footer id="bottom">
+    <div id="chips"></div>
+    <div id="replyBar" hidden>
+      <div class="rb-line"></div>
+      <div class="rb-body"><b id="rbWho"></b><span id="rbText" dir="auto"></span></div>
+      <button class="icon" id="rbClose" aria-label="Cancel reply"></button>
+    </div>
+    <div id="composer">
+      <div id="field"><textarea id="input" rows="1" placeholder="Message" dir="auto" maxlength="4000"></textarea></div>
+      <div id="rec" hidden>
+        <button class="icon" id="recCancel" aria-label="Delete recording"></button>
+        <span class="rec-dot"></span><span id="recTime">0:00</span>
+        <div id="recLevels"></div>
+      </div>
+      <button class="round" id="action" aria-label="Record a voice message"></button>
+    </div>
+  </footer>
+</div>
+
+<aside id="panel" aria-label="Contact info">
+  <div class="p-head"><button class="icon" id="pBack" aria-label="Back"></button><span>Contact info</span></div>
+  <div class="p-scroll">
+    <div class="p-hero">
+      <img class="p-avatar" src="/gil_icon.png" alt="">
+      <h2>G.I.L.</h2>
+      <p>Generative Intelligence Liaison</p>
+      <span id="pState" class="pill">Keeping watch</span>
+    </div>
+    <div class="p-sec">
+      <div class="p-row">
+        <span class="p-ico" id="masterIco"></span>
+        <div class="p-main"><b>Vigil</b><small>Checks what you've asked him to watch, in the background</small></div>
+        <label class="switch"><input type="checkbox" id="masterSw" aria-label="Vigil on or off"><span></span></label>
+      </div>
+    </div>
+    <div class="p-sec"><h3>Watching <small id="wCount"></small></h3><div id="watchList"></div></div>
+    <div class="p-sec"><h3>Needs you <small id="nCount"></small></h3><div id="needsList"></div></div>
+    <div class="p-sec"><h3>What G.I.L. can do <small>for your watches</small></h3>
+      <div id="abilList"></div>
+      <p class="p-note">Only watches you've asked to act can do these. He never sends email, pays,
+        deletes anything or touches passwords.</p>
+    </div>
+    <div class="p-sec" id="phoneSec">
+      <div class="p-row">
+        <span class="p-ico" id="phoneIco"></span>
+        <div class="p-main"><b>On your phone</b><small id="phoneText">Off</small></div>
+        <button class="mini" id="phoneBtn">Set up</button>
+      </div>
+    </div>
+    <div class="p-sec"><h3>Today</h3>
+      <div class="usage"><div class="bar"><i id="useBar"></i></div><small id="useText"></small></div>
+    </div>
+    <p class="p-foot"><span id="footIco"></span>Vigil runs on this PC. What it watches and what you say here stay on it.</p>
+  </div>
+</aside>
+<div id="snack" hidden></div>
+<div id="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h3 id="sheetTitle">Vigil on your phone</h3>
+    <div id="qr"></div>
+    <a id="qrLink"></a>
+    <ol>
+      <li>Put your phone on the same Wi-Fi as this PC.</li>
+      <li>Scan the code with the phone's camera.</li>
+      <li>Tap <b>Share → Add to Home Screen</b> to keep it like an app.</li>
+    </ol>
+    <p class="sheet-note">The code holds a private key: anyone who has it can read and use this chat.
+      Use it on your home Wi-Fi only. If Windows asks, allow access on private networks.</p>
+    <p class="sheet-note">On the phone you read, type and listen. Notifications stay on this PC, and
+      recording your own voice messages needs it too.</p>
+    <div class="sheet-btns">
+      <button class="danger" id="phoneOff">Turn off phone access</button>
+      <button id="sheetClose">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ── basics ───────────────────────────────────────────────────────────────── */
+const $ = s => document.querySelector(s);
+/* On this PC the chat needs no key. A paired phone opens it as /?t=<key> and
+   sends the key with everything it asks for; it stays in the address so a
+   home-screen copy keeps it too. */
+const LOCAL = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+const TOKEN = (() => {
+  if (LOCAL) return "";
+  const t = new URLSearchParams(location.search).get("t");
+  try {
+    if (t) localStorage.setItem("vigil_t", t);
+    return t || localStorage.getItem("vigil_t") || "";
+  } catch { return t || ""; }
+})();
+const withKey = url => TOKEN ? `${url}${url.includes("?") ? "&" : "?"}t=${encodeURIComponent(TOKEN)}` : url;
+const api = (method, ...args) =>
+  fetch("/api", { method:"POST",
+                  headers:{ "Content-Type":"application/json", "X-Vigil":"1",
+                            ...(TOKEN ? { "X-GIL-Token":TOKEN } : {}) },
+                  body:JSON.stringify({ method, args }) })
+    .then(r => { if (r.status === 403) { S.denied = true; return null; } return r.json(); })
+    .then(j => j?.result ?? null).catch(() => null);
+const CAN_REC = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+{
+  const link = document.createElement("link");
+  link.rel = "manifest"; link.href = withKey("/vigil.webmanifest");
+  document.head.appendChild(link);
+}
+
+const ICON = {
+  mic:"M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z",
+  send:"M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a1 1 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z",
+  play:"M8 5.14v13.72a1 1 0 0 0 1.52.85l10.76-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z",
+  pause:"M7 5h3.5v14H7zM13.5 5H17v14h-3.5z",
+  reply:"M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z",
+  more:"M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+  back:"M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z",
+  trash:"M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  close:"M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
+  down:"M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z",
+  check:"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
+  dcheck:"M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41 6 19l1.41-1.41L1.83 12 .41 13.41z",
+  eye:"M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  mail:"M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z",
+  cal:"M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V9h14v11zM7 11h5v5H7z",
+  globe:"M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.93 6h-2.95a15.6 15.6 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.93 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14A8.2 8.2 0 0 1 4 12c0-.69.1-1.36.26-2h3.38a16.5 16.5 0 0 0 0 4H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.99 7.99 0 0 1 5.08 16zm2.95-8H5.08a7.99 7.99 0 0 1 4.33-3.56A15.6 15.6 0 0 0 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66a14.7 14.7 0 0 1 0-4h4.68a14.7 14.7 0 0 1 0 4zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56zM16.36 14a16.5 16.5 0 0 0 0-4h3.38a8.2 8.2 0 0 1 0 4h-3.38z",
+  lock:"M18 8h-1V6A5 5 0 0 0 7 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm9 14H6V10h12v10zm-6-3a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  bell:"M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
+  bolt:"M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z",
+  phone:"M17 1.01 7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z",
+  shield:"M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z",
+  clock:"M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
+};
+const svg = (name, cls = "") =>
+  `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
+const esc = s => String(s ?? "").replace(/[&<>"']/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
+const RTL = /^[^A-Za-z֐-׿]*[֐-׿]/;
+const pad = n => String(n).padStart(2, "0");
+const clock = ts => { const d = new Date(ts * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const mmss = s => `${Math.floor(s / 60)}:${pad(Math.floor(s % 60))}`;
+
+function dayLabel(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  const start = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((start(now) - start(d)) / 864e5);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff < 7) return d.toLocaleDateString("en-GB", { weekday:"long" });
+  return d.toLocaleDateString("en-GB", { day:"numeric", month:"long", year:"numeric" });
+}
+const sameDay = (a, b) => new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
+function ago(ts) {
+  if (!ts) return "not checked yet";
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "checked just now";
+  if (s < 3600) return `checked ${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `checked ${Math.floor(s / 3600)} h ago`;
+  return `checked ${Math.floor(s / 86400)} d ago`;
+}
+
+/* Text from emails and pages lands here, so: escape everything first, and only
+   then turn on the little formatting GIL uses — links (http/https only),
+   **bold**, `code` and bullet lines. Nothing in a message can become markup. */
+function fmt(s) {
+  const lines = esc(s).split("\n").map(line => {
+    let h = line
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`)
+      .replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g,
+        (_, p, u) => `${p}<a href="${u}" target="_blank" rel="noopener noreferrer">${u.length > 46 ? u.slice(0, 43) + "…" : u}</a>`)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+    return /^\s*[-•]\s+/.test(line) ? `<span class="li">${h.replace(/^\s*[-•]\s+/, "")}</span>` : h + "<br>";
+  });
+  return lines.join("").replace(/(<br>)+$/, "");
+}
+
+/* ── state ────────────────────────────────────────────────────────────────── */
+const S = {
+  msgs:new Map(), order:[], replyTo:null, st:null, name:"",
+  firstUnread:null, hasOlder:true, loadingOlder:false, below:0, lost:false,
+  rendered:new Set(),
+};
+const list = $("#list"), chat = $("#chat");
+
+/* ── the doodle wallpaper, drawn in GIL's own motifs ──────────────────────── */
+function wallpaper() {
+  const c = getComputedStyle(document.documentElement).getPropertyValue("--wall").trim();
+  const P = {
+    eye:"M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12zm10-2.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
+    bell:"M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zm4 4a2 2 0 0 0 4 0",
+    star:"M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z",
+    mail:"M3 6h18v12H3zm0 1l9 6 9-6",
+    cal:"M4 6h16v14H4zm0 4h16M8 3v4m8-4v4",
+    find:"M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm5 11 5 5",
+    moon:"M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
+    spark:"M12 3c.8 4.6 4.4 8.2 9 9-4.6.8-8.2 4.4-9 9-.8-4.6-4.4-8.2-9-9 4.6-.8 8.2-4.4 9-9z",
+    bolt:"M13 2 4 14h7l-1 8 9-12h-7z",
+    chat:"M4 5h16v10H9l-5 4z",
+    wave:"M5 12a10 10 0 0 1 14 0M8 15a6 6 0 0 1 8 0M12 18.5v.5",
+    clock:"M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4v5l3 3",
+    planet:"M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM3 16c3-1 15-6 18-9",
+    mic:"M12 4a2.5 2.5 0 0 0-2.5 2.5v5a2.5 2.5 0 0 0 5 0v-5A2.5 2.5 0 0 0 12 4zm-5 7.5a5 5 0 0 0 10 0M12 16.5V20",
+  };
+  const place = [["eye",22,18,-12,1.1],["spark",120,8,10,.8],["mail",210,30,8,1],["moon",262,104,-20,.9],
+    ["bell",70,92,14,.95],["chat",162,96,-8,1],["star",28,170,18,.85],["wave",112,180,0,1.05],
+    ["cal",206,170,-14,.95],["bolt",268,224,12,.9],["find",60,250,-6,1],["clock",158,248,10,.9],
+    ["planet",236,276,-18,.95],["mic",8,92,8,.85],["spark",290,52,0,.55],["star",188,214,-10,.6]];
+  const g = place.map(([k, x, y, r, s]) =>
+    `<path transform="translate(${x} ${y}) rotate(${r}) scale(${s}) translate(-12 -12)" d="${P[k]}"/>`).join("");
+  const tile = `<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300'>` +
+    `<g fill='none' stroke='${c}' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'>${g}</g></svg>`;
+  chat.style.backgroundImage = `url("data:image/svg+xml;utf8,${encodeURIComponent(tile)}")`;
+}
+
+/* ── rendering messages ───────────────────────────────────────────────────── */
+const grouped = (a, b) => a && b && a.sender === b.sender && a.sender !== "system"
+  && b.at - a.at < 300 && sameDay(a.at, b.at);
+
+function ticks(m) {
+  if (m.sender !== "me") return "";
+  return m.status === "read" ? svg("dcheck", "tick read") : svg("check", "tick");
+}
+
+function quoteHtml(m) {
+  if (!m.quote) return "";
+  const who = m.quote.sender === "me" ? "You" : "G.I.L.";
+  const txt = m.quote.kind === "voice" ? "🎤 Voice message" + (m.quote.text ? " · " + m.quote.text : "") : m.quote.text;
+  return `<span class="quote" data-jump="${m.quote.id}"><b>${who}</b><span dir="auto">${esc(txt)}</span></span>`;
+}
+
+function voiceHtml(m) {
+  const mine = m.sender === "me", played = mine || m.meta.played;
+  const bars = Array.from({ length:38 }, (_, i) => {
+    const h = 5 + Math.abs(Math.sin((m.id * 7.3 + i) * 1.7)) * 15;   // until the real shape loads
+    return `<span style="height:${h.toFixed(1)}px"></span>`;
+  }).join("");
+  const toggle = m.meta.transcribing ? `<span class="tx-wait">Transcribing…</span>`
+    : m.text ? `<button class="tx-btn" data-tx>Transcript</button>` : "";
+  const tx = m.text && !m.meta.transcribing ? `<div class="tx" dir="auto" hidden>${esc(m.text)}</div>` : "";
+  return `<div class="voice${played ? " played" : ""}" data-voice="${m.id}">
+      ${mine ? "" : `<div class="v-avatar"><img src="/gil_icon.png" alt="">${svg("mic", "mic")}</div>
+      <button class="v-speed" data-speed>1×</button>`}
+      <button class="v-play" data-play aria-label="Play">${svg("play")}</button>
+      <div class="v-main"><div class="v-wave" data-seek>${bars}<i class="v-thumb"></i></div>
+        <div class="v-sub"><span class="v-time">${m.meta.duration ? mmss(m.meta.duration) : "0:00"}</span>${toggle}</div></div>
+    </div>${tx}`;
+}
+
+function bodyHtml(m) {
+  if (m.kind === "voice") return voiceHtml(m);
+  const rtl = RTL.test(m.text) ? " rtl" : "";
+  if (m.kind === "card" && m.meta.card === "action") {
+    return `<div class="card-head">${svg("bolt")}<span>Can I?</span></div>
+      <div class="card-title" dir="auto">${esc(m.text)}</div>
+      ${m.meta.why ? `<div class="card-body" dir="auto">${esc(m.meta.why)}</div>` : ""}
+      ${m.meta.watch ? `<div class="card-from">${svg("eye")}<span dir="auto">From “${esc(m.meta.watch)}”</span></div>` : ""}
+      <span class="spacer"></span>`;
+  }
+  if (m.kind === "card" && m.meta.card === "allow") {
+    return `<div class="card-head">${svg("shield")}<span>Your settings</span></div>
+      <div class="card-title" dir="auto">${esc(m.text)}</div><span class="spacer"></span>`;
+  }
+  if (m.kind === "card") {
+    const [line, ...rest] = (m.text || "").split("\n");
+    return `<div class="card-head">${svg("eye")}<span>Watching</span></div>
+      <div class="card-title" dir="auto">${esc(m.meta.watch || "")}</div>
+      <div class="card-body text${rtl}" dir="auto">${esc(line)}${rest.length ? "<br>" + fmt(rest.join("\n")) : ""}<span class="spacer"></span></div>`;
+  }
+  return `<div class="text${rtl}" dir="auto">${fmt(m.text)}<span class="spacer"></span></div>`;
+}
+
+function rowFor(m, prev) {
+  if (m.kind === "system" || m.sender === "system") {
+    const notice = /runs on this PC/.test(m.text);
+    const el = document.createElement("div");
+    el.className = "sys" + (notice ? " notice" : "");
+    el.dataset.id = m.id;
+    el.innerHTML = (notice ? svg("lock") : "") + `<span dir="auto">${esc(m.text)}</span>`;
+    return el;
+  }
+  const out = m.sender === "me";
+  const row = document.createElement("div");
+  row.className = `row ${out ? "out" : "in"}${grouped(prev, m) ? "" : " tail first"}`;
+  row.dataset.id = m.id;
+  const urgent = m.urgency === "urgent" && !out;
+  const labels =
+    (urgent ? `<div class="label urgent"><i></i>Urgent</div>` : "") +
+    (!out && m.meta.watch && m.kind !== "card" ? `<div class="label">${svg("eye")}<span dir="auto">${esc(m.meta.watch)}</span></div>` : "");
+  let after = "";
+  if (m.meta.resolved) after = `<div class="resolved">${esc(m.meta.resolved)}</div>`;
+  else if (m.meta.buttons?.length)
+    after = `<div class="btns">${m.meta.buttons.map(b =>
+      `<button data-btn="${esc(b.id)}">${esc(b.label)}</button>`).join("")}</div>`;
+  const kind = m.kind === "voice" ? " b-voice"
+    : m.kind === "card" ? " b-card" + (m.meta.card === "action" || m.meta.card === "allow" ? " act" : "") : "";
+  row.innerHTML = `<div class="bubble${kind}${urgent ? " urgent" : ""}"><div class="content">${labels}${quoteHtml(m)}${bodyHtml(m)}
+      <span class="meta">${clock(m.at)}${ticks(m)}</span></div>${after}</div>
+    <button class="reply-btn" data-reply aria-label="Reply">${svg("reply")}</button>`;
+  if (m.kind === "voice") queueMicrotask(() => loadWave(row, m));
+  return row;
+}
+
+function dayChip(ts) {
+  const el = document.createElement("div");
+  el.className = "day";
+  el.textContent = dayLabel(ts);
+  return el;
+}
+
+function renderAll() {
+  list.innerHTML = "";
+  if (S.hasOlder && S.order.length >= 80) {
+    const more = document.createElement("div");
+    more.className = "more"; more.textContent = "Scroll up for earlier messages";
+    list.appendChild(more);
+  }
+  let prev = null;
+  for (const id of S.order) {
+    const m = S.msgs.get(id);
+    if (!prev || !sameDay(prev.at, m.at)) list.appendChild(dayChip(m.at));
+    if (S.firstUnread === id) {
+      const d = document.createElement("div");
+      d.className = "unread-div";
+      const n = S.order.filter(i => i >= id && S.msgs.get(i).sender === "gil").length;
+      d.innerHTML = `<span>${n} unread message${n === 1 ? "" : "s"}</span>`;
+      list.appendChild(d);
+    }
+    list.appendChild(rowFor(m, prev));
+    prev = m;
+  }
+}
+
+function appendMessage(m) {
+  if (S.msgs.has(m.id)) return replaceMessage(m);
+  const prev = S.msgs.get(S.order[S.order.length - 1]);
+  const stick = nearBottom() || m.sender === "me";
+  S.msgs.set(m.id, m); S.order.push(m.id);
+  if (!prev || !sameDay(prev.at, m.at)) list.appendChild(dayChip(m.at));
+  const row = rowFor(m, prev);
+  row.classList.add("fresh");
+  list.appendChild(row);
+  if (stick) toBottom(true);
+  else if (m.sender === "gil") { S.below++; updateDown(); }
+  maybeRead();
+}
+
+function replaceMessage(m) {
+  S.msgs.set(m.id, m);
+  const old = list.querySelector(`[data-id="${m.id}"]`);
+  if (!old) return;
+  const i = S.order.indexOf(m.id);
+  const fresh = rowFor(m, S.msgs.get(S.order[i - 1]));
+  old.replaceWith(fresh);
+}
+
+/* ── scrolling ────────────────────────────────────────────────────────────── */
+const nearBottom = () => chat.scrollHeight - chat.scrollTop - chat.clientHeight < 140;
+function toBottom(smooth) {
+  chat.scrollTo({ top:chat.scrollHeight, behavior:smooth ? "smooth" : "auto" });
+  S.below = 0; updateDown();
+}
+function updateDown() {
+  const btn = $("#down");
+  btn.classList.toggle("gone", nearBottom() && !S.below);
+  btn.querySelector(".badge").textContent = S.below ? S.below : "";
+}
+chat.addEventListener("scroll", () => {
+  if (nearBottom()) { S.below = 0; maybeRead(); }
+  updateDown();
+  if (chat.scrollTop < 80) loadOlder();
+}, { passive:true });
+$("#down").insertAdjacentHTML("afterbegin", svg("down"));
+$("#down").addEventListener("click", () => toBottom(true));
+
+async function loadOlder() {
+  if (S.loadingOlder || !S.hasOlder || !S.order.length) return;
+  S.loadingOlder = true;
+  const older = await api("older", S.order[0]);
+  if (older?.length) {
+    const before = chat.scrollHeight;
+    older.forEach(m => S.msgs.set(m.id, m));
+    S.order = older.map(m => m.id).concat(S.order);
+    renderAll();
+    chat.scrollTop += chat.scrollHeight - before;
+  } else S.hasOlder = false;
+  S.loadingOlder = false;
+}
+
+/* ── read state, title, being looked at ───────────────────────────────────── */
+let readTimer = 0;
+function maybeRead() {
+  clearTimeout(readTimer);
+  readTimer = setTimeout(() => {
+    if (!document.hidden && document.hasFocus() && nearBottom()) api("read").then(() => setUnread(0));
+  }, 700);
+}
+function setUnread(n) { document.title = n ? `(${n}) Vigil — G.I.L.` : "Vigil — G.I.L."; }
+function reportView() { api("view", !document.hidden, document.hasFocus()); }
+["focus", "blur", "visibilitychange"].forEach(ev => window.addEventListener(ev, () => { reportView(); maybeRead(); }));
+setInterval(() => { if (!document.hidden) reportView(); }, 30000);
+
+/* ── header: status, menu ─────────────────────────────────────────────────── */
+function setStatus(text) {
+  const el = $("#status");
+  el.textContent = text;
+  const busy = /…$/.test(text) && !/^paused/.test(text);
+  el.classList.toggle("busy", busy);
+  const typing = $("#typing");
+  const show = /^(typing|recording|looking)/.test(text);
+  if (show) {
+    typing.querySelector(".bubble").innerHTML = /^recording/.test(text)
+      ? `<div class="rec-pill">${svg("mic")}<span>recording audio…</span></div>`
+      : /^looking/.test(text)
+        ? `<div class="rec-pill">${svg("globe")}<span>looking it up…</span></div>`
+        : `<div class="dots"><span></span><span></span><span></span></div>`;
+  }
+  const stick = nearBottom();
+  typing.hidden = !show;
+  if (show && stick) toBottom(true);
+}
+function setMaster(on) {
+  $("#app").classList.toggle("paused", !on);
+  $("#menuMaster").textContent = on ? "Pause Vigil" : "Resume Vigil";
+}
+$("#menuBtn").innerHTML = svg("more");
+$("#menuBtn").addEventListener("click", e => { e.stopPropagation(); $("#menu").hidden = !$("#menu").hidden; });
+document.addEventListener("click", () => { $("#menu").hidden = true; });
+$("#menu").addEventListener("click", async e => {
+  const b = e.target.closest("[data-menu]"); if (!b) return;
+  if (b.dataset.menu === "info") openPanel();
+  if (b.dataset.menu === "master") applyExtras(await api("master", !S.st?.master));
+  if (b.dataset.menu === "read") { await api("read"); setUnread(0); }
+  if (b.dataset.menu === "phone") openPhone();
+});
+// Phone access is switched on from the PC only; a phone doesn't get the switch.
+if (!LOCAL) { $("#menuPhone").hidden = true; $("#phoneSec").hidden = true; }
+
+/* ── voice messages ───────────────────────────────────────────────────────── */
+let actx = null;
+const audioCache = new Map();
+async function audioFor(url) {
+  if (audioCache.has(url)) return audioCache.get(url);
+  const p = (async () => {
+    const bytes = await (await fetch(withKey(url))).arrayBuffer();
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type:url.endsWith(".mp3") ? "audio/mpeg" : "audio/webm" }));
+    let peaks = null, duration = 0;
+    try {
+      actx = actx || new AudioContext();
+      const buf = await actx.decodeAudioData(bytes.slice(0));
+      duration = buf.duration;
+      const data = buf.getChannelData(0), n = 38, step = Math.floor(data.length / n) || 1;
+      peaks = Array.from({ length:n }, (_, i) => {
+        let sum = 0;
+        for (let j = i * step; j < (i + 1) * step && j < data.length; j += 16) sum += data[j] * data[j];
+        return Math.sqrt(sum / (step / 16));
+      });
+      const max = Math.max(...peaks, 1e-4);
+      peaks = peaks.map(v => Math.max(.12, Math.pow(v / max, .8)));
+    } catch { /* plays fine without a drawn shape */ }
+    return { blobUrl, peaks, duration };
+  })();
+  audioCache.set(url, p);
+  return p;
+}
+async function loadWave(row, m) {
+  if (!m.audio) return;
+  try {
+    const a = await audioFor(m.audio);
+    const bars = row.querySelectorAll(".v-wave span");
+    if (a.peaks) bars.forEach((b, i) => { b.style.height = (4 + a.peaks[i] * 22).toFixed(1) + "px"; });
+    const t = row.querySelector(".v-time");
+    if (a.duration && t && !player.el) t.textContent = mmss(a.duration);
+    row.dataset.duration = a.duration || "";
+  } catch {}
+}
+
+const player = { el:null, audio:null, id:null, rate:1 };
+function paint(row, frac) {
+  const bars = row.querySelectorAll(".v-wave span");
+  const lit = Math.round(frac * bars.length);
+  bars.forEach((b, i) => b.classList.toggle("on", i < lit));
+  row.querySelector(".v-thumb").style.left = (frac * 100).toFixed(2) + "%";
+}
+function stopPlayer() {
+  if (!player.audio) return;
+  player.audio.pause();
+  const row = player.el;
+  row.querySelector("[data-play]").innerHTML = svg("play");
+  row.querySelector(".voice").classList.remove("playing");
+  const d = +row.dataset.duration;
+  if (d) row.querySelector(".v-time").textContent = mmss(d);
+  Object.assign(player, { el:null, audio:null, id:null });
+}
+async function play(row, seekFrac) {
+  const id = +row.dataset.id, m = S.msgs.get(id);
+  if (player.id === id && seekFrac === undefined) {
+    if (player.audio.paused) { player.audio.play(); row.querySelector("[data-play]").innerHTML = svg("pause"); }
+    else { player.audio.pause(); row.querySelector("[data-play]").innerHTML = svg("play"); }
+    return;
+  }
+  if (player.id !== id) stopPlayer();
+  const a = await audioFor(m.audio);
+  if (player.id !== id) {
+    const audio = new Audio(a.blobUrl);
+    audio.playbackRate = player.rate;
+    Object.assign(player, { el:row, audio, id });
+    audio.addEventListener("timeupdate", () => {
+      const d = audio.duration || a.duration || 1;
+      paint(row, Math.min(1, audio.currentTime / d));
+      row.querySelector(".v-time").textContent = mmss(audio.currentTime);
+    });
+    audio.addEventListener("ended", () => { paint(row, 0); stopPlayer(); playNext(id); });
+    row.querySelector(".voice").classList.add("playing", "played");
+    row.querySelector("[data-speed]") && (row.querySelector("[data-speed]").textContent = player.rate + "×");
+    if (m.sender === "gil" && !m.meta.played) { m.meta.played = true; api("played", id); }
+  }
+  if (seekFrac !== undefined) player.audio.currentTime = seekFrac * (player.audio.duration || a.duration || 0);
+  await player.audio.play().catch(() => {});
+  row.querySelector("[data-play]").innerHTML = svg("pause");
+}
+function playNext(afterId) {   // like WhatsApp: GIL's consecutive voice messages play on
+  const i = S.order.indexOf(afterId);
+  const next = S.msgs.get(S.order[i + 1]);
+  if (next && next.kind === "voice" && next.sender === "gil" && !next.meta.played) {
+    const row = list.querySelector(`[data-id="${next.id}"]`);
+    if (row) play(row);
+  }
+}
+
+/* ── clicks inside the chat ───────────────────────────────────────────────── */
+list.addEventListener("click", async e => {
+  const row = e.target.closest(".row");
+  const t = e.target;
+  if (t.closest("[data-play]")) return play(row);
+  if (t.closest("[data-seek]")) {
+    const w = t.closest("[data-seek]").getBoundingClientRect();
+    return play(row, Math.min(1, Math.max(0, (e.clientX - w.left) / w.width)));
+  }
+  if (t.closest("[data-speed]")) {
+    player.rate = player.rate === 1 ? 1.5 : player.rate === 1.5 ? 2 : 1;
+    if (player.audio) player.audio.playbackRate = player.rate;
+    t.closest("[data-speed]").textContent = player.rate + "×";
+    return;
+  }
+  if (t.closest("[data-tx]")) {
+    const tx = row.querySelector(".tx"); tx.hidden = !tx.hidden;
+    t.closest("[data-tx]").textContent = tx.hidden ? "Transcript" : "Hide";
+    return;
+  }
+  if (t.closest("[data-reply]")) return setReply(+row.dataset.id);
+  const q = t.closest("[data-jump]");
+  if (q) return jumpTo(+q.dataset.jump);
+  const b = t.closest("[data-btn]");
+  if (b) {
+    b.disabled = true;
+    const updated = await api("button", +row.dataset.id, b.dataset.btn);
+    if (updated) replaceMessage(updated);
+    if (b.dataset.btn === "check_now") { b.disabled = false; snack("Checking now…"); }
+  }
+});
+list.addEventListener("dblclick", e => {
+  const row = e.target.closest(".row");
+  if (row && !e.target.closest("button, a")) { window.getSelection()?.removeAllRanges(); setReply(+row.dataset.id); }
+});
+function jumpTo(id) {
+  const row = list.querySelector(`[data-id="${id}"]`);
+  if (!row) return snack("That message is further back — scroll up to load it.");
+  row.scrollIntoView({ behavior:"smooth", block:"center" });
+  row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+}
+
+/* ── replying to a message ────────────────────────────────────────────────── */
+function setReply(id) {
+  const m = S.msgs.get(id); if (!m) return;
+  S.replyTo = id;
+  $("#rbWho").textContent = m.sender === "me" ? "You" : "G.I.L.";
+  $("#rbText").textContent = m.kind === "voice" ? "🎤 Voice message" + (m.text ? " · " + m.text : "") : (m.text || "").replace(/\n/g, " ");
+  $("#replyBar").hidden = false;
+  $("#input").focus();
+}
+function clearReply() { S.replyTo = null; $("#replyBar").hidden = true; }
+$("#rbClose").innerHTML = svg("close");
+$("#rbClose").addEventListener("click", clearReply);
+
+/* ── composing ────────────────────────────────────────────────────────────── */
+const input = $("#input"), action = $("#action");
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(150, input.scrollHeight) + "px"; }
+function setAction() {
+  const mode = rec.on || !CAN_REC || input.value.trim() ? "send" : "mic";
+  if (action.dataset.mode === mode) return;
+  action.dataset.mode = mode;
+  action.innerHTML = svg(mode);
+  action.setAttribute("aria-label", mode === "mic" ? "Record a voice message" : "Send");
+  action.classList.remove("swap"); void action.offsetWidth; action.classList.add("swap");
+}
+input.addEventListener("input", () => { autosize(); setAction(); });
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); }
+});
+async function sendText(text) {
+  const body = (text ?? input.value).trim();
+  if (!body) return;
+  if (text === undefined) { input.value = ""; autosize(); setAction(); }
+  const reply = S.replyTo; clearReply();
+  const m = await api("send", body, reply);
+  // The live stream usually delivers the message (and GIL's read ticks) before
+  // this reply returns. Never let the older copy overwrite the newer one.
+  if (m) { if (!S.msgs.has(m.id)) appendMessage(m); }
+  else snack("That didn't send — is G.I.L. still running?");
+}
+action.addEventListener("click", () => {
+  if (rec.on) return stopRec(true);
+  if (input.value.trim() || !CAN_REC) return sendText();
+  startRec();
+});
+
+/* recording a voice message of your own */
+const rec = { on:false, media:null, stream:null, chunks:[], t0:0, timer:0, raf:0, ctx:null, mime:"" };
+async function startRec() {
+  try {
+    rec.stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true } });
+  } catch {
+    return snack("The microphone is blocked. Allow it for this window, then try again.");
+  }
+  rec.mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+  rec.media = new MediaRecorder(rec.stream, { mimeType:rec.mime });
+  rec.chunks = [];
+  rec.media.ondataavailable = e => e.data.size && rec.chunks.push(e.data);
+  rec.media.start(250);
+  rec.on = true; rec.t0 = Date.now();
+  $("#field").hidden = true; $("#rec").hidden = false; setAction();
+  const levels = $("#recLevels"); levels.innerHTML = "";
+  rec.ctx = new AudioContext();
+  const an = rec.ctx.createAnalyser(); an.fftSize = 512;
+  rec.ctx.createMediaStreamSource(rec.stream).connect(an);
+  const buf = new Uint8Array(an.fftSize);
+  let last = 0;
+  const draw = now => {
+    if (!rec.on) return;
+    if (now - last > 90) {
+      last = now;
+      an.getByteTimeDomainData(buf);
+      let peak = 0; for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
+      const bar = document.createElement("span");
+      bar.style.height = Math.max(3, Math.min(24, peak / 128 * 60)).toFixed(1) + "px";
+      levels.appendChild(bar);
+      while (levels.children.length > 90) levels.firstChild.remove();
+    }
+    rec.raf = requestAnimationFrame(draw);
+  };
+  rec.raf = requestAnimationFrame(draw);
+  rec.timer = setInterval(() => {
+    const s = (Date.now() - rec.t0) / 1000;
+    $("#recTime").textContent = mmss(s);
+    if (s >= 120) stopRec(true);            // two minutes is a voice message, not a podcast
+  }, 250);
+}
+function stopRec(send) {
+  if (!rec.on) return;
+  rec.on = false;
+  clearInterval(rec.timer); cancelAnimationFrame(rec.raf);
+  const media = rec.media, stream = rec.stream, mime = rec.mime;
+  media.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    rec.ctx?.close();
+    if (!send || Date.now() - rec.t0 < 600) return;
+    const blob = new Blob(rec.chunks, { type:mime });
+    const data = await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); });
+    const reply = S.replyTo; clearReply();
+    const m = await api("send_voice", data, mime, reply);
+    if (m) { if (!S.msgs.has(m.id)) appendMessage(m); }
+    else snack("That voice message didn't send.");
+  };
+  media.stop();
+  $("#rec").hidden = true; $("#field").hidden = false; $("#recTime").textContent = "0:00";
+  setAction();
+  if (!send) snack("Recording deleted");
+}
+$("#recCancel").innerHTML = svg("trash");
+$("#recCancel").addEventListener("click", () => stopRec(false));
+
+/* quick replies */
+function renderChips(list_) {
+  const c = $("#chips");
+  c.innerHTML = (list_ || []).map(t => `<button dir="auto">${esc(t)}</button>`).join("");
+}
+$("#chips").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  sendText(b.textContent);
+});
+
+/* ── contact info ─────────────────────────────────────────────────────────── */
+$("#pBack").innerHTML = svg("back");
+$("#masterIco").innerHTML = svg("eye");
+$("#footIco").innerHTML = svg("lock");
+function openPanel() { $("#panel").classList.add("open"); $("#menu").hidden = true; }
+function closePanel() { $("#panel").classList.remove("open"); }
+$("#who").addEventListener("click", openPanel);
+$("#pBack").addEventListener("click", closePanel);
+$("#masterSw").addEventListener("change", async e => applyExtras(await api("master", e.target.checked)));
+
+const SRC_ICON = { gmail:"mail", calendar:"cal", url:"globe", needs:"bell" };
+const ABIL_ICON = { reminder:"clock", calendar_event:"cal", open_page:"globe" };
+const LEVEL_SHORT = { auto:"Just do it", ask:"Ask first", never:"Never" };
+function applyExtras(st) {
+  if (!st) return;
+  S.st = { ...(S.st || {}), ...st };
+  setMaster(st.master);
+  if (st.suggestions) renderChips(st.suggestions);
+  if (st.status) setStatus(st.status);
+  $("#masterSw").checked = st.master;
+  const pill = $("#pState");
+  pill.textContent = st.master ? "Keeping watch" : "Paused";
+  pill.classList.toggle("off", !st.master);
+
+  const w = st.watches || [];
+  $("#wCount").textContent = w.length ? `${w.filter(x => x.enabled).length} on · ${w.length}` : "";
+  $("#watchList").innerHTML = w.length ? w.map(x => `
+    <div class="p-row" data-watch="${esc(x.id)}">
+      <span class="p-ico">${svg(SRC_ICON[x.sources[0]] || "eye")}</span>
+      <div class="p-main"><b dir="auto">${esc(x.title)}</b>
+        <small dir="auto">${esc(x.line.split(" — ")[1] || "")}</small>
+        <small>${esc(ago(x.last_run))}${x.last_outcome ? " · " + esc(x.last_outcome) : ""}</small></div>
+      <label class="switch"><input type="checkbox" data-toggle ${x.enabled ? "checked" : ""} aria-label="On or off"><span></span></label>
+    </div>
+    <div class="p-actions" data-watch="${esc(x.id)}">
+      <button class="mini" data-act="check">Check now</button>
+      <button class="mini danger" data-act="delete">Stop watching</button>
+    </div>`).join("")
+    : `<p class="empty">Nothing yet. Tell G.I.L. what to keep an eye on — he'll set it up and show it here.</p>`;
+
+  const n = st.needs || [];
+  $("#nCount").textContent = n.length ? String(n.length) : "";
+  $("#needsList").innerHTML = n.length ? n.map(x => `
+    <div class="p-row">
+      <span class="p-ico">${svg("bell")}</span>
+      <div class="p-main clamp"><b dir="auto">${esc(x.title)}</b><small dir="auto">${esc(x.message)}</small></div>
+      <button class="mini" data-done="${esc(x.id)}">Done</button>
+    </div>`).join("")
+    : `<p class="empty">You're all clear.</p>`;
+
+  const ab = st.abilities || [];
+  $("#abilList").innerHTML = ab.map(a => `
+    <div class="p-row">
+      <span class="p-ico">${svg(ABIL_ICON[a.type] || "bolt")}</span>
+      <div class="p-main"><b>${esc(a.label)}</b>
+        <div class="seg" role="radiogroup" aria-label="${esc(a.label)}">${a.levels.map(l =>
+          `<button role="radio" aria-checked="${l.id === a.level}" data-ability="${esc(a.type)}"
+             data-level="${esc(l.id)}" title="${esc(l.label)}">${esc(LEVEL_SHORT[l.id] || l.label)}</button>`).join("")}</div>
+      </div>
+    </div>`).join("");
+
+  if (st.phone && LOCAL) {
+    $("#phoneText").textContent = st.phone.on ? "On — a paired phone can open this chat" : "Off";
+    $("#phoneBtn").textContent = st.phone.on ? "Show code" : "Set up";
+  }
+
+  const pct = st.allowance ? Math.min(100, (st.spent / st.allowance) * 100) : 0;
+  $("#useBar").style.width = pct.toFixed(1) + "%";
+  $("#useText").textContent = `${(st.spent || 0).toLocaleString()} of ${(st.allowance || 0).toLocaleString()} tokens of checking used today`;
+}
+$("#watchList").addEventListener("change", async e => {
+  const id = e.target.closest("[data-watch]")?.dataset.watch;
+  if (id && e.target.matches("[data-toggle]")) applyExtras(await api("watch", id, e.target.checked ? "on" : "off"));
+});
+$("#watchList").addEventListener("click", async e => {
+  const b = e.target.closest("[data-act]"); if (!b) return;
+  const id = b.closest("[data-watch]").dataset.watch;
+  if (b.dataset.act === "delete" && !confirm("Stop watching this? G.I.L. will forget it.")) return;
+  applyExtras(await api("watch", id, b.dataset.act));
+  if (b.dataset.act === "check") snack("Checking now…");
+});
+$("#needsList").addEventListener("click", async e => {
+  const b = e.target.closest("[data-done]"); if (!b) return;
+  applyExtras(await api("needs_done", b.dataset.done));
+});
+$("#abilList").addEventListener("click", async e => {
+  const b = e.target.closest("[data-ability]"); if (!b || b.getAttribute("aria-checked") === "true") return;
+  applyExtras(await api("ability", b.dataset.ability, b.dataset.level));
+});
+
+/* ── on your phone ────────────────────────────────────────────────────────── */
+$("#phoneIco").innerHTML = svg("phone");
+async function openPhone() {
+  $("#menu").hidden = true;
+  const v = await api("phone", true);
+  if (!v?.url) return snack("Couldn't turn on phone access.");
+  $("#qr").innerHTML = v.qr || "";                    // drawn by G.I.L. itself, not from a page
+  $("#qr").hidden = !v.qr;
+  $("#qrLink").textContent = v.url;
+  $("#sheet").hidden = false;
+}
+function closeSheet() { $("#sheet").hidden = true; }
+$("#phoneBtn").addEventListener("click", openPhone);
+$("#sheetClose").addEventListener("click", closeSheet);
+$("#sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeSheet(); });
+$("#phoneOff").addEventListener("click", async () => {
+  await api("phone", false);
+  closeSheet();
+  snack("Phone access is off. The old code no longer works.");
+});
+
+/* ── little things ────────────────────────────────────────────────────────── */
+let snackTimer = 0;
+function snack(text) {
+  const el = $("#snack");
+  el.textContent = text; el.hidden = false;
+  el.style.animation = "none"; void el.offsetWidth; el.style.animation = "";
+  clearTimeout(snackTimer); snackTimer = setTimeout(() => { el.hidden = true; }, 3200);
+}
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (rec.on) return stopRec(false);
+  if (!$("#sheet").hidden) return closeSheet();
+  if ($("#panel").classList.contains("open")) return closePanel();
+  if (!$("#menu").hidden) { $("#menu").hidden = true; return; }
+  if (S.replyTo) clearReply();
+});
+
+/* ── loading and live updates ─────────────────────────────────────────────── */
+async function load() {
+  const st = await api("state");
+  if (!st && S.denied && !LOCAL) {
+    setStatus("not paired");
+    list.innerHTML = `<div class="denied"><b>This link doesn't work any more</b>
+      Phone access was turned off, or the code changed. Open Vigil on your PC and scan the new code.</div>`;
+    return;
+  }
+  if (!st) { setStatus("G.I.L. isn't running"); return; }
+  document.documentElement.dataset.theme = st.theme === "light" ? "light" : "dark";
+  wallpaper();
+  S.name = st.name || "";
+  S.msgs.clear(); S.order = [];
+  st.messages.forEach(m => { S.msgs.set(m.id, m); S.order.push(m.id); });
+  S.firstUnread = st.unread ? S.order.find(id => S.msgs.get(id).sender === "gil" && S.msgs.get(id).status === "unread") ?? null : null;
+  renderAll();
+  applyExtras(st);
+  renderChips(st.suggestions);
+  setUnread(st.unread);
+  requestAnimationFrame(() => {
+    const div = list.querySelector(".unread-div");
+    if (div) div.scrollIntoView({ block:"center" }); else toBottom(false);
+    updateDown();
+    maybeRead();
+  });
+  reportView();
+}
+
+function connect() {
+  const es = new EventSource(withKey("/events"));
+  es.onmessage = ev => {
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    const { fn, arg } = msg;
+    if (fn === "message") appendMessage(arg);
+    else if (fn === "update") replaceMessage(arg);
+    else if (fn === "status") setStatus(arg);
+    else if (fn === "state") applyExtras(arg);
+    else if (fn === "unread") setUnread(arg);
+    else if (fn === "focus") window.focus();
+  };
+  es.onerror = () => {
+    S.lost = true; setStatus("connecting…");
+    // A phone whose access was turned off: find out, show why, stop retrying.
+    if (!LOCAL) api("state").then(st => { if (!st && S.denied) { es.close(); load(); } });
+  };
+  es.onopen = () => { if (S.lost) { S.lost = false; load(); } };
+}
+
+setAction();
+load().then(() => { if (!S.denied) connect(); });   // a refused phone doesn't keep knocking
+</script>
+</body>
+</html>

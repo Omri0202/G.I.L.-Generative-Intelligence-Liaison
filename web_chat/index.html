@@ -946,6 +946,20 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
 #usage.warn #usagebtn,#usage.hot #usagebtn{color:var(--txt);}
 #usagetxt{font-variant-numeric:tabular-nums;letter-spacing:.01em;}
 
+/* ── Vigil: the separate chat where GIL texts you what he's watching. It
+   gets a button rather than a panel: it's a place you go, like an app. */
+#vigilbtn{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+  border-radius:999px;cursor:pointer;font:inherit;font-size:12px;color:var(--muted);
+  background:transparent;border:1px solid transparent;
+  transition:background .15s,border-color .15s,color .15s;}
+#vigilbtn:hover{background:var(--input);border-color:var(--border);color:var(--txt);}
+#vigilbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+#vigilbtn svg{flex:0 0 auto;}
+#vigilbadge{min-width:16px;height:16px;padding:0 5px;border-radius:8px;display:grid;
+  place-items:center;background:var(--accent);color:var(--btn-txt);
+  font-size:10.5px;font-weight:700;}
+#vigilbadge:empty{display:none;}
+
 /* ── connections: what GIL is plugged into ─────────────────────────────────
    Sits with the brain picker and the usage ring because it answers the same
    kind of question — not "what shall I say" but "what can this thing do". */
@@ -1224,6 +1238,11 @@ body.codemode #attach { display:none; }   /* codemode uses @file for project fil
           </button>
           <div id="connpanel"></div>
         </div>
+        <button id="vigilbtn" onclick="gil.openVigil()"
+                title="Vigil — GIL keeps watch and texts you">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+          <span>Vigil</span><span id="vigilbadge"></span>
+        </button>
         <div id="usage">
           <button id="usagebtn" onclick="gil.toggleUsage(event)"
                   title="Token budget — click for the breakdown">
@@ -2159,6 +2178,15 @@ const gil = {
     if ($("connpanel").classList.contains("on")) this.renderConns();
   },
 
+  // Vigil lives in its own window, the way a messaging app does.
+  openVigil() { api("open_vigil"); },
+
+  async vigilUnread() {
+    const n = await api("vigil_unread");
+    $("vigilbadge").textContent = n ? String(n) : "";
+    $("vigilbtn").title = n ? `Vigil — ${n} new from GIL` : "Vigil — GIL keeps watch and texts you";
+  },
+
   toggleConns(ev) {
     if (ev) ev.stopPropagation();
     const p = $("connpanel"), on = p.classList.toggle("on");
@@ -2650,6 +2678,7 @@ const gil = {
     {cmd: "/workspace",desc: "Float your windows in space (hand or mouse)", kind: "arg"},
     {cmd: "/spatial",  desc: "Hand control — on · off · tutorial",        kind: "arg"},
     {cmd: "/connect",  desc: "See and manage what GIL is connected to",   kind: "meta"},
+    {cmd: "/vigil",    desc: "Open Vigil — GIL keeps watch and texts you", kind: "meta"},
     {cmd: "/mobile",   desc: "Use GIL on your phone (scan a QR code)",    kind: "meta"},
     {cmd: "/stop",     desc: "Stop what GIL is doing",                    kind: "meta"},
     {cmd: "/voice",    desc: "Toggle GIL's voice on/off",                 kind: "meta"},
@@ -2839,6 +2868,11 @@ const gil = {
     if (cmd === "/connect") {
       $("inp").value = ""; this.grow();
       if (!$("connpanel").classList.contains("on")) this.toggleConns();
+      return;
+    }
+    if (cmd === "/vigil") {
+      $("inp").value = ""; this.grow();
+      this.openVigil();
       return;
     }
     const known = this.COMMANDS.find(c => c.cmd === cmd);
@@ -3063,6 +3097,10 @@ document.addEventListener("keydown", (e) => {
   };
   es.onerror = () => { /* EventSource auto-reconnects */ };
 })();
+
+// What GIL has texted you in Vigil since you last looked, on its button.
+gil.vigilUnread();
+setInterval(() => gil.vigilUnread(), 20000);
 
 /* ═══════════ desktop notifications + background visibility ═══════════ */
 // Ask once, on load, if the user hasn't decided yet.

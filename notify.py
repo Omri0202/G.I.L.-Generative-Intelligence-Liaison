@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, quoteattr
 
 from logger import get as _get_log
 
@@ -45,9 +45,12 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
-def toast_xml(title: str, body: str, urgency: str = "normal") -> str:
-    """The toast document. Urgent ones stay on screen longer; low ones are silent."""
+def toast_xml(title: str, body: str, urgency: str = "normal", launch: str = "") -> str:
+    """The toast document. Urgent ones stay on screen longer; low ones are silent.
+    launch: an address that opens when the toast is clicked."""
     duration = ' duration="long"' if urgency == "urgent" else ""
+    if launch:
+        duration += f' activationType="protocol" launch={quoteattr(launch)}'
     audio = '<audio silent="true"/>' if urgency == "low" else ""
     return (f"<toast{duration}><visual><binding template=\"ToastGeneric\">"
             f"<text>{escape(_clip(title, TITLE_CHARS))}</text>"
@@ -63,13 +66,13 @@ def _launch(env: dict) -> None:
     )
 
 
-def toast(title: str, body: str, urgency: str = "normal") -> bool:
+def toast(title: str, body: str, urgency: str = "normal", launch: str = "") -> bool:
     """Show a Windows toast. Returns False where there's no Windows to show it on."""
     if sys.platform != "win32":
         return False
     try:
         env = dict(os.environ)
-        env["GIL_TOAST_XML"] = toast_xml(title, body, urgency)
+        env["GIL_TOAST_XML"] = toast_xml(title, body, urgency, launch)
         _launch(env)
         return True
     except Exception:
