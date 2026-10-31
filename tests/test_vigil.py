@@ -203,6 +203,82 @@ class TestSafety(VigilCase):
         self.assertIn("THE ONE THAT MATTERS", out)
 
 
+class TestNewPowers(VigilCase):
+    """Wake-ups, voice routines, the needs-you source, and the first gate on
+    actions: an order may only act in ways the user gave it."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_deliver = vigil._deliver_fn
+        self.notices = []
+        vigil.set_deliver(self.notices.append)
+
+    def tearDown(self):
+        vigil._deliver_fn = self._orig_deliver
+        super().tearDown()
+
+    def reply(self, **extra):
+        return {**_reply(True, "Exam on the 12th"), "check_again_min": 0, "action": None,
+                **extra}
+
+    def test_an_action_it_wasnt_given_is_dropped(self):
+        self.replies.append(self.reply(action={"type": "calendar_event", "title": "x"}))
+        self.run_it()
+        self.assertIsNone(self.notices[0]["action"])
+
+    def test_an_allowed_action_rides_on_the_notice(self):
+        o = vigil.add("Uni", "uni mail", [{"type": "gmail"}], active_hours=(0, 0),
+                      actions=["calendar_event"], asked="put exam dates in my calendar")
+        self.assertEqual(o["asked"], "put exam dates in my calendar")
+        act = {"type": "calendar_event", "title": "Exam", "start": "2030-01-12T09:00"}
+        self.replies.append(self.reply(notify=False, message="", action=act))
+        vigil.run_order(o["id"], force=True)
+        self.assertEqual(self.notices[0]["action"], act)
+        self.assertTrue(self.notices[0]["message"])      # it always says something
+
+    def test_unknown_action_kind_rejected(self):
+        with self.assertRaises(ValueError):
+            vigil.add("x", "x", [{"type": "gmail"}], actions=["send_email"])
+        with self.assertRaises(ValueError):
+            vigil.update(self.order["id"], actions=["delete_files"])
+
+    def test_check_again_sooner(self):
+        vigil.update(self.order["id"], every_min=600)
+        self.replies.append(self.reply(notify=False, message="", check_again_min=30))
+        self.run_it()
+        o = vigil.get(self.order["id"])
+        self.assertAlmostEqual(o["wake_at"], time.time() + 1800, delta=5)
+        self.assertFalse(vigil._is_due(o, time.time() + 60))
+        self.assertTrue(vigil._is_due(o, time.time() + 1801))
+        self.replies.append(self.reply(notify=False, message=""))
+        self.items.append(("mail:2", "Another"))
+        self.run_it()
+        self.assertNotIn("wake_at", vigil.get(self.order["id"]))   # used up
+
+    def test_routines_speak_by_default(self):
+        self.assertTrue(vigil.add("Brief", "b", [{"type": "gmail"}], at="08:00")["voice"])
+        self.assertFalse(self.order["voice"])
+        self.assertTrue(vigil.add("x", "x", [{"type": "gmail"}], voice=True)["voice"])
+        self.replies.append(self.reply())
+        vigil.update(self.order["id"], voice=True)
+        self.run_it()
+        self.assertTrue(self.notices[0]["voice"])
+
+    def test_needs_you_as_a_source(self):
+        st = vigil._load()
+        st["inbox"] = [{"id": "n1", "order_id": "x", "title": "Army mail",
+                        "message": "confirm by Sunday", "urgency": "normal", "at": 0}]
+        vigil._save(st)
+        got = vigil._fetch_needs({"type": "needs"})
+        self.assertEqual(got[0][0], "needs:n1")
+        self.assertIn("confirm by Sunday", got[0][1])
+
+    def test_prefs_round_trip(self):
+        self.assertIsNone(vigil.pref("phone"))
+        vigil.set_pref("phone", {"on": True})
+        self.assertEqual(vigil.pref("phone"), {"on": True})
+
+
 class TestToast(unittest.TestCase):
 
     def test_untrusted_text_never_reaches_the_command(self):
