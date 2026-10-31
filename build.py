@@ -192,6 +192,7 @@ HIDDEN = [
     "gil_config", "study_coach", "study_syllabus", "error_watch",
     "file_access",
     "vigil", "vigil_chat", "vigil_actions", "notify", "model_health", "mobile",
+    "gmail_reader", "tailscale_link", "phone_push", "pywebpush", "py_vapid", "http_ece",
     # Optional heavy packages (gracefully absent at runtime)
     "cv2", "numpy",
 ]

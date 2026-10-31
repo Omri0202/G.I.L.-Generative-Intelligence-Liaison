@@ -3886,7 +3886,20 @@ class GILWindow(ctk.CTk):
             else:
                 threading.Thread(target=_save_offline, daemon=True,
                                  name="GIL-HistSave").start()
+        self._gil_event("message", text, sender)
         self.after(0, _do)
+
+    #: Set by main.py: vigil_chat.gil_event, so the phone hears what GIL says
+    #: while it runs a job it handed him, and when long jobs start and stop.
+    gil_event = None
+
+    def _gil_event(self, *args) -> None:
+        hook = self.gil_event
+        if hook is not None:
+            try:
+                hook(*args)
+            except Exception:
+                pass
 
     def chat_show_typing(self) -> None:
         def _do():
@@ -3923,12 +3936,14 @@ class GILWindow(ctk.CTk):
         if callable(fn):
             fn(block)
 
-    def set_working(self, on: bool) -> None:
-        """Raise/lower the persistent working spinner + timer in the web chat."""
+    def set_working(self, on: bool, label: str = "") -> None:
+        """Raise/lower the persistent working spinner + timer in the web chat.
+        label names the job, for "working on it…" on the phone."""
         win = getattr(self, "_chat_win", None)
         fn = getattr(win, "set_working", None)
         if callable(fn):
             fn(on)
+        self._gil_event("working", on, label)
 
     def stream_thought(self, delta: str) -> None:
         """Forward a live reasoning-token chunk to the web terminal (typewriter)."""

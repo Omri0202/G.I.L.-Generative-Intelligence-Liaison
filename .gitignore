@@ -51,6 +51,8 @@ data/vigil_chat.db
 data/vigil_voice/
 data/_vigil_profile/
 data/_vigil_port.txt
+data/vigil_vapid.pem
+data/vigil_push.*
 data/vigil.json.*
 data/dev_config.json
 data/session_memory.json

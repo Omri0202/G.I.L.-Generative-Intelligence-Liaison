@@ -491,7 +491,13 @@ class TestServerGuards(TestServer):
     def test_the_manifest(self):
         status, ctype, body = self.get("/vigil.webmanifest")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["short_name"], "Vigil")
+        manifest = json.loads(body)
+        self.assertEqual(manifest["short_name"], "G.I.L.")
+        self.assertEqual({i["sizes"] for i in manifest["icons"]}, {"192x192", "512x512"})
+        status, ctype, body = self.get("/sw.js")
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", ctype)
+        self.assertIn(b"notificationclick", body)
 
 
 class _FakeRequest:
@@ -499,69 +505,295 @@ class _FakeRequest:
 
     def __init__(self, ip, headers=None, path="/api"):
         self.client_address = (ip, 5000)
-        self.headers = headers or {}
+        self.headers = {"Host": "127.0.0.1:8741", **(headers or {})}
         self.path = path
+
+    def _host(self):
+        return vc._Handler._host(self)
 
     def _local(self):
         return vc._Handler._local(self)
 
 
+TS_NAME = "omri-pc.tail1234.ts.net"
+
+
 class TestPhone(ChatCase):
+    """Phone access: through Tailscale (G.I.L.'s app, anywhere) or this Wi-Fi
+    only. A phone always needs the key; turning it off forgets everything."""
 
     def setUp(self):
         super().setUp()
-        self._orig_phone = (vc._rebind, vc._port)
-        self.binds = []
+        import mobile, tailscale_link, phone_push
+        self.ts, self.pp = tailscale_link, phone_push
+        self._orig_phone = (vc._rebind, vc._port, mobile.lan_ip, tailscale_link.status,
+                            tailscale_link.serve, tailscale_link.unserve, phone_push.SUBS_FILE)
+        self.binds, self.unserved = [], []
         vc._rebind = self.binds.append
         vc._port = 8741
-        import mobile
-        self._orig_ip = mobile.lan_ip
         mobile.lan_ip = lambda: "192.168.1.20"
+        self.ts_state = {"installed": True, "running": True, "name": TS_NAME, "https": True, "why": ""}
+        tailscale_link.status = lambda fresh=False: dict(self.ts_state)
+        self.serve_result = {"ok": True, "url": f"https://{TS_NAME}/", "enable_url": "", "why": ""}
+        tailscale_link.serve = lambda port: dict(self.serve_result)
+        tailscale_link.unserve = lambda: self.unserved.append(1)
+        phone_push.SUBS_FILE = self.tmp / "push.json"
 
     def tearDown(self):
         import mobile
-        mobile.lan_ip = self._orig_ip
-        vc._rebind, vc._port = self._orig_phone
+        (vc._rebind, vc._port, mobile.lan_ip, self.ts.status, self.ts.serve, self.ts.unserve,
+         self.pp.SUBS_FILE) = self._orig_phone
         super().tearDown()
 
     def ok(self, ip, headers=None, path="/api"):
         return vc._Handler._token_ok(_FakeRequest(ip, headers, path))
 
+    def host_ok(self, ip, headers):
+        return vc._Handler._host_ok(_FakeRequest(ip, headers))
+
+    def through_tailscale(self, extra=None):
+        """What Tailscale's HTTPS proxy sends on: from 127.0.0.1, but forwarded."""
+        return {"Host": TS_NAME, "X-Forwarded-For": "100.101.102.103",
+                "Tailscale-User-Login": "omri@example.com", **(extra or {})}
+
     def test_off_by_default_and_the_network_is_shut_out(self):
         self.assertFalse(vc._phone()["on"])
         self.assertTrue(self.ok("127.0.0.1"))
         self.assertFalse(self.ok("192.168.1.30", {"X-GIL-Token": "anything"}))
+        self.assertFalse(self.host_ok("127.0.0.1", self.through_tailscale()))
 
-    def test_pairing_gives_a_link_and_a_qr_code(self):
+    def test_tailscale_gives_an_https_app_link(self):
         view = vc.api_phone(True)
         token = vc._phone()["token"]
-        self.assertEqual(self.binds, ["0.0.0.0"])
-        self.assertEqual(view["url"], f"http://192.168.1.20:8741/?t={token}")
-        self.assertTrue(view["qr"].startswith("<svg") or view["qr"] == "")
+        self.assertTrue(view["on"])
+        self.assertEqual(view["via"], "tailscale")
+        self.assertEqual(view["url"], f"https://{TS_NAME}/?t={token}")
+        self.assertEqual(self.binds, ["127.0.0.1"])                     # never opened to the LAN
         self.assertGreaterEqual(len(token), 20)
-        # the state every window (and the phone) receives never carries it
-        self.assertNotIn(token, json.dumps(vc._state_extras()))
-        self.assertTrue(vc._state_extras()["phone"]["on"])
+        self.assertNotIn(token, json.dumps(vc._state_extras()))        # state never carries it
+        self.assertEqual(vc._state_extras()["phone"]["via"], "tailscale")
 
-    def test_the_phone_needs_the_token(self):
+    def test_a_request_through_tailscale_is_a_phone_not_this_pc(self):
         vc.api_phone(True)
         token = vc._phone()["token"]
+        self.assertTrue(self.host_ok("127.0.0.1", self.through_tailscale()))
+        self.assertFalse(vc._Handler._local(_FakeRequest("127.0.0.1", self.through_tailscale())))
+        self.assertFalse(self.ok("127.0.0.1", self.through_tailscale()))                 # no key
+        self.assertTrue(self.ok("127.0.0.1", self.through_tailscale({"X-GIL-Token": token})))
+        self.assertFalse(self.host_ok("127.0.0.1", {"Host": "evil.example"}))
+        self.assertTrue(vc._Handler._local(_FakeRequest("127.0.0.1")))                # the PC itself
+
+    def test_tailscale_not_ready_explains_and_opens_nothing(self):
+        self.ts_state.update(running=False, name="", why="Tailscale isn't installed on this PC")
+        self.serve_result = {"ok": False, "url": "", "enable_url": "", "why": ""}
+        view = vc.api_phone(True)
+        self.assertFalse(view["on"])
+        self.assertTrue(view["setup"])
+        self.assertEqual(view["why"], "Tailscale isn't installed on this PC")
+        self.assertEqual(self.binds, [])
+        self.assertFalse(vc._phone()["on"])
+
+    def test_https_switch_link_is_passed_on(self):
+        self.serve_result = {"ok": False, "url": "", "why": "HTTPS isn't on for your tailnet yet",
+                             "enable_url": "https://login.tailscale.com/f/serve?node=n1"}
+        view = vc.api_phone(True)
+        self.assertEqual(view["enable_url"], "https://login.tailscale.com/f/serve?node=n1")
+
+    def test_home_wifi_fallback(self):
+        view = vc.api_phone(True, True)
+        token = vc._phone()["token"]
+        self.assertEqual(view["via"], "wifi")
+        self.assertEqual(self.binds, ["0.0.0.0"])
+        self.assertEqual(view["url"], f"http://192.168.1.20:8741/?t={token}")
         self.assertTrue(self.ok("192.168.1.30", {"X-GIL-Token": token}))
         self.assertTrue(self.ok("192.168.1.30", {}, f"/events?t={token}"))
         self.assertFalse(self.ok("192.168.1.30", {"X-GIL-Token": token[:-1] + "x"}))
-        self.assertFalse(self.ok("192.168.1.30", {}))
+        self.assertTrue(self.host_ok("192.168.1.30", {"Host": "192.168.1.20:8741"}))
 
-    def test_turning_it_off_kills_the_old_link(self):
+    def test_turning_it_off_forgets_the_key_and_the_phones(self):
         vc.api_phone(True)
         token = vc._phone()["token"]
+        self.pp.subscribe({"endpoint": "https://fcm.googleapis.com/fcm/send/x",
+                           "keys": {"p256dh": "k", "auth": "a"}}, "Pixel")
         vc.api_phone(False)
-        self.assertEqual(self.binds, ["0.0.0.0", "127.0.0.1"])
-        self.assertFalse(self.ok("192.168.1.30", {"X-GIL-Token": token}))
+        self.assertEqual(self.unserved, [1])
+        self.assertEqual(self.pp.count(), 0)
+        self.assertFalse(self.ok("127.0.0.1", self.through_tailscale({"X-GIL-Token": token})))
         vc.api_phone(True)
         self.assertNotEqual(vc._phone()["token"], token)
 
     def test_a_phone_cant_open_phone_access_or_windows(self):
         self.assertEqual(vc._LOCAL_ONLY, {"phone", "open"})
+
+
+class TestPhoneNotifications(ChatCase):
+
+    def setUp(self):
+        super().setUp()
+        import phone_push
+        self.pp = phone_push
+        self._orig_pp = (phone_push.SUBS_FILE, phone_push.send)
+        phone_push.SUBS_FILE = self.tmp / "push.json"
+        self.pushed = []
+        phone_push.send = lambda payload, urgency="normal", ttl=0: self.pushed.append((payload, urgency)) or 1
+        phone_push.subscribe({"endpoint": "https://fcm.googleapis.com/fcm/send/x",
+                              "keys": {"p256dh": "k", "auth": "a"}}, "Pixel")
+
+    def tearDown(self):
+        self.pp.SUBS_FILE, self.pp.send = self._orig_pp
+        super().tearDown()
+
+    def wait_push(self, n=1):
+        deadline = time.time() + 2
+        while len(self.pushed) < n and time.time() < deadline:
+            time.sleep(0.02)
+
+    def test_a_ping_reaches_the_phone(self):
+        msg = vc.add_message("gil", "The army emailed you", urgency="urgent", meta={"watch": "Army mail"})
+        vc._ping(msg)
+        self.wait_push()
+        payload, urgency = self.pushed[0]
+        self.assertEqual(payload["title"], "G.I.L. · Army mail")
+        self.assertEqual(payload["body"], "The army emailed you")
+        self.assertEqual(payload["tag"], f"msg-{msg['id']}")
+        self.assertEqual(urgency, "high")
+
+    def test_a_can_i_card_carries_its_buttons(self):
+        msg = vc.add_message("gil", "Remind you about the form", kind="card",
+                             meta={"card": "action", "buttons": [{"id": "approve", "label": "Do it"},
+                                                                 {"id": "deny", "label": "Don't"},
+                                                                 {"id": "always", "label": "Always"}]})
+        vc._ping(msg)
+        self.wait_push()
+        payload = self.pushed[0][0]
+        self.assertEqual(payload["body"], "Can I? Remind you about the form")
+        self.assertEqual([a["action"] for a in payload["actions"]], ["approve", "deny"])
+
+    def test_away_only_and_off(self):
+        vc.api_phone_notify("away")
+        vc._ping(vc.add_message("gil", "at the PC"))
+        time.sleep(0.1)
+        self.assertEqual(self.pushed, [])
+        self.idle = vc.AWAY_SECS + 5
+        vc._ping(vc.add_message("gil", "away now"))
+        self.wait_push()
+        self.assertEqual(self.pushed[0][0]["body"], "away now")
+        vc.api_phone_notify("off")
+        vc._ping(vc.add_message("gil", "not at all"))
+        time.sleep(0.1)
+        self.assertEqual(len(self.pushed), 1)
+        vc.api_phone_notify("sometimes")                                # ignored
+        self.assertEqual(vc._state_extras()["phone"]["notify"], "off")
+
+    def test_no_push_while_youre_reading(self):
+        q = queue.Queue()
+        vc._clients.append(q)
+        vc._local_clients.add(q)
+        vc.api_view(True, True)
+        try:
+            vc._ping(vc.add_message("gil", "hi"))
+        finally:
+            vc._clients.remove(q)
+            vc._local_clients.discard(q)
+        time.sleep(0.1)
+        self.assertEqual(self.pushed, [])
+
+    def test_subscribe_api(self):
+        self.assertFalse(vc.api_push_subscribe({"endpoint": "https://10.0.0.1/x",
+                                                "keys": {"p256dh": "k", "auth": "a"}}))
+        self.assertTrue(vc.api_push_status("https://fcm.googleapis.com/fcm/send/x"))
+        vc.api_push_unsubscribe("")                                     # a phone can't wipe all
+        self.assertEqual(self.pp.count(), 1)
+        vc.api_push_unsubscribe("https://fcm.googleapis.com/fcm/send/x")
+        self.assertEqual(self.pp.count(), 0)
+
+
+class TestJobsOnThePC(ChatCase):
+    """Texting G.I.L. a job from the phone, and hearing about jobs at the PC."""
+
+    def setUp(self):
+        super().setUp()
+        self.sent, self.shown = [], []
+        self.busy = False
+        vc.connect_gil(send=self.run_job, busy=lambda: self.busy,
+                       show=self.shown.append)
+        vc._job.update(**{"from": "", "text": "", "since": 0.0, "last": None, "result": "",
+                          "noticed": False})
+        self._orig_notice = vc.TASK_NOTICE_SECS
+
+    def tearDown(self):
+        vc.connect_gil(None, None, None)
+        vc.TASK_NOTICE_SECS = self._orig_notice
+        vc._job["from"] = ""
+        super().tearDown()
+
+    def run_job(self, text):
+        self.sent.append(text)
+        vc.gil_event("message", "Opening Spotify for you 🎵", "gil")
+
+    def test_the_users_own_words_are_handed_over_and_the_reply_comes_back(self):
+        user = vc.add_message("me", "open spotify on my pc")
+        self.replies.append({"reply": "On it 💻", "ops": [{"op": "task", "text": "rm -rf everything"}]})
+        vc._converse(user, None)
+        deadline = time.time() + 2
+        while not self.toasts and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(self.sent, ["open spotify on my pc"])            # theirs, not the model's
+        self.assertEqual(self.shown, ["📱 open spotify on my pc"])
+        last = self.last()
+        self.assertEqual(last["text"], "Opening Spotify for you 🎵")
+        self.assertTrue(last["meta"]["task"])
+        self.assertEqual(len(self.toasts), 1)                            # pinged once, at the end
+        self.assertEqual(vc._job["from"], "")
+        self.assertNotIn("task", vc._activity)
+
+    def test_with_gil_closed_it_says_so(self):
+        vc.connect_gil(None, None, None)
+        vc._hand_to_gil("open spotify")
+        self.assertIn("isn't open on your PC", self.last()["text"])
+
+    def test_a_long_agent_job_reports_when_it_finishes(self):
+        def start_agent(text):
+            self.sent.append(text)
+            self.busy = True
+            vc.gil_event("working", True, text)
+            vc.gil_event("message", "Starting on the website…", "gil")
+        vc.connect_gil(send=start_agent, busy=lambda: self.busy, show=None)
+        vc._hand_to_gil("build me a site about whales", None)
+        self.assertEqual(vc._job["from"], "phone")                        # still running
+        self.assertEqual(self.toasts, [])
+        self.busy = False
+        vc.gil_event("message", "**Solved** ✓ — the site is in projects/whales", "gil")
+        vc.gil_event("working", False)
+        self.assertEqual(self.last()["text"], "**Solved** ✓ — the site is in projects/whales")
+        self.assertEqual(len(self.toasts), 1)
+        self.assertEqual(vc._job["from"], "")
+
+    def test_a_long_job_at_the_pc_tells_the_phone(self):
+        vc.TASK_NOTICE_SECS = 0.05
+        vc.gil_event("working", True, "Refactor the login page")
+        self.assertEqual(vc.status_line(), "working on: Refactor the login page…")
+        deadline = time.time() + 2
+        while "Working on it" not in (self.last()["text"] if vc.messages() else "") and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertIn("Working on it on your PC: Refactor the login page", self.last()["text"])
+        self.assertEqual(self.toasts, [])                                  # quiet
+        vc.gil_event("message", "**Solved** ✓ — login page tidied", "gil")
+        vc.gil_event("working", False)
+        done = self.last()
+        self.assertTrue(done["text"].startswith("Done ✓ Refactor the login page"))
+        self.assertIn("login page tidied", done["text"])
+        self.assertEqual(len(self.toasts), 1)
+
+    def test_a_short_job_at_the_pc_stays_quiet(self):
+        vc.gil_event("working", True, "quick fix")
+        vc.gil_event("working", False)
+        self.assertEqual(vc.messages(), [])
+        self.assertEqual(self.toasts, [])
+
+    def test_a_broken_hook_never_breaks_gil(self):
+        vc.gil_event("message")                                          # missing args
+        vc.gil_event("nonsense", 1, 2, 3)
 
 
 class TestActions(ChatCase):
@@ -824,6 +1056,219 @@ class TestHosting(unittest.TestCase):
                 del sys.frozen
             sys.modules["winreg"] = orig
         self.assertEqual(vc._launch_url(), "gil-vigil:open")
+
+
+class TestYourMail(ChatCase):
+    """Reading Gmail any time back: answers with the emails linked, notes
+    first when there's too much for one call, and a dead login said plainly."""
+
+    def setUp(self):
+        super().setUp()
+        import gmail_reader
+        self.gr = gmail_reader
+        self._orig_gr = (gmail_reader.search, gmail_reader.reconnect)
+        self.searched = []
+        self.found = [self.mail(i) for i in range(1, 4)]
+
+        def fake_search(query, limit=40, body_chars=1500):
+            self.searched.append(query)
+            if isinstance(self.found, Exception):
+                raise self.found
+            return list(self.found), len(self.found)
+        gmail_reader.search = fake_search
+        vc._last_mail.clear()
+
+    def tearDown(self):
+        self.gr.search, self.gr.reconnect = self._orig_gr
+        vc._last_mail.clear()
+        super().tearDown()
+
+    def mail(self, i, body="Your exam is on 12 November at 08:00."):
+        return {"id": f"m{i}", "thread": f"t{i}", "at": time.time() - i * 86400, "from": "IDF",
+                "to": "Omri", "subject": f"Exam [{i}]", "body": body, "snippet": body[:40],
+                "link": f"https://mail.google.com/mail/u/0/#all/t{i}"}
+
+    def ask(self, question="when is my exam?", **kw):
+        user = vc.add_message("me", question)
+        vc._read_mail(kw.pop("query", "from:idf exam"), question, kw.pop("broader", ""), user)
+        return user
+
+    def test_an_answer_with_its_emails_linked(self):
+        self.replies.append({"reply": "The IDF wrote that your exam is on 12 November at 08:00.",
+                             "cites": [1, 9, "x", 1], "draft": ""})
+        user = self.ask()
+        got = self.last()
+        self.assertTrue(got["text"].startswith("The IDF wrote that your exam is on 12 November"))
+        self.assertIn("📧 [Exam 1 — IDF,", got["text"])                  # brackets can't break the link
+        self.assertIn("(https://mail.google.com/mail/u/0/#all/t1)", got["text"])
+        self.assertEqual(got["text"].count("📧"), 1)                     # bad and repeated cites dropped
+        self.assertEqual(got["reply_to"], user["id"])
+        self.assertEqual(got["meta"]["mail"], {"query": "from:idf exam", "read": 3, "total": 3})
+        self.assertEqual(vc._last_mail["query"], "from:idf exam")
+        self.assertEqual(vc._activity, {})                               # status cleared
+
+    def test_links_from_emails_never_reach_the_chat(self):
+        self.replies.append({"reply": "Confirm at [this page](https://phish.example/x) or https://evil.example",
+                             "cites": [], "draft": ""})
+        self.ask()
+        text = self.last()["text"]
+        self.assertNotIn("phish.example", text)
+        self.assertNotIn("evil.example", text)
+
+    def test_a_draft_comes_as_its_own_message(self):
+        self.replies.append({"reply": "Here's a draft — I haven't sent anything.", "cites": [1],
+                             "draft": "Hi, I confirm I'll be there on 12 November."})
+        self.ask("draft a reply confirming")
+        draft = self.last()
+        self.assertTrue(draft["meta"]["draft"])
+        self.assertEqual(draft["text"], "Hi, I confirm I'll be there on 12 November.")
+
+    def test_a_draft_pasted_into_the_reply_too_appears_once(self):
+        d = "שלום,\nאני מאשר את הגעתי לבחינה ביום חמישי"
+        self.replies.append({"reply": f"הנה טיוטה לתשובה:\n\ndraft\n{d}\n\n(הערה: לא נשלח)",
+                             "cites": [1], "draft": d})
+        self.ask("draft a reply confirming")
+        answer = [m for m in vc.messages() if m["sender"] == "gil"][-2]
+        self.assertTrue(answer["text"].startswith("הנה טיוטה לתשובה — לא שלחתי כלום."))
+        self.assertNotIn("אני מאשר", answer["text"])
+        self.assertIsNone(self.last()["reply_to"])
+
+    def test_nothing_found_tries_the_broader_search_then_says_so(self):
+        self.found = []
+        self.ask(query="from:idf subject:exam", broader="idf")
+        self.assertEqual(self.searched, ["from:idf subject:exam", "idf"])
+        self.assertIn("I didn't find any emails for that", self.last()["text"])
+
+    def test_a_dead_login_offers_to_reconnect(self):
+        self.found = self.gr.MailboxError(self.gr.NOT_CONNECTED)
+        self.ask()
+        got = self.last()
+        self.assertIn("I can't read your Gmail right now — Gmail isn't connected", got["text"])
+        self.assertEqual(got["meta"]["buttons"][0]["id"], "reconnect_gmail")
+
+    def test_too_much_for_one_call_reads_in_batches(self):
+        self.found = [self.mail(i, body="x" * 3000) for i in range(1, 8)]
+        prompts = []
+
+        def fake_call(messages, must, **kw):
+            prompts.append((must, messages[-1]["content"]))
+            if must == "notes":
+                return {"notes": "exam moved to 14 Nov [3]", "cites": [3]}, 100, ""
+            return {"reply": "It moved to 14 November.", "cites": [3], "draft": ""}, 100, ""
+        vigil.call_json = fake_call
+        self.ask()
+        musts = [m for m, _ in prompts]
+        self.assertGreater(musts.count("notes"), 1)
+        self.assertEqual(musts[-1], "reply")
+        self.assertIn("exam moved to 14 Nov [3]", prompts[-1][1])
+        self.assertTrue(all(len(c) < 12_000 for _, c in prompts))       # each call fits the free tier
+        self.assertIn("#all/t3", self.last()["text"])
+
+    def test_a_rate_limit_is_waited_out(self):
+        calls, slept = [], []
+        orig_sleep = vc.time.sleep
+        vc.time.sleep = slept.append
+        vigil.call_json = lambda *a, **k: (calls.append(1) and None or
+                                           ((None, 0, "qwen is rate limited") if len(calls) < 2 else
+                                            ({"reply": "ok", "cites": []}, 10, "")))
+        try:
+            self.ask()
+        finally:
+            vc.time.sleep = orig_sleep
+        self.assertEqual(slept, [12])
+        self.assertEqual(self.last()["text"], "ok")
+
+    def test_the_chat_hands_mail_questions_to_the_mailbox(self):
+        started = []
+        orig = vc._read_mail
+        vc._read_mail = lambda *a: started.append(a)
+        try:
+            self.replies.append({"reply": "Let me look 👀", "ops": [
+                {"op": "mail", "query": "from:idf", "question": "when is my exam?"}]})
+            vc._converse(vc.add_message("me", "when is my exam according to the army?"), None)
+            deadline = time.time() + 2
+            while not started and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            vc._read_mail = orig
+        self.assertEqual(started[0][0], "from:idf")
+        self.assertEqual(started[0][3]["text"], "when is my exam according to the army?")
+        self.assertFalse(vc._live_question("what is the latest email from the army?"))
+        self.assertFalse(vc._live_question("מה המייל האחרון מהצבא היום?"))
+
+    def test_follow_ups_see_the_last_search(self):
+        self.replies.append({"reply": "ok", "cites": []})
+        self.ask()
+        ctx = vc._context(vc.add_message("me", "and the one before?"), None)
+        self.assertIn("YOUR LAST MAIL SEARCH (from:idf exam) FOUND:", ctx)
+        self.assertIn("IDF · Exam [1]", ctx)
+
+    def test_reconnect_button(self):
+        self.found = self.gr.MailboxError(self.gr.NOT_CONNECTED)
+        self.ask()
+        card = self.last()
+        self.gr.reconnect = lambda: (True, "")
+        w = self.watch()
+        vc.api_button(card["id"], "reconnect_gmail")
+        deadline = time.time() + 3
+        while time.time() < deadline and vc.get_message(card["id"])["meta"].get("resolved") != "Connected ✓":
+            time.sleep(0.02)
+        self.assertEqual(vc.get_message(card["id"])["meta"]["resolved"], "Connected ✓")
+        deadline = time.time() + 2
+        while not self.checks and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(self.checks, [w["id"]])                        # catches up at once
+
+    def test_reconnect_that_fails_can_be_tried_again(self):
+        self.found = self.gr.MailboxError(self.gr.NOT_CONNECTED)
+        self.ask()
+        card = self.last()
+        self.gr.reconnect = lambda: (False, "the sign-in didn't finish")
+        vc.api_button(card["id"], "reconnect_gmail")
+        deadline = time.time() + 3
+        while time.time() < deadline and "didn't connect" not in self.last()["text"]:
+            time.sleep(0.02)
+        self.assertIn("Gmail didn't connect — the sign-in didn't finish", self.last()["text"])
+        self.assertEqual(vc.get_message(card["id"])["meta"]["resolved"], "")      # button back
+
+    def test_a_watch_that_lost_gmail_gets_the_button(self):
+        vc.deliver({"id": "n1", "order_id": None, "title": "Army mail", "urgency": "normal",
+                    "message": "I can't check “Army mail” right now — Gmail isn't connected.",
+                    "trouble": "Gmail isn't connected"})
+        self.assertEqual(self.last()["meta"]["buttons"][0]["id"], "reconnect_gmail")
+
+
+class TestReactionsAndActivity(ChatCase):
+
+    def test_a_reaction_teaches_its_watch(self):
+        w = self.watch()
+        m = vc.add_message("gil", "Python 3.14.1 is out", order_id=w["id"], meta={"watch": "Army mail"})
+        out = vc.api_react(m["id"], "👎")
+        self.assertEqual(out["meta"]["reaction"], "👎")
+        self.assertEqual(vigil.get(w["id"])["feedback"][0]["verdict"], "down")
+        out = vc.api_react(m["id"], "👎")                                 # again: taken back
+        self.assertIsNone(out["meta"]["reaction"])
+        self.assertEqual(vigil.get(w["id"])["feedback"], [])
+        self.assertIsNone(vc.api_react(m["id"], "💩"))                    # not one of ours
+        mine = vc.add_message("me", "hi")
+        self.assertIsNone(vc.api_react(mine["id"], "👍"))                 # only GIL's messages
+
+    def test_activity_in_plain_words(self):
+        w = self.watch()
+        st = json.loads(vigil._PATH.read_text(encoding="utf-8"))
+        st["orders"][0]["history"] = [{"at": 100, "outcome": "unchanged", "tokens": 0},
+                                      {"at": 200, "outcome": "error", "note": "Gmail isn't connected"}]
+        vigil._PATH.write_text(json.dumps(st), encoding="utf-8")
+        rows = vc._state_extras()["activity"]
+        self.assertEqual([r["text"] for r in rows], ["Couldn't check", "Nothing new"])
+        self.assertEqual(rows[0]["note"], "Gmail isn't connected")
+
+    def test_his_notes_are_visible_and_clearable(self):
+        w = self.watch()
+        vigil.update(w["id"], scratch="Waiting on the exam date")
+        self.assertEqual(vc._watch_rows()[0]["notes"], "Waiting on the exam date")
+        vc.api_watch(w["id"], "clear_notes")
+        self.assertEqual(vc._watch_rows()[0]["notes"], "")
 
 
 if __name__ == "__main__":

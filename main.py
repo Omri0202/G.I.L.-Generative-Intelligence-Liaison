@@ -226,6 +226,13 @@ def main() -> None:
             or bool(getattr(engine, "_agent_running", False))
             or (time.time() - engine._last_addressed_at[0]) < ConversationEngine.ATTENTION_SECS))
         vigil.start()
+        # Jobs texted from the phone run here, and his replies go back to it.
+        vigil_chat.connect_gil(
+            send=lambda text: window._chat_send_fn(text),
+            busy=lambda: (engine.processing_lock.locked()
+                          or bool(getattr(engine, "_agent_running", False))),
+            show=lambda text: window.add_chat_message(text, "user"))
+        window.gil_event = vigil_chat.gil_event
         if _OPEN_VIGIL:
             vigil_chat.open_window()
 

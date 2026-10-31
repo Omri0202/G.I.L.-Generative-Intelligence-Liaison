@@ -242,6 +242,28 @@ a:hover { text-decoration:underline; }
   text-align:center; font-size:12.5px; color:var(--sub);
 }
 
+/* reactions, WhatsApp-style: 👍 / 👎 on a watch's message is what it learns from */
+.react-btn {
+  width:30px; height:30px; margin:auto 0 auto 4px; flex:none; border-radius:50%;
+  display:grid; place-items:center; color:var(--sub); background:var(--chip);
+  box-shadow:var(--shadow); opacity:0; transition:opacity .15s;
+}
+.react-btn .ic { width:18px; height:18px; }
+.row:hover .react-btn { opacity:1; }
+.row.reacted { margin-bottom:15px; }
+.reaction {
+  position:absolute; left:10px; bottom:-14px; padding:0 5px; border-radius:11px;
+  background:var(--chip); border:1px solid var(--bar-line); box-shadow:0 1px 3px rgba(0,0,0,.25);
+  font-size:13px; line-height:20px; cursor:pointer;
+}
+#picker {
+  position:fixed; z-index:45; display:flex; gap:2px; padding:5px 6px; border-radius:26px;
+  background:var(--menu); box-shadow:0 6px 22px rgba(0,0,0,.35); animation:pop .15s ease-out;
+}
+#picker button { width:40px; height:40px; border-radius:50%; font-size:23px; line-height:1; transition:transform .12s; }
+#picker button:hover { transform:scale(1.18); }
+#picker button[aria-pressed="true"] { background:var(--hover); }
+
 /* “Can I?” — an action waiting on a yes */
 .b-card.act .card-head { color:var(--notice); }
 .card-from {
@@ -483,10 +505,43 @@ a:hover { text-decoration:underline; }
 .sheet-note { margin-bottom:8px; color:var(--sub); font-size:12.5px; line-height:1.45; }
 .sheet-btns { display:flex; justify-content:space-between; gap:8px; margin-top:14px; }
 .sheet-btns button { padding:8px 14px; border-radius:8px; font-weight:500; color:var(--accent); }
+#sheetClose { margin-left:auto; }
 .sheet-btns button:hover { background:var(--hover); }
 .sheet-btns .danger { color:var(--urgent); }
+#notifBar {
+  display:flex; align-items:center; gap:10px; padding:8px 8px 8px 14px; flex:none;
+  background:color-mix(in srgb, var(--accent) 13%, var(--bar)); border-bottom:1px solid var(--bar-line);
+  font-size:13.5px; line-height:1.35;
+}
+#notifBar span { flex:1; }
+#notifBar .go {
+  flex:none; padding:6px 13px; border-radius:16px; background:var(--accent); color:var(--accent-ink);
+  font-size:13px; font-weight:600;
+}
+#notifBar .icon { width:30px; height:30px; flex:none; }
+#notifBar .icon .ic { width:18px; height:18px; }
+.sheet-lead { margin-bottom:10px; font-size:13.5px; line-height:1.5; }
+.sheet-card ol a, .sheet-lead a { color:var(--accent); font-weight:500; }
+.sheet-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.sheet-actions button { padding:8px 14px; border-radius:8px; background:var(--hover); color:var(--accent); font-weight:500; }
+.sheet-actions .primary { background:var(--accent); color:var(--accent-ink); }
 .denied { padding:40px 28px; text-align:center; color:var(--sub); line-height:1.6; }
 .denied b { display:block; margin-bottom:6px; color:var(--txt); font-size:16px; font-weight:600; }
+
+.a-row { display:flex; align-items:center; gap:12px; padding:8px 20px; }
+.a-row + .a-row { border-top:1px solid var(--line); }
+.a-dot { width:8px; height:8px; flex:none; border-radius:50%; background:color-mix(in srgb, var(--sub) 55%, transparent); }
+.a-dot.notified { background:var(--accent); }
+.a-dot.error { background:var(--urgent); }
+.a-dot.held { background:var(--notice); }
+.a-main { flex:1; min-width:0; }
+.a-main b { display:block; font-weight:500; font-size:13.5px; }
+.a-main small { display:block; color:var(--sub); font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.a-row time { flex:none; color:var(--sub); font-size:12px; }
+.mini.more { margin:0 0 10px 10px; }
+.w-notes { margin:0 20px 12px 72px; padding:10px 12px 6px; border-radius:8px; background:var(--hover); }
+.w-notes p { margin-bottom:4px; font-size:12.5px; line-height:1.45; white-space:pre-wrap; }
+.w-notes .mini { margin-left:-10px; }
 
 .p-foot {
   display:flex; gap:8px; justify-content:center; align-items:flex-start; padding:14px 28px;
@@ -515,8 +570,14 @@ a:hover { text-decoration:underline; }
       <button data-menu="master" id="menuMaster">Pause Vigil</button>
       <button data-menu="read">Mark all as read</button>
       <button data-menu="phone" id="menuPhone">Use on your phone</button>
+      <button data-menu="install" id="menuInstall" hidden>Install the G.I.L. app</button>
     </div>
   </header>
+  <div id="notifBar" hidden>
+    <span>Get G.I.L.'s messages as notifications on this phone</span>
+    <button class="go" id="nbOn">Turn on</button>
+    <button class="icon" id="nbX" aria-label="Not now"></button>
+  </div>
 
   <div id="chatwrap">
     <main id="chat">
@@ -568,11 +629,38 @@ a:hover { text-decoration:underline; }
       <p class="p-note">Only watches you've asked to act can do these. He never sends email, pays,
         deletes anything or touches passwords.</p>
     </div>
+    <div class="p-sec"><h3>Activity <small>what he did while you weren't looking</small></h3>
+      <div id="actList"></div>
+      <button class="mini more" id="actMore" hidden>Show more</button>
+    </div>
     <div class="p-sec" id="phoneSec">
       <div class="p-row">
         <span class="p-ico" id="phoneIco"></span>
         <div class="p-main"><b>On your phone</b><small id="phoneText">Off</small></div>
         <button class="mini" id="phoneBtn">Set up</button>
+      </div>
+    </div>
+    <div class="p-sec" id="thisPhone" hidden>
+      <div class="p-row">
+        <span class="p-ico" id="tpIco"></span>
+        <div class="p-main"><b>Notifications on this phone</b><small id="tpText">Off</small></div>
+        <button class="mini" id="tpBtn">Turn on</button>
+      </div>
+      <div class="p-actions" id="tpActions" hidden>
+        <button class="mini" id="tpTest" hidden>Send a test</button>
+        <button class="mini" id="tpInstall" hidden>Install the app</button>
+      </div>
+    </div>
+    <div class="p-sec" id="notifySec" hidden>
+      <div class="p-row">
+        <span class="p-ico" id="notifyIco"></span>
+        <div class="p-main"><b>Notify my phone</b>
+          <div class="seg" role="radiogroup" aria-label="Notify my phone" id="notifySeg">
+            <button role="radio" data-notify="always">Always</button>
+            <button role="radio" data-notify="away">When I'm away</button>
+            <button role="radio" data-notify="off">Never</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="p-sec"><h3>Today</h3>
@@ -582,20 +670,11 @@ a:hover { text-decoration:underline; }
   </div>
 </aside>
 <div id="snack" hidden></div>
+<div id="picker" hidden role="menu" aria-label="React"></div>
 <div id="sheet" hidden>
   <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-    <h3 id="sheetTitle">Vigil on your phone</h3>
-    <div id="qr"></div>
-    <a id="qrLink"></a>
-    <ol>
-      <li>Put your phone on the same Wi-Fi as this PC.</li>
-      <li>Scan the code with the phone's camera.</li>
-      <li>Tap <b>Share → Add to Home Screen</b> to keep it like an app.</li>
-    </ol>
-    <p class="sheet-note">The code holds a private key: anyone who has it can read and use this chat.
-      Use it on your home Wi-Fi only. If Windows asks, allow access on private networks.</p>
-    <p class="sheet-note">On the phone you read, type and listen. Notifications stay on this PC, and
-      recording your own voice messages needs it too.</p>
+    <h3 id="sheetTitle">G.I.L. on your phone</h3>
+    <div id="sheetBody"></div>
     <div class="sheet-btns">
       <button class="danger" id="phoneOff">Turn off phone access</button>
       <button id="sheetClose">Done</button>
@@ -653,6 +732,9 @@ const ICON = {
   globe:"M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.93 6h-2.95a15.6 15.6 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.93 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14A8.2 8.2 0 0 1 4 12c0-.69.1-1.36.26-2h3.38a16.5 16.5 0 0 0 0 4H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.99 7.99 0 0 1 5.08 16zm2.95-8H5.08a7.99 7.99 0 0 1 4.33-3.56A15.6 15.6 0 0 0 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66a14.7 14.7 0 0 1 0-4h4.68a14.7 14.7 0 0 1 0 4zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56zM16.36 14a16.5 16.5 0 0 0 0-4h3.38a8.2 8.2 0 0 1 0 4h-3.38z",
   lock:"M18 8h-1V6A5 5 0 0 0 7 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6zm9 14H6V10h12v10zm-6-3a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
   bell:"M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
+  smile:"M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z",
+  edit:"M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+  pc:"M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z",
   bolt:"M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z",
   phone:"M17 1.01 7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z",
   shield:"M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z",
@@ -698,7 +780,8 @@ function fmt(s) {
         (_, p, u) => `${p}<a href="${u}" target="_blank" rel="noopener noreferrer">${u.length > 46 ? u.slice(0, 43) + "…" : u}</a>`)
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/`([^`]+)`/g, "<code>$1</code>");
-    return /^\s*[-•]\s+/.test(line) ? `<span class="li">${h.replace(/^\s*[-•]\s+/, "")}</span>` : h + "<br>";
+    // "- ", "• " or a model's "* " start a bullet ("**bold**" at the start doesn't)
+    return /^\s*[-•*]\s+/.test(line) ? `<span class="li">${h.replace(/^\s*[-•*]\s+/, "")}</span>` : h + "<br>";
   });
   return lines.join("").replace(/(<br>)+$/, "");
 }
@@ -707,7 +790,7 @@ function fmt(s) {
 const S = {
   msgs:new Map(), order:[], replyTo:null, st:null, name:"",
   firstUnread:null, hasOlder:true, loadingOlder:false, below:0, lost:false,
-  rendered:new Set(),
+  rendered:new Set(), openNotes:new Set(), actAll:false, denied:false,
 };
 const list = $("#list"), chat = $("#chat");
 
@@ -814,19 +897,67 @@ function rowFor(m, prev) {
   const urgent = m.urgency === "urgent" && !out;
   const labels =
     (urgent ? `<div class="label urgent"><i></i>Urgent</div>` : "") +
-    (!out && m.meta.watch && m.kind !== "card" ? `<div class="label">${svg("eye")}<span dir="auto">${esc(m.meta.watch)}</span></div>` : "");
+    (!out && m.meta.watch && m.kind !== "card" ? `<div class="label">${svg("eye")}<span dir="auto">${esc(m.meta.watch)}</span></div>` : "") +
+    (!out && m.meta.mail ? `<div class="label">${svg("mail")}<span>From your mail · ${mailCount(m.meta.mail)}</span></div>` : "") +
+    (!out && m.meta.draft ? `<div class="label">${svg("edit")}<span>Draft — not sent</span></div>` : "") +
+    (!out && m.meta.task ? `<div class="label">${svg("pc")}<span>G.I.L. on your PC</span></div>` : "");
   let after = "";
   if (m.meta.resolved) after = `<div class="resolved">${esc(m.meta.resolved)}</div>`;
   else if (m.meta.buttons?.length)
     after = `<div class="btns">${m.meta.buttons.map(b =>
       `<button data-btn="${esc(b.id)}">${esc(b.label)}</button>`).join("")}</div>`;
+  else if (m.meta.draft) after = `<div class="btns"><button data-copy>Copy draft</button></div>`;
+  const reaction = m.meta.reaction ? `<span class="reaction" title="Change your reaction">${esc(m.meta.reaction)}</span>` : "";
+  if (reaction) row.classList.add("reacted");
   const kind = m.kind === "voice" ? " b-voice"
     : m.kind === "card" ? " b-card" + (m.meta.card === "action" || m.meta.card === "allow" ? " act" : "") : "";
   row.innerHTML = `<div class="bubble${kind}${urgent ? " urgent" : ""}"><div class="content">${labels}${quoteHtml(m)}${bodyHtml(m)}
-      <span class="meta">${clock(m.at)}${ticks(m)}</span></div>${after}</div>
-    <button class="reply-btn" data-reply aria-label="Reply">${svg("reply")}</button>`;
+      <span class="meta">${clock(m.at)}${ticks(m)}</span></div>${after}${reaction}</div>
+    <button class="reply-btn" data-reply aria-label="Reply">${svg("reply")}</button>${out ? "" :
+    `<button class="react-btn" data-react aria-label="React">${svg("smile")}</button>`}`;
   if (m.kind === "voice") queueMicrotask(() => loadWave(row, m));
   return row;
+}
+
+function mailCount(x) {
+  const n = `${x.read} email${x.read === 1 ? "" : "s"}`;
+  return x.total > x.read ? `the newest ${x.read} of about ${x.total}` : n;
+}
+
+/* reacting */
+const REACTS = ["👍", "❤️", "🙏", "👎"];
+function openPicker(row, anchor) {
+  const m = S.msgs.get(+row.dataset.id);
+  if (!m || m.sender !== "gil") return;
+  const p = $("#picker");
+  p.innerHTML = REACTS.map(e => `<button data-emoji="${e}" aria-pressed="${m.meta.reaction === e}" aria-label="React ${e}">${e}</button>`).join("");
+  p.dataset.id = m.id;
+  p.hidden = false;
+  const r = anchor.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
+  p.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + "px";
+  p.style.top = (r.top - h - 8 < 70 ? r.bottom + 8 : r.top - h - 8) + "px";
+}
+$("#picker").addEventListener("click", async e => {
+  e.stopPropagation();
+  const b = e.target.closest("[data-emoji]"); if (!b) return;
+  const id = +$("#picker").dataset.id;
+  $("#picker").hidden = true;
+  const m = S.msgs.get(id);
+  const updated = await api("react", id, b.dataset.emoji);
+  if (!updated) return;
+  replaceMessage(updated);
+  if (m?.order_id && updated.meta.reaction)
+    snack(updated.meta.reaction === "👎" ? `Got it — fewer like this from “${m.meta.watch || "that watch"}”`
+                                        : "Got it — more like this");
+});
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea");      // phones over plain http have no clipboard API
+  ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  return ok;
 }
 
 function dayChip(ts) {
@@ -953,13 +1084,15 @@ function setMaster(on) {
 }
 $("#menuBtn").innerHTML = svg("more");
 $("#menuBtn").addEventListener("click", e => { e.stopPropagation(); $("#menu").hidden = !$("#menu").hidden; });
-document.addEventListener("click", () => { $("#menu").hidden = true; });
+document.addEventListener("click", () => { $("#menu").hidden = true; $("#picker").hidden = true; });
+chat.addEventListener("scroll", () => { $("#picker").hidden = true; }, { passive:true });
 $("#menu").addEventListener("click", async e => {
   const b = e.target.closest("[data-menu]"); if (!b) return;
   if (b.dataset.menu === "info") openPanel();
   if (b.dataset.menu === "master") applyExtras(await api("master", !S.st?.master));
   if (b.dataset.menu === "read") { await api("read"); setUnread(0); }
   if (b.dataset.menu === "phone") openPhone();
+  if (b.dataset.menu === "install") install();
 });
 // Phone access is switched on from the PC only; a phone doesn't get the switch.
 if (!LOCAL) { $("#menuPhone").hidden = true; $("#phoneSec").hidden = true; }
@@ -1060,6 +1193,15 @@ function playNext(afterId) {   // like WhatsApp: GIL's consecutive voice message
 list.addEventListener("click", async e => {
   const row = e.target.closest(".row");
   const t = e.target;
+  if (t.closest("[data-copy]")) {
+    const m = S.msgs.get(+row.dataset.id);
+    return snack(await copyText(m?.text || "") ? "Draft copied — paste it into your reply in Gmail"
+                                               : "Couldn't copy — select the text instead");
+  }
+  if (t.closest("[data-react]") || t.closest(".reaction")) {
+    e.stopPropagation();
+    return openPicker(row, t.closest("[data-react], .reaction"));
+  }
   if (t.closest("[data-play]")) return play(row);
   if (t.closest("[data-seek]")) {
     const w = t.closest("[data-seek]").getBoundingClientRect();
@@ -1086,6 +1228,13 @@ list.addEventListener("click", async e => {
     if (updated) replaceMessage(updated);
     if (b.dataset.btn === "check_now") { b.disabled = false; snack("Checking now…"); }
   }
+});
+// On a phone, hold a message to react (there's no hover to show the button).
+list.addEventListener("contextmenu", e => {
+  const row = e.target.closest(".row.in");
+  if (!row || e.target.closest("a") || !matchMedia("(hover: none)").matches) return;
+  e.preventDefault();
+  openPicker(row, row.querySelector(".bubble"));
 });
 list.addEventListener("dblclick", e => {
   const row = e.target.closest(".row");
@@ -1228,7 +1377,27 @@ $("#who").addEventListener("click", openPanel);
 $("#pBack").addEventListener("click", closePanel);
 $("#masterSw").addEventListener("change", async e => applyExtras(await api("master", e.target.checked)));
 
-const SRC_ICON = { gmail:"mail", calendar:"cal", url:"globe", needs:"bell" };
+const SRC_ICON = { gmail:"mail", calendar:"cal", url:"globe", needs:"bell", replies:"reply" };
+
+function agoShort(ts) {
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (sameDay(ts, Date.now() / 1000)) return clock(ts);
+  return new Date(ts * 1000).toLocaleDateString("en-GB", { weekday:"short" }) + " " + clock(ts);
+}
+function renderActivity() {
+  const act = S.st?.activity || [];
+  const shown = S.actAll ? act : act.slice(0, 8);
+  $("#actList").innerHTML = shown.length ? shown.map(a => `
+    <div class="a-row"><span class="a-dot ${esc(a.outcome)}"></span>
+      <div class="a-main"><b dir="auto">${esc(a.title)}</b>
+        <small>${esc(a.text)}${a.note ? " — " + esc(a.note) : ""}</small></div>
+      <time>${esc(agoShort(a.at))}</time></div>`).join("")
+    : `<p class="empty">Nothing yet — his checks show up here as they happen.</p>`;
+  $("#actMore").hidden = S.actAll || act.length <= 8;
+}
+$("#actMore").addEventListener("click", () => { S.actAll = true; renderActivity(); });
 const ABIL_ICON = { reminder:"clock", calendar_event:"cal", open_page:"globe" };
 const LEVEL_SHORT = { auto:"Just do it", ask:"Ask first", never:"Never" };
 function applyExtras(st) {
@@ -1249,13 +1418,17 @@ function applyExtras(st) {
       <span class="p-ico">${svg(SRC_ICON[x.sources[0]] || "eye")}</span>
       <div class="p-main"><b dir="auto">${esc(x.title)}</b>
         <small dir="auto">${esc(x.line.split(" — ")[1] || "")}</small>
-        <small>${esc(ago(x.last_run))}${x.last_outcome ? " · " + esc(x.last_outcome) : ""}</small></div>
+        <small>${esc(ago(x.last_run))}${x.last_outcome ? " · " + esc(x.last_outcome) : ""}${x.learned ? ` · learned from ${x.learned} reaction${x.learned === 1 ? "" : "s"}` : ""}</small></div>
       <label class="switch"><input type="checkbox" data-toggle ${x.enabled ? "checked" : ""} aria-label="On or off"><span></span></label>
     </div>
     <div class="p-actions" data-watch="${esc(x.id)}">
       <button class="mini" data-act="check">Check now</button>
+      ${x.notes ? `<button class="mini" data-act="notes">${S.openNotes.has(x.id) ? "Hide his notes" : "His notes"}</button>` : ""}
       <button class="mini danger" data-act="delete">Stop watching</button>
-    </div>`).join("")
+    </div>
+    ${x.notes ? `<div class="w-notes" data-watch="${esc(x.id)}"${S.openNotes.has(x.id) ? "" : " hidden"}>
+      <p dir="auto">${esc(x.notes)}</p>
+      <button class="mini danger" data-act="clear_notes">Clear his notes</button></div>` : ""}`).join("")
     : `<p class="empty">Nothing yet. Tell G.I.L. what to keep an eye on — he'll set it up and show it here.</p>`;
 
   const n = st.needs || [];
@@ -1279,10 +1452,21 @@ function applyExtras(st) {
       </div>
     </div>`).join("");
 
-  if (st.phone && LOCAL) {
-    $("#phoneText").textContent = st.phone.on ? "On — a paired phone can open this chat" : "Off";
-    $("#phoneBtn").textContent = st.phone.on ? "Show code" : "Set up";
+  if (st.phone) {
+    const ph = st.phone;
+    if (LOCAL) {
+      $("#phoneText").textContent = !ph.on ? "Off"
+        : ph.via === "tailscale"
+          ? `On — the G.I.L. app, through Tailscale · ${ph.phones ? `notifications on ${ph.phones} phone${ph.phones === 1 ? "" : "s"}` : "no notifications yet"}`
+          : "On — home Wi-Fi only, no notifications";
+      $("#phoneBtn").textContent = ph.on ? "Show code" : "Set up";
+    }
+    $("#notifySec").hidden = !(LOCAL ? ph.on && ph.phones : PUSH_OK);
+    document.querySelectorAll("#notifySeg [data-notify]").forEach(b =>
+      b.setAttribute("aria-checked", String(b.dataset.notify === ph.notify)));
   }
+
+  renderActivity();
 
   const pct = st.allowance ? Math.min(100, (st.spent / st.allowance) * 100) : 0;
   $("#useBar").style.width = pct.toFixed(1) + "%";
@@ -1295,6 +1479,11 @@ $("#watchList").addEventListener("change", async e => {
 $("#watchList").addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const id = b.closest("[data-watch]").dataset.watch;
+  if (b.dataset.act === "notes") {
+    S.openNotes.has(id) ? S.openNotes.delete(id) : S.openNotes.add(id);
+    return applyExtras(S.st);
+  }
+  if (b.dataset.act === "clear_notes" && !confirm("Clear what he's noted for this watch? He'll start fresh.")) return;
   if (b.dataset.act === "delete" && !confirm("Stop watching this? G.I.L. will forget it.")) return;
   applyExtras(await api("watch", id, b.dataset.act));
   if (b.dataset.act === "check") snack("Checking now…");
@@ -1310,17 +1499,167 @@ $("#abilList").addEventListener("click", async e => {
 
 /* ── on your phone ────────────────────────────────────────────────────────── */
 $("#phoneIco").innerHTML = svg("phone");
-async function openPhone() {
+async function openPhone(wifi = false) {
   $("#menu").hidden = true;
-  const v = await api("phone", true);
-  if (!v?.url) return snack("Couldn't turn on phone access.");
-  $("#qr").innerHTML = v.qr || "";                    // drawn by G.I.L. itself, not from a page
-  $("#qr").hidden = !v.qr;
-  $("#qrLink").textContent = v.url;
+  const v = await api("phone", true, wifi);
+  if (!v) return snack("Couldn't turn on phone access.");
+  renderSheet(v);
   $("#sheet").hidden = false;
 }
+const ext = (url, text) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+function renderSheet(v) {
+  const ts = v.tailscale || {};
+  let html;
+  if (v.on) {
+    // The QR is drawn by G.I.L. itself, never taken from a page.
+    html = `<div id="qr">${v.qr || ""}</div><a id="qrLink">${esc(v.url)}</a>` + (v.via === "tailscale" ? `
+      <ol>
+        <li>On your phone, install ${ext(v.phone_app, "Tailscale")} and sign in with the same account as this PC.</li>
+        <li>Scan this code with the phone's camera.</li>
+        <li>In Chrome, tap <b>⋮ → Install app</b> (or <b>Add to Home screen</b>).</li>
+        <li>Open G.I.L. from your home screen and tap <b>Turn on notifications</b>.</li>
+      </ol>
+      <p class="sheet-note">Works wherever your phone has internet, and only your own devices can open it.
+        The code holds a private key — keep it to yourself.</p>` : `
+      <ol>
+        <li>Put your phone on the same Wi-Fi as this PC.</li>
+        <li>Scan the code with the phone's camera.</li>
+      </ol>
+      <p class="sheet-note">Home Wi-Fi only, as a web page — no app and no notifications. If Windows asks,
+        allow access on private networks. The code holds a private key — keep it to yourself.</p>
+      <div class="sheet-actions"><button data-sheet="retry">Set up the app with Tailscale</button></div>`);
+  } else {
+    const step = !ts.installed
+      ? `<ol><li>${ext(v.download, "Download Tailscale for Windows")}, install it and sign in.</li>
+           <li>Come back and tap <b>Check again</b>.</li></ol>`
+      : !ts.running
+        ? `<p class="sheet-lead">${esc(ts.why || "Tailscale isn't running")}. Open Tailscale from the tray
+             (bottom right of the taskbar), sign in, then tap <b>Check again</b>.</p>`
+        : v.enable_url
+          ? `<p class="sheet-lead">One switch left: turn on HTTPS for your Tailscale network —
+               ${ext(v.enable_url, "turn it on")} — then tap <b>Check again</b>.</p>`
+          : `<p class="sheet-lead">${esc(v.why || ts.why || "Tailscale couldn't serve G.I.L.")}.
+               ${ext("https://login.tailscale.com/admin/dns", "Open Tailscale's DNS settings")},
+               make sure MagicDNS and HTTPS are on, then tap <b>Check again</b>.</p>`;
+    html = `<p class="sheet-lead">To install G.I.L. as an app on your phone and get notifications anywhere,
+        this PC and your phone join one private network with Tailscale — free, and only your devices can
+        reach G.I.L.</p>${step}
+      <div class="sheet-actions"><button class="primary" data-sheet="retry">Check again</button>
+        <button data-sheet="wifi">Home Wi-Fi only for now</button></div>`;
+  }
+  $("#sheetBody").innerHTML = html;
+  $("#phoneOff").hidden = !v.on;
+}
+$("#sheetBody").addEventListener("click", e => {
+  const b = e.target.closest("[data-sheet]"); if (!b) return;
+  b.disabled = true;
+  openPhone(b.dataset.sheet === "wifi");
+});
+
+/* Notifications on this phone: the app subscribes once, then G.I.L. pushes
+   through the phone's own push service — the app can be closed. */
+const PUSH_OK = !LOCAL && window.isSecureContext && "serviceWorker" in navigator &&
+                "PushManager" in window && "Notification" in window;
+if (!LOCAL && window.isSecureContext && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.ready.then(reg => {
+    reg.active?.postMessage({ key: TOKEN });       // so "Do it" on a notification works
+    refreshPush();
+  });
+  navigator.serviceWorker.addEventListener("message", e => { if (e.data?.jump) jumpTo(e.data.jump); });
+}
+if (!LOCAL) $("#thisPhone").hidden = false;
+$("#tpIco").innerHTML = svg("bell");
+$("#notifyIco").innerHTML = svg("bell");
+$("#nbX").innerHTML = svg("close");
+const b64ToBytes = s => Uint8Array.from(atob((s + "=".repeat((4 - s.length % 4) % 4))
+  .replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+function deviceName() {
+  const m = navigator.userAgent.match(/Android [\d.]+; ([^;)]+)/);
+  return (m && m[1] !== "K" ? m[1] : "Android phone").trim().slice(0, 40);
+}
+// The app's background part; never wait on it forever if it didn't start.
+const swReady = () => Promise.race([navigator.serviceWorker.ready, new Promise((_, no) =>
+  setTimeout(() => no(new Error("the app's background part didn't start — reload and try again")), 10000))]);
+async function currentSub() {
+  try { return await (await swReady()).pushManager.getSubscription(); }
+  catch { return null; }
+}
+async function refreshPush() {
+  if (!PUSH_OK) {
+    $("#tpText").textContent = LOCAL ? "" : "Open G.I.L. through Tailscale (https) to get notifications";
+    $("#tpBtn").hidden = true;
+    return;
+  }
+  const sub = await currentSub();
+  const on = !!sub && Notification.permission === "granted" && !!(await api("push_status", sub.endpoint));
+  const blocked = Notification.permission === "denied";
+  $("#tpText").textContent = on ? "On" : blocked ? "Blocked — allow notifications in Chrome's site settings" : "Off";
+  $("#tpBtn").textContent = on ? "Turn off" : "Turn on";
+  $("#tpBtn").hidden = blocked;
+  $("#tpTest").hidden = !on;
+  $("#tpActions").hidden = $("#tpTest").hidden && $("#tpInstall").hidden;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem("vigil_notif_bar") === "x"; } catch {}
+  $("#notifBar").hidden = on || blocked || dismissed;
+}
+async function pushOn() {
+  if (!PUSH_OK) return snack("Notifications need G.I.L. opened through Tailscale (https).");
+  if (await Notification.requestPermission() !== "granted") {
+    refreshPush();
+    return snack("Notifications are blocked — allow them in Chrome's site settings.");
+  }
+  try {
+    const reg = await swReady();
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({
+      userVisibleOnly: true, applicationServerKey: b64ToBytes(await api("push_key")) });
+    const ok = await api("push_subscribe", sub.toJSON(), deviceName());
+    snack(ok ? "Notifications are on ✓ — sending a test" : "Couldn't turn notifications on");
+    if (ok) api("push_test");
+  } catch (err) {
+    snack(`Couldn't turn notifications on — ${err?.message || "try again"}`);
+  }
+  refreshPush();
+}
+async function pushOff() {
+  const sub = await currentSub();
+  if (sub) { await api("push_unsubscribe", sub.endpoint); await sub.unsubscribe().catch(() => {}); }
+  snack("Notifications are off on this phone");
+  refreshPush();
+}
+$("#nbOn").addEventListener("click", pushOn);
+$("#nbX").addEventListener("click", () => {
+  try { localStorage.setItem("vigil_notif_bar", "x"); } catch {}
+  $("#notifBar").hidden = true;
+  snack("You can turn them on any time in Contact info");
+});
+$("#tpBtn").addEventListener("click", () => $("#tpBtn").textContent === "Turn off" ? pushOff() : pushOn());
+$("#tpTest").addEventListener("click", async () =>
+  snack(await api("push_test") ? "Sent — it should pop up in a moment" : "Couldn't send a test"));
+$("#notifySeg").addEventListener("click", async e => {
+  const b = e.target.closest("[data-notify]"); if (!b) return;
+  applyExtras(await api("phone_notify", b.dataset.notify));
+});
+
+/* Installing: Chrome offers it once the app qualifies; we keep the offer for a button. */
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  installEvt = e;
+  $("#tpInstall").hidden = false; $("#tpActions").hidden = false; $("#menuInstall").hidden = false;
+});
+async function install() {
+  $("#menu").hidden = true;
+  if (!installEvt) return snack("In Chrome: ⋮ → Install app");
+  installEvt.prompt();
+  await installEvt.userChoice.catch(() => null);
+  installEvt = null;
+  $("#tpInstall").hidden = true; $("#menuInstall").hidden = true;
+}
+$("#tpInstall").addEventListener("click", install);
+window.addEventListener("appinstalled", () => snack("G.I.L. is on your home screen ✓"));
 function closeSheet() { $("#sheet").hidden = true; }
-$("#phoneBtn").addEventListener("click", openPhone);
+$("#phoneBtn").addEventListener("click", () => openPhone());
 $("#sheetClose").addEventListener("click", closeSheet);
 $("#sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeSheet(); });
 $("#phoneOff").addEventListener("click", async () => {
@@ -1340,6 +1679,7 @@ function snack(text) {
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   if (rec.on) return stopRec(false);
+  if (!$("#picker").hidden) { $("#picker").hidden = true; return; }
   if (!$("#sheet").hidden) return closeSheet();
   if ($("#panel").classList.contains("open")) return closePanel();
   if (!$("#menu").hidden) { $("#menu").hidden = true; return; }
@@ -1353,6 +1693,13 @@ async function load() {
     setStatus("not paired");
     list.innerHTML = `<div class="denied"><b>This link doesn't work any more</b>
       Phone access was turned off, or the code changed. Open Vigil on your PC and scan the new code.</div>`;
+    return;
+  }
+  if (!st && !LOCAL) {
+    setStatus("can't reach your PC");
+    if (!S.msgs.size) list.innerHTML = `<div class="denied"><b>Can't reach G.I.L.</b>
+      Check that Tailscale is on on this phone, and that your PC is awake with G.I.L. running.
+      <br><br><button class="mini" onclick="location.reload()">Try again</button></div>`;
     return;
   }
   if (!st) { setStatus("G.I.L. isn't running"); return; }
@@ -1369,6 +1716,8 @@ async function load() {
   requestAnimationFrame(() => {
     const div = list.querySelector(".unread-div");
     if (div) div.scrollIntoView({ block:"center" }); else toBottom(false);
+    const jump = location.hash.match(/^#m(\d+)$/);     // opened from a notification
+    if (jump) setTimeout(() => jumpTo(+jump[1]), 250);
     updateDown();
     maybeRead();
   });
@@ -1382,7 +1731,7 @@ function connect() {
     const { fn, arg } = msg;
     if (fn === "message") appendMessage(arg);
     else if (fn === "update") replaceMessage(arg);
-    else if (fn === "status") setStatus(arg);
+    else if (fn === "status") { setStatus(arg); if (S.st) S.st.status = arg; }   // redraws reuse S.st
     else if (fn === "state") applyExtras(arg);
     else if (fn === "unread") setUnread(arg);
     else if (fn === "focus") window.focus();

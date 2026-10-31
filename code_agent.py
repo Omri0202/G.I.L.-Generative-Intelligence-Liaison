@@ -2534,7 +2534,10 @@ def run_agent(eng, task: str, hints: list[str] | None = None) -> None:
 
     eng._agent_running = True         # so a new /codemode message won't spawn a rival task
     if hasattr(window, "set_working"):
-        window.set_working(True)      # pin the spinner + "working Ns" for the whole run
+        try:                          # pin the spinner + "working Ns" for the whole run,
+            window.set_working(True, label=task.strip().splitlines()[0][:120])  # named for the phone
+        except TypeError:             # a window without labels
+            window.set_working(True)
     if code_mode:
         window.add_chat_message(_opening_ack(task), "gil")   # deterministic hook line
     activity.set_group("Coding agent")
