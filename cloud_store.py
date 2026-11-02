@@ -187,9 +187,10 @@ class Store:
         if self.deploy_key:
             key, hosts = home / "deploy_key", home / "known_hosts"
             if not key.exists():
-                key.write_text(self.deploy_key.strip() + "\n", encoding="utf-8")
+                # Plain \n line ends, on Windows too: ssh won't load a key with \r\n.
+                key.write_bytes((self.deploy_key.strip() + "\n").encode())
                 os.chmod(key, 0o600)
-                hosts.write_text(GITHUB_HOST_KEY + "\n", encoding="utf-8")
+                hosts.write_bytes((GITHUB_HOST_KEY + "\n").encode())
             env["GIT_SSH_COMMAND"] = (f'ssh -i "{key.as_posix()}" -o IdentitiesOnly=yes '
                                       f'-o UserKnownHostsFile="{hosts.as_posix()}" '
                                       f'-o StrictHostKeyChecking=yes -o BatchMode=yes')
