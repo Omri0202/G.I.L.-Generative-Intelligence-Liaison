@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ log = _get_log("phone.push")
 ROOT = Path(__file__).parent
 KEY_FILE = ROOT / "data" / "vigil_vapid.pem"
 SUBS_FILE = ROOT / "data" / "vigil_push.json"
+_REAL_SUBS = SUBS_FILE
 #: The contact push services ask senders for. py_vapid takes only a mailto:
 #: or a bare https host; a no-reply address keeps the user's own out of it.
 CONTACT = "mailto:gil-vigil@users.noreply.github.com"
@@ -115,6 +117,11 @@ def subscribed(endpoint: str) -> bool:
 def send(payload: dict, urgency: str = "normal", ttl: int = 6 * 3600) -> int:
     """Push to every subscribed phone; returns how many took it. A phone that
     unsubscribed or uninstalled (404/410) is forgotten."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and SUBS_FILE == _REAL_SUBS:
+        # A test run reaching the real list would push test messages to the
+        # user's actual phone — it once did. Tests use their own list.
+        log.warning("a test tried to push to the real phone — refused")
+        return 0
     from pywebpush import WebPushException, webpush
     payload = dict(payload)
     payload["body"] = str(payload.get("body") or "")[:BODY_CHARS]

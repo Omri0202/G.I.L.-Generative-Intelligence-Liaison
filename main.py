@@ -219,13 +219,16 @@ def main() -> None:
     def _host_vigil():
         import vigil
         import vigil_chat
-        while vigil_chat.start(username) != "host":
+        role = vigil_chat.start(username)
+        while role not in ("host", "link"):
             time.sleep(3)
+            role = vigil_chat.start(username)
         vigil.set_busy_check(lambda: (
             engine.processing_lock.locked()
             or bool(getattr(engine, "_agent_running", False))
             or (time.time() - engine._last_addressed_at[0]) < ConversationEngine.ATTENTION_SECS))
-        vigil.start()
+        if role == "host":                   # with Vigil in the cloud, the checks run there
+            vigil.start()
         # Jobs texted from the phone run here, and his replies go back to it.
         vigil_chat.connect_gil(
             send=lambda text: window._chat_send_fn(text),

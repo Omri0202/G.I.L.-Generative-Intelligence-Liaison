@@ -117,6 +117,7 @@ def _vigil_keeper() -> None:
             sys.path.insert(0, _DIR)
         import vigil
         import vigil_chat
+        import vigil_link
     except Exception as exc:
         print(f"[GIL-WATCHER] Vigil unavailable: {exc}")
         return
@@ -127,11 +128,18 @@ def _vigil_keeper() -> None:
                 vigil_chat.stop_hosting()
                 hosting = False
                 print("[GIL-WATCHER] GIL is up — handing Vigil over.")
+            elif hosting and (vigil_chat._role == "link") != vigil_link.configured():
+                # Vigil moved to the cloud (or back): let go, and come back the new way.
+                vigil_chat.stop_hosting()
+                hosting = False
             elif not hosting and not _gil_is_running():
-                if vigil_chat.start() == "host":
+                role = vigil_chat.start()
+                if role == "host":
                     vigil.start()
+                if role in ("host", "link"):
                     hosting = True
-                    print("[GIL-WATCHER] Hosting Vigil while GIL is closed.")
+                    print("[GIL-WATCHER] Hosting Vigil while GIL is closed." if role == "host"
+                          else "[GIL-WATCHER] Linking this PC to Vigil in the cloud while GIL is closed.")
         except Exception as exc:
             print(f"[GIL-WATCHER] Vigil keeper error: {exc}")
         time.sleep(3 if hosting else 20)

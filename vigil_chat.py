@@ -41,6 +41,7 @@ import base64
 import ctypes
 import hmac
 import json
+import os
 import queue
 import re
 import secrets
@@ -49,7 +50,10 @@ import sys
 import threading
 import time
 import uuid
-from ctypes import wintypes
+try:
+    from ctypes import wintypes
+except (ImportError, ValueError):     # not Windows: Vigil in the cloud
+    wintypes = None
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -98,6 +102,19 @@ TASK_NOTICE_SECS = 30        # a job on the PC this long gets "working on it…"
 MIRROR_CHARS = 1_500
 MAX_POST = 20_000_000        # a voice message of your own, base64, with room to spare
 
+#: Vigil in the cloud (vigil_cloud.py): the chat on a free server of its own,
+#: so it keeps watch and answers with the PC off. The PC links to it
+#: (vigil_link.py) for what only the PC can do — jobs for G.I.L., checkouts,
+#: desktop notifications — and tells it whether the user is at the keyboard.
+CLOUD = os.environ.get("GIL_CLOUD") == "1"
+#: What the PC's window and its link sign in with there; phones keep their own key.
+CLOUD_KEY = os.environ.get("GIL_VIGIL_KEY", "")
+CLOUD_HOST = (os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+              or os.environ.get("GIL_CLOUD_HOST") or "").strip().lower()
+AGENT_STALE = 75             # no word from the PC for this long: it's off or asleep
+JOB_SECS = 1800              # the longest a job handed to the PC is waited on
+CHECKOUT_SECS = 900
+
 _db_lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
 _clients: list[queue.Queue] = []
@@ -114,7 +131,8 @@ _activity: dict[str, str] = {}
 _view = {"visible": False, "focused": False, "at": 0.0}
 #: Voice messages sent while the user was away, for "welcome back".
 _away = {"since": 0.0, "voice": []}
-#: "host" runs Vigil here; "client" (GIL while the watcher hosts) only opens it.
+#: "host" runs Vigil here; "client" (GIL while the watcher hosts) only opens it;
+#: "link" — Vigil runs in the cloud, and this process is the PC's link to it.
 _role = ""
 _mutex = None
 _protocol_ok = False
@@ -164,7 +182,7 @@ def _public(row) -> dict:
                           (msg["reply_to"],)).fetchone()
         if q:
             msg["quote"] = {"id": q["id"], "sender": q["sender"], "kind": q["kind"],
-                            "text": (q["text"] or "")[:180]}
+                            "text": _plain(q["text"] or "")[:180]}    # a quote shows words, not markup
     return msg
 
 
@@ -224,6 +242,9 @@ def messages(limit: int = PAGE_SIZE, before: int | None = None) -> list[dict]:
 
 
 def unread_count() -> int:
+    if _role == "link":
+        import vigil_link
+        return vigil_link.unread()
     with _db_lock:
         return _db().execute("SELECT COUNT(*) FROM messages WHERE sender='gil'"
                              " AND status='unread'").fetchone()[0]
@@ -243,6 +264,8 @@ def mark_read() -> int:
 
 def _push(fn: str, arg=None) -> None:
     msg = json.dumps({"fn": fn, "arg": arg}, ensure_ascii=False)
+    if CLOUD and fn == "unread":
+        _agent_send("unread", n=arg)          # the badge in G.I.L.'s main window
     with _clients_lock:
         clients = list(_clients)
     for q in clients:
@@ -289,7 +312,10 @@ class _LASTINPUTINFO(ctypes.Structure):
 
 
 def idle_seconds() -> float:
-    """Seconds since the last keyboard or mouse input anywhere on Windows."""
+    """Seconds since the last keyboard or mouse input anywhere on Windows —
+    in the cloud, as the PC last told it, and counting since (PC off: away)."""
+    if CLOUD:
+        return _agent["idle"] + (time.time() - _agent["at"])
     try:
         user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
         user32.GetLastInputInfo.argtypes = [ctypes.POINTER(_LASTINPUTINFO)]
@@ -307,6 +333,10 @@ def idle_seconds() -> float:
 def _presence_loop() -> None:
     while not _stop.wait(10):
         try:
+            q = _agent["q"]
+            if CLOUD and q is not None and not pc_online():
+                _agent_detach(q)                 # asleep mid-stream: stop waiting on it
+                q.put_nowait(None)
             idle = idle_seconds()
             if idle >= AWAY_SECS and not _away["since"]:
                 _away.update(since=time.time() - idle, voice=[])
@@ -476,11 +506,14 @@ def _ping(msg: dict, tag: str = "") -> None:
     body = text if msg["kind"] != "voice" else f"🎤 Voice message · {text}"
     if msg["kind"] == "card" and msg["meta"].get("card") == "action":
         body = f"Can I? {text}"
-    try:
-        import notify
-        notify.toast("G.I.L.", body, msg.get("urgency") or "normal", launch=_launch_url())
-    except Exception:
-        log.warning("vigil chat toast failed", exc_info=True)
+    if CLOUD:
+        _agent_send("toast", body=body, urgency=msg.get("urgency") or "normal")
+    else:
+        try:
+            import notify
+            notify.toast("G.I.L.", body, msg.get("urgency") or "normal", launch=_launch_url())
+        except Exception:
+            log.warning("vigil chat toast failed", exc_info=True)
     _notify_phone(msg, body, tag)
     _push("unread", unread_count())
 
@@ -519,6 +552,134 @@ def _launch_url() -> str:
     return f"{PROTOCOL}:open" if _protocol_ok else url()
 
 
+# ── the PC, seen from the cloud ──────────────────────────────────────────────
+
+#: The PC's link: its event stream, the user's idle seconds it last reported
+#: and when, and whether G.I.L. himself is open there.
+_agent: dict = {"q": None, "idle": float(AWAY_SECS), "at": time.time(), "gil": False}
+#: Questions put to the PC and waiting on its answer: id → {"done", "result"}.
+_calls: dict[str, dict] = {}
+_calls_lock = threading.Lock()
+
+
+def pc_online() -> bool:
+    return _agent["q"] is not None and time.time() - _agent["at"] < AGENT_STALE
+
+
+def _agent_attach(q: queue.Queue) -> None:
+    old = _agent["q"]
+    _agent.update(q=q, at=time.time())
+    if old is not None:
+        old.put_nowait(None)                    # one link at a time: the newest
+    q.put_nowait(json.dumps({"kind": "unread", "n": unread_count()}))
+    _push("state", _state_extras())
+
+
+def _agent_detach(q: queue.Queue) -> None:
+    if _agent["q"] is not q:
+        return
+    _agent["q"] = None
+    with _calls_lock:
+        waiting = list(_calls.values())
+    for call in waiting:                        # nobody's going to answer them now
+        call["done"].set()
+    _push("state", _state_extras())
+
+
+def _agent_send(kind: str, **data) -> bool:
+    """Tell the PC something; False when it's off."""
+    q = _agent["q"]
+    if q is None or not pc_online():
+        return False
+    q.put_nowait(json.dumps({"kind": kind, **data}, ensure_ascii=False))
+    return True
+
+
+def _agent_call(kind: str, timeout: float, **data):
+    """Ask the PC to do something and wait for its answer: None when it's
+    off, goes off meanwhile, or doesn't answer in time."""
+    cid = uuid.uuid4().hex
+    call = {"done": threading.Event(), "result": None}
+    with _calls_lock:
+        _calls[cid] = call
+    try:
+        if not _agent_send(kind, id=cid, **data):
+            return None
+        call["done"].wait(timeout)
+        return call["result"]
+    finally:
+        with _calls_lock:
+            _calls.pop(cid, None)
+
+
+class _PCGone(Exception):
+    """The PC went off (or stopped answering) in the middle of a job."""
+
+
+# What the cloud's job runner (_hand_to_gil) calls instead of G.I.L. himself.
+def _pc_send(text: str) -> None:
+    if _agent_call("send", JOB_SECS, text=text) is None:
+        raise _PCGone()
+
+
+def _pc_busy() -> bool:
+    return bool(_agent_call("busy", 15)) if pc_online() else False
+
+
+def _pc_show(text: str) -> None:
+    _agent_send("show", text=text)
+
+
+def open_on_pc(address: str) -> bool:
+    """A page opened in the PC's browser; False when that can't happen now."""
+    if CLOUD:
+        return _agent_send("open_url", url=address)
+    import webbrowser
+    return webbrowser.open(address)
+
+
+def _agent_presence(idle: float = 0.0, gil: bool = False) -> dict:
+    was = gil_running()
+    _agent.update(idle=max(0.0, float(idle)), at=time.time(), gil=bool(gil))
+    if gil_running() != was:
+        _push("state", _state_extras())
+    return {"unread": unread_count()}
+
+
+def _agent_result(id: str = "", result=None) -> bool:
+    with _calls_lock:
+        call = _calls.get(id)
+    if call is None:
+        return False
+    call["result"] = result
+    call["done"].set()
+    return True
+
+
+def _agent_gil_event(kind: str = "", args: list | None = None) -> bool:
+    gil_event(kind, *(args or []))
+    return True
+
+
+def _agent_activity(text: str = "") -> bool:
+    set_activity("task", str(text)[:120] or None)
+    return True
+
+
+def _agent_bye() -> bool:
+    """The PC's link is letting go (G.I.L. closing, the PC shutting down)."""
+    q = _agent["q"]
+    if q is not None:
+        _agent_detach(q)
+        q.put_nowait(None)
+    return True
+
+
+_AGENT_API = {"presence": _agent_presence, "result": _agent_result,
+              "gil_event": _agent_gil_event, "activity": _agent_activity,
+              "bye": _agent_bye}
+
+
 # ── jobs for G.I.L. on the PC ────────────────────────────────────────────────
 
 #: The main G.I.L. when it runs in this process — set by main.py once it hosts
@@ -533,10 +694,23 @@ def connect_gil(send, busy, show=None) -> None:
     """send(text) runs text as if typed into G.I.L.; busy() says he's in the
     middle of something; show(text) puts the user's words in his main chat."""
     _gil.update(send=send, busy=busy, show=show)
+    if _role == "link":
+        import vigil_link
+        vigil_link.nudge()                   # the cloud hears G.I.L.'s open right away
 
 
 def gil_running() -> bool:
+    if CLOUD:
+        return pc_online() and _agent["gil"]
     return _gil["send"] is not None
+
+
+def _not_running() -> str:
+    if CLOUD and not pc_online():
+        return ("Your PC is off right now, so that one has to wait — send it again once "
+                "it's on and I'll get G.I.L. on it.")
+    return ("I can't do that from here right now — G.I.L. isn't open on your PC. Open him "
+            "and send it again.")
 
 
 def _short(text: str, limit: int = 70) -> str:
@@ -549,8 +723,7 @@ def _hand_to_gil(text: str, reply_to: int | None = None) -> None:
     come back here while it runs (see gil_event). Only their words are passed
     on — never anything a model wrote — so nothing an email said can become a job."""
     if not gil_running():
-        add_message("gil", "I can't do that from here right now — G.I.L. isn't open on your "
-                           "PC. Open him and send it again.", reply_to=reply_to)
+        add_message("gil", _not_running(), reply_to=reply_to)
         return
     with _job_lock:
         if _job["from"]:
@@ -560,6 +733,7 @@ def _hand_to_gil(text: str, reply_to: int | None = None) -> None:
         _job.update(**{"from": "phone", "text": text, "since": time.time(), "last": None,
                        "result": "", "noticed": True})
     set_activity("task", "working on it on your PC…")
+    failed = True
     try:
         waited, told = 0.0, False
         while _gil["busy"]() and waited < 600:
@@ -572,17 +746,27 @@ def _hand_to_gil(text: str, reply_to: int | None = None) -> None:
         if _gil["show"]:
             _gil["show"](f"📱 {text}")
         _gil["send"](text)                  # returns once he's answered, or handed it on
+        failed = False
+    except _PCGone:
+        add_message("gil", "Your PC went off before that was done — send it again once it's "
+                           "back on.", reply_to=reply_to)
     except Exception:
         log.error("phone job failed", exc_info=True)
         add_message("gil", "Something went wrong on the PC with that one.", reply_to=reply_to)
     finally:
-        if not _gil["busy"]():             # finished, not running on as a long agent job
+        if failed:
+            _job_done(quiet=True)          # never a "Done ✓" for a job that wasn't
+        elif not _gil["busy"]():           # finished, not running on as a long agent job
             _job_done()
 
 
 def gil_event(kind: str, *args) -> None:
     """Hooked into G.I.L.'s main window (gui.py): what he says, and when a
     long job starts and stops. Never let it break the main window."""
+    if _role == "link":                      # Vigil runs in the cloud: tell it there
+        import vigil_link
+        vigil_link.tell("gil_event", kind=kind, args=list(args))
+        return
     try:
         if kind == "message":
             text, sender = str(args[0] or ""), args[1]
@@ -623,12 +807,14 @@ def _job_notice() -> None:
     _notify_phone(msg, msg["text"], tag="gil-job", silent=True)
 
 
-def _job_done() -> None:
+def _job_done(quiet: bool = False) -> None:
     with _job_lock:
         job = dict(_job)
         _job.update(**{"from": "", "text": "", "since": 0.0, "last": None, "result": "",
                        "noticed": False})
     set_activity("task", None)
+    if quiet:
+        return
     if job["from"] == "phone":
         _ping(job["last"] or add_message("gil", "Done ✓", meta={"task": True}), tag="gil-job")
     elif job["from"] == "pc" and job["noticed"]:
@@ -966,9 +1152,187 @@ def _read_mail(query: str, question: str, broader: str = "", user_msg: dict | No
         set_activity("reply", None)
 
 
+# ── shopping around ───────────────────────────────────────────────────────────
+
+#: The last comparison, so "order the cheapest one" or "which has the most GB
+#: under ₪20?" has something to go on.
+_last_compare: dict = {}
+
+
+def _compare_job(user_msg: dict) -> None:
+    """Many sites, every offer, one comparison (compare.py), texted back with
+    the best picks first — and a push to the phone when it's ready."""
+    import compare
+    text = user_msg.get("text") or ""
+    he = bool(_HEBREW.search(text))
+    set_activity("task", "comparing…")
+    try:
+        res = compare.run(text, progress=lambda t: set_activity("task", t))
+    except Exception:
+        log.error("comparison failed", exc_info=True)
+        res = {"ok": False, "why": "something went wrong on my side", "offers": []}
+    finally:
+        set_activity("task", None)
+    if not res["ok"]:
+        _ping(add_message("gil", (f"לא הצלחתי להרכיב את ההשוואה — {res['why']}." if he else
+                                  f"I couldn't put that comparison together — {res['why']}."),
+                          reply_to=user_msg["id"]))
+        return
+    p, pick = res["plan"], res["pick"]
+    fits = [o for o in res["offers"] if o["fits"] is not False]
+    _last_compare.update(request=text, subject=p["subject"], at=time.time(), offers=[
+        {"seller": o["seller"], "name": o["name"], "price": compare._price(o, p),
+         "fits": o["fits"] is not False, "url": o["url"]} for o in res["offers"][:30]],
+        pick=f"{pick['seller']} — {pick['name']}", need=(p.get("need") or {}).get("summary", ""),
+        picks={k: res["picks"].get(k) for k in ("best", "cheapest", "premium")})
+    buttons = []
+    if res["more"]:
+        buttons.append({"id": "cmp_all", "label": f"הצג את כל ה-{len(fits)}" if he
+                        else f"Show all {len(fits)}"})
+    buttons.insert(0, {"id": "cmp_checkout", "label": "תזמין לי את ההמלצה" if he
+                       else "Order my pick for me"})
+    buttons.append({"id": "cmp_open", "label": "פתח את ההמלצה במחשב" if he
+                    else "Open my pick on the PC"})
+    msg = add_message("gil", res["text"], reply_to=user_msg["id"],
+                      status="read" if _looking() else None,
+                      meta={"compare": {"subject": p["subject"], "offers": len(res["offers"]),
+                                        "sites": res["sites"], "more": res["more"],
+                                        "pick_url": pick["url"],
+                                        "pick": {"seller": pick["seller"], "name": pick["name"],
+                                                 "price": compare._price(pick, p),
+                                                 "url": pick["url"]}},
+                            "buttons": buttons})
+    _ping(msg)
+
+
+def _order(which: str, reply_to: int | None = None, said: str = "") -> dict:
+    """"Order the one you recommended": that offer's link and exactly what to
+    choose there. Paying stays with the user — G.I.L. never fills in a form."""
+    he = bool(_HEBREW.search(said or _last_compare.get("request", "")))
+    o = _find_offer(which)
+    if o is None:
+        return _nothing_to_order(he, reply_to)
+    where = re.sub(r"^www\.", "", o["url"].split("/")[2])
+    text = (f"הנה {o['seller']} — {o['name']} ({o['price']}): [{where}]({o['url']})\n"
+            f"בחר שם את \"{o['name']}\" ותשלים את ההזמנה — את התשלום אני לא עושה בשבילך."
+            if he else
+            f"Here's {o['seller']} — {o['name']} ({o['price']}): [{where}]({o['url']})\n"
+            f"Pick \"{o['name']}\" there and check out — paying is yours; I never do that part.")
+    return add_message("gil", text, reply_to=reply_to, meta={
+        "order": {"url": o["url"], "seller": o["seller"], "name": o["name"], "price": o["price"]},
+        "buttons": [{"id": "order_checkout", "label": "תזמין לי" if he else "Order it for me"},
+                    {"id": "order_open", "label": "פתח במחשב" if he else "Open it on my PC"}]})
+
+
+_ORDER_FOR_ME = re.compile(r"תזמין לי|תעשה לי הזמנה|תקנה לי|\b(order|buy|get) (it|this|that|them|"
+                           r"the \w+( one)?|my pick|your pick) for me\b|take me to (the )?checkout", re.I)
+_PICK_WORDS = {
+    "cheapest": re.compile(r"cheapest|הכי זול|הזול", re.I),
+    "premium": re.compile(r"strongest|most data|הכי חזק|הכי הרבה", re.I)}
+_FILLER = re.compile(r"תזמין לי|תעשה לי הזמנה|תקנה לי|\b(order|buy|get|take|me|to|the|it|this|that|"
+                     r"them|one|for|please|checkout|my|your|pick|best|recommended|recommendation|"
+                     r"cheapest|strongest|most|data)\b|את|ה?המלצה|שהמלצת|בבקשה|הכי|זול|הזולה|חזק|"
+                     r"של|[^\w\s]", re.I)
+
+
+def _plain_order(text: str) -> str:
+    """A plain "order it for me" right after a comparison: which offer it
+    means ("best", "cheapest", "premium" or a seller's name), or "" when it
+    says something more that the chat model should read."""
+    if _last_compare.get("at", 0) < time.time() - 1800 or not _ORDER_FOR_ME.search(text or ""):
+        return ""
+    for key, words in _PICK_WORDS.items():
+        if words.search(text):
+            return key
+    low = text.lower()
+    for o in _last_compare.get("offers") or []:
+        if o["seller"].lower() in low:
+            return f"{o['seller']} — {o['name']}"
+    return "" if _FILLER.sub(" ", text).strip() else "best"
+
+
+def _find_offer(which: str) -> dict | None:
+    """The offer of the last comparison that "best", "cheapest", "premium" or
+    a "seller — plan" means; None when there's no comparison to order from."""
+    import difflib
+    offers = _last_compare.get("offers") or []
+    if not offers:
+        return None
+    picks = _last_compare.get("picks") or {}
+    key = " ".join(str(which or "best").lower().split())
+    n = picks.get(key)
+    if not n:
+        names = [f"{o['seller']} — {o['name']}".lower() for o in offers]
+        score, i = max((difflib.SequenceMatcher(None, s_, key).ratio(), i)
+                       for i, s_ in enumerate(names, 1))
+        n = i if score >= 0.5 else picks.get("best") or 1
+    return offers[n - 1]
+
+
+def _nothing_to_order(he: bool, reply_to: int | None) -> dict:
+    return add_message("gil", "אין לי השוואה להזמין ממנה — תבקש שאשווה קודם." if he else
+                       "I don't have a comparison to order from — ask me to compare first.",
+                       reply_to=reply_to)
+
+
+def _checkout_by_name(which: str, reply_to: int | None, said: str) -> None:
+    """op checkout: straight to work — the chat's reply already said "on it"."""
+    he = bool(_HEBREW.search(said or _last_compare.get("request", "")))
+    o = _find_offer(which)
+    if o is None:
+        _nothing_to_order(he, reply_to)
+        return
+    _checkout_job({k: o[k] for k in ("seller", "name", "price", "url")}, reply_to, he)
+
+
+def _checkout_job(offer: dict, reply_to: int | None, he: bool) -> None:
+    """"Order it for me": the shop opened on the PC, the plan in the cart, the
+    saved details in, up to the payment page — then the user's card and pay."""
+    import checkout
+    details = vigil.pref("order_details") or {}
+    set_activity("task", f"ordering at {offer.get('seller', 'the shop')}…")
+    try:
+        res = _run_checkout(offer, details, _last_compare.get("need", ""),
+                            progress=lambda t: set_activity("task", t))
+    except Exception:
+        log.error("checkout failed", exc_info=True)
+        res = {"ok": False, "state": "error", "why": "something went wrong on my side",
+               "url": offer.get("url", ""), "trace": []}
+    finally:
+        set_activity("task", None)
+    _ping(add_message("gil", checkout.summary(res, offer, he), reply_to=reply_to,
+                      urgency="urgent" if res.get("ok") else "normal",
+                      meta={"checkout": res.get("state")}))
+
+
+def _run_checkout(offer: dict, details: dict, need: str, progress) -> dict:
+    """checkout.run on the PC — from the cloud, through the PC's link (its
+    progress comes back as "activity")."""
+    if not CLOUD:
+        import checkout
+        return checkout.run(offer, details, progress=progress, need=need)
+    off = {"ok": False, "state": "pc_off", "why": "your PC is off",
+           "url": offer.get("url", ""), "trace": []}
+    if not pc_online():
+        return off
+    res = _agent_call("checkout", CHECKOUT_SECS, offer=offer, details=details, need=need)
+    return res if isinstance(res, dict) and res.get("state") else off
+
+
+def _start_checkout(offer: dict, reply_to: int | None, he: bool) -> None:
+    add_message("gil", "על זה 🛒 פותח את החנות במחשב ומכין את ההזמנה — אגיד לך כשזה מוכן לתשלום."
+                if he else "On it 🛒 — opening the shop on your PC and getting the order ready. "
+                           "I'll tell you when it's at the payment page.", reply_to=reply_to)
+    threading.Thread(target=_checkout_job, args=(offer, reply_to, he), daemon=True,
+                     name="GIL-Checkout").start()
+
+
 def _reconnect_gmail(mid: int) -> None:
     import gmail_reader
-    ok, why = gmail_reader.reconnect()
+    if CLOUD:
+        ok, why = _reconnect_on_pc()
+    else:
+        ok, why = gmail_reader.reconnect()
     if not ok:
         update_message(mid, resolved="")                 # its button works again
         add_message("gil", f"Gmail didn't connect — {why}. Tap Reconnect Gmail to try again.")
@@ -980,6 +1344,24 @@ def _reconnect_gmail(mid: int) -> None:
                                           for src in o.get("sources", [])):
             threading.Thread(target=vigil.run_order, args=(o["id"], True),
                              daemon=True, name="GIL-VigilCheck").start()
+
+
+def _reconnect_on_pc() -> tuple[bool, str]:
+    """Google's sign-in has to open in a browser on the PC; its new login
+    comes back here, where the checks run."""
+    if not pc_online():
+        return False, "Google's sign-in opens on your PC, and it's off right now"
+    res = _agent_call("reconnect_gmail", 600) or {}
+    if not res.get("ok"):
+        return False, res.get("why") or "your PC didn't answer"
+    try:
+        import gmail_recap
+        json.loads(res["token"])                       # a login, not anything else
+        gmail_recap._TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        gmail_recap._TOKEN_FILE.write_text(res["token"], encoding="utf-8")
+    except (KeyError, TypeError, ValueError, OSError):
+        return False, "the new login didn't arrive"
+    return True, ""
 
 
 _CHAT_SYSTEM = """You are G.I.L., {name}'s personal AI assistant, texting with them in your Vigil chat — the part of you that keeps watch while they're away: "watches" you check in the background, texting them when something matters.
@@ -1035,7 +1417,21 @@ What you can do: put ops in your reply.
    code, make a document, research something in depth, anything on the computer. Your reply
    just says you're on it. Their message must say the whole job — if it only makes sense with
    earlier messages ("do that"), ask them to say it in full first.
- {{"op":"lookup","question":"..."}}  searches the web and texts them the answer. Use it for anything current (prices, weather, news, scores) — never state a current fact yourself.
+ {{"op":"compare"}}  shops around for them: searches many sites for what they want to buy or
+   book, reads every offer, compares price and what they get, and texts the best picks. For
+   "find the cheapest…", "compare prices…", "best deal on…", "which plan/package/flight…".
+   Takes a minute or two; your reply says you're on it. Uses their message as the request.
+   Ordering: you can't pay or fill in forms. When they want to order or buy one of the offers in
+   YOUR LAST COMPARISON below, use {{"op":"order","offer":"best"}} — or "cheapest", "premium",
+   or the offer's "seller — plan". That sends them its link and what to pick; your reply is one
+   short line — never write the link yourself, the order op does it.
+ {{"op":"checkout","offer":"best"}}  when they ask you to do the ordering FOR them — "תזמין לי",
+   "תזמין לי את ההמלצה", "תעשה לי הזמנה", "order it for me", "buy it for me", "take me to checkout":
+   G.I.L. opens the shop on their PC, puts that offer in the cart, fills in their saved details and
+   stops at the payment page; they type their card and pay. Same "offer" values as order. Use
+   order instead only when they want the link or where to buy ("send me the link", "איפה קונים").
+   Your reply is one short line.
+ {{"op":"lookup","question":"..."}}  searches the web and texts them the answer — one quick fact. Use it for anything current (prices, weather, news, scores) — never state a current fact yourself.
 
 Rules:
 - Only change what they asked for. If they're just chatting, ops is [].
@@ -1060,6 +1456,9 @@ def _context(user_msg: dict, quote: dict | None) -> str:
     import vigil_actions as va
     levels = ", ".join(f"{a['type']}: {a['level']}" for a in va.abilities())
     pc = ("open — you can hand him jobs" if gil_running()
+          else "their PC is off — jobs, checkouts and opening things on it can't happen now and "
+               "aren't saved for later; if they ask for one, say they'll need to send it again "
+               "once the PC's on (never promise to do it later)" if CLOUD and not pc_online()
           else "closed — jobs need him open; say so if they ask for one")
     if _job["from"]:
         pc += f"; busy with: {_short(_job['text'], 80) or 'a job'}"
@@ -1070,6 +1469,12 @@ def _context(user_msg: dict, quote: dict | None) -> str:
              f"THEIR NEEDS-YOU LIST:\n{needs}",
              f"NOW: {datetime.now().strftime('%A %d %B %Y, %H:%M')}",
              f"RECENT CHAT (oldest first):\n{convo}"]
+    if _last_compare.get("offers") and time.time() - _last_compare["at"] < 6 * 3600:
+        rows = "\n".join(f"- {o['seller']} — {o['name']} — {o['price']}"
+                         f"{'' if o['fits'] else ' (doesn’t cover it)'} — {o['url']}"
+                         for o in _last_compare["offers"][:15])
+        lines.insert(-1, f"YOUR LAST COMPARISON ({_last_compare['subject']}; your pick: "
+                         f"{_last_compare['pick']}):\n{rows}")
     if _last_mail.get("mails"):
         found = "\n".join(f"- {datetime.fromtimestamp(m['at']):%d %b %Y} · {m['from']} · "
                           f"{m['subject']}" for m in _last_mail["mails"][:8])
@@ -1155,6 +1560,15 @@ def _apply(ops: list, user_msg: dict | None = None,
             elif kind == "task":
                 if user_msg and (user_msg.get("text") or "").strip():
                     run(_hand_to_gil, (user_msg["text"], user_msg["id"]), "GIL-PhoneJob")
+            elif kind == "order":
+                run(_order, (str(op.get("offer") or "best"), (user_msg or {}).get("id"), said),
+                    "GIL-Order")
+            elif kind == "checkout":
+                which = str(op.get("offer") or "best")
+                run(_checkout_by_name, (which, (user_msg or {}).get("id"), said), "GIL-Checkout")
+            elif kind == "compare":
+                if user_msg and (user_msg.get("text") or "").strip():
+                    run(_compare_job, (user_msg,), "GIL-Compare")
             elif kind == "lookup":
                 question = (op.get("question") or "").strip()
                 if question:
@@ -1175,10 +1589,16 @@ def _watch_card(order: dict) -> None:
 
 def _converse(user_msg: dict, quote: dict | None) -> None:
     set_activity("reply", "typing…")
-    obj, _tokens, why = vigil.call_json(
-        [{"role": "system", "content": _CHAT_SYSTEM.format(name=_name() or "them")},
-         {"role": "user", "content": _context(user_msg, quote)}],
-        "reply", models=MODELS, max_tokens=900, temperature=0.4, reserve=False)
+    for attempt in range(3):
+        obj, _tokens, why = vigil.call_json(
+            [{"role": "system", "content": _CHAT_SYSTEM.format(name=_name() or "them")},
+             {"role": "user", "content": _context(user_msg, quote)}],
+            "reply", models=MODELS, max_tokens=900, temperature=0.4, reserve=False)
+        if obj is not None or "rate limited" not in why or attempt == 2:
+            break
+        # A comparison or a long mail read can use up the free tier's minute;
+        # the next message shouldn't be the one that pays for it.
+        time.sleep(12)
     if obj is None:
         log.warning("vigil chat reply failed: %s", why)
         add_message("gil", "Sorry, I lost my train of thought there — say that again?")
@@ -1186,6 +1606,9 @@ def _converse(user_msg: dict, quote: dict | None) -> None:
     later: list[threading.Thread] = []
     created, problems, cards = _apply(obj.get("ops") or [], user_msg, later)
     reply = str(obj.get("reply") or "").strip()
+    if "http" in reply and any(isinstance(op, dict) and op.get("op") == "order"
+                               for op in obj.get("ops") or []):
+        reply = ""                            # the order message carries the link — once
     if problems:
         reply = (reply + "\n\n" if reply else "") + "Hmm — " + "; ".join(problems) + "."
     if reply:
@@ -1226,6 +1649,27 @@ def _handle(user_msg: dict) -> None:
     if quick:
         add_message("gil", quick, status="read" if _looking() else None)
         _push("state", _state_extras())
+        return
+    import compare
+    which = _plain_order(text)
+    if which:                            # "תזמין לי את ההמלצה" — no model needed to see what that means
+        he = bool(_HEBREW.search(text))
+        add_message("gil", "על זה 🛒 פותח את החנות במחשב ומכין את ההזמנה עד דף התשלום." if he else
+                    "On it 🛒 — opening the shop on your PC and getting the order to the payment page.",
+                    status="read" if _looking() else None)
+        threading.Thread(target=_checkout_by_name, args=(which, user_msg["id"], text),
+                         daemon=True, name="GIL-Checkout").start()
+        return
+    if compare.wants(text):              # shop around — never the one-line lookup
+        if _last_compare.get("at", 0) > time.time() - 1800:
+            # "get me the cheapest one" right after a comparison is about that
+            # comparison: the model sees it and picks order or a new compare.
+            _converse(user_msg, quote)
+            _push("state", _state_extras())
+            return
+        add_message("gil", compare.ack(text), status="read" if _looking() else None)
+        threading.Thread(target=_compare_job, args=(user_msg,), daemon=True,
+                         name="GIL-Compare").start()
         return
     if _live_question(text):
         _look_up(text, user_msg["id"])
@@ -1289,7 +1733,8 @@ def _phone_state() -> dict:
     except Exception:
         phones = 0
     return {"on": phone["on"], "via": phone["via"], "phones": phones,
-            "notify": vigil.pref("phone_notify") or "always", "pc": gil_running()}
+            "notify": vigil.pref("phone_notify") or "always", "pc": gil_running(),
+            "cloud": CLOUD}
 
 
 _OUTCOMES = {"unchanged": "Nothing new", "silent": "Looked — nothing worth a ping",
@@ -1449,6 +1894,24 @@ def _press(msg: dict, mid: int, button: str) -> dict | None:
             result = update_message(mid, resolved="Okay — I won't ask first")
         else:
             result = update_message(mid, resolved="Okay — I'll keep asking")
+    elif button == "cmp_checkout" and (meta.get("compare") or {}).get("pick"):
+        _start_checkout(meta["compare"]["pick"], mid, bool(_HEBREW.search(msg["text"])))
+        result = msg
+    elif button == "order_checkout" and (meta.get("order") or {}).get("seller"):
+        _start_checkout(meta["order"], mid, bool(_HEBREW.search(msg["text"])))
+        result = msg
+    elif button == "cmp_all" and meta.get("compare"):
+        if meta["compare"].get("more"):
+            add_message("gil", meta["compare"]["more"], reply_to=mid)
+        result = update_message(mid, buttons=[b for b in meta.get("buttons") or []
+                                              if b["id"] != "cmp_all"])
+    elif (button == "cmp_open" and meta.get("compare")) or (button == "order_open" and meta.get("order")):
+        url = (meta.get("compare") or {}).get("pick_url") or (meta.get("order") or {}).get("url", "")
+        clean, why = va.validate({"type": "open_page", "url": url})
+        ok, said = va.execute(clean) if clean else (False, why)
+        add_message("system", f"Opened {_short(clean['url'], 60)} on your PC" if ok
+                    else f"Couldn't open it — {said}")
+        result = msg
     elif button == "reconnect_gmail":
         result = update_message(mid, resolved="Opening Google sign-in on your PC…")
         threading.Thread(target=_reconnect_gmail, args=(mid,), daemon=True,
@@ -1498,6 +1961,29 @@ def api_react(mid: int = 0, emoji: str = "") -> dict | None:
     return out
 
 
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def api_order_details(details: dict | None = None) -> dict:
+    """The name, email and phone G.I.L. types into a shop's order form when he
+    takes an order to the payment page. Never a card. Passed nothing, it just
+    says what's saved, with what the profile suggests."""
+    if isinstance(details, dict):
+        clean = {k: " ".join(str(details.get(k) or "").split())[:80] for k in ("name", "email", "phone")}
+        if clean["email"] and not _EMAIL.match(clean["email"]):
+            return {"error": "That email doesn't look right", "details": clean}
+        if clean["phone"] and not re.fullmatch(r"[+\d][\d\s-]{6,19}", clean["phone"]):
+            return {"error": "That phone number doesn't look right", "details": clean}
+        vigil.set_pref("order_details", clean)
+    suggest = {}
+    try:
+        profile = json.loads((ROOT / "data" / "user_profile.json").read_text(encoding="utf-8"))
+        suggest = {k: str(profile.get(k) or "") for k in ("name", "email")}
+    except (OSError, ValueError):
+        pass
+    return {"details": vigil.pref("order_details") or {}, "suggest": suggest}
+
+
 def api_ability(kind: str = "", level: str = "") -> dict:
     """The contact page's “What G.I.L. can do” switches."""
     import vigil_actions as va
@@ -1517,6 +2003,8 @@ def api_phone(on: bool = True, wifi: bool = False) -> dict:
     import mobile
     import phone_push
     import tailscale_link
+    if CLOUD:
+        return _cloud_phone(on)
     if not on:
         if _phone()["via"] == "tailscale":
             tailscale_link.unserve()
@@ -1545,6 +2033,24 @@ def api_phone(on: bool = True, wifi: bool = False) -> dict:
     view.update(on=True, via=_phone()["via"], url=link, qr=mobile.qr_svg(link, box=6))
     _push("state", _state_extras())
     return view
+
+
+def _cloud_phone(on: bool) -> dict:
+    """Vigil in the cloud is on the internet already: the code is just its
+    address with the phone's own key, from anywhere, PC on or off."""
+    import mobile
+    import phone_push
+    if not on:
+        vigil.set_pref("phone", {"on": False, "token": "", "via": ""})
+        phone_push.unsubscribe()
+        _drop_phones()
+        _push("state", _state_extras())
+        return {"on": False}
+    token = _phone()["token"] or secrets.token_urlsafe(24)
+    vigil.set_pref("phone", {"on": True, "token": token, "via": "cloud"})
+    link = f"{url()}?app=vigil&t={token}"
+    _push("state", _state_extras())
+    return {"on": True, "via": "cloud", "url": link, "qr": mobile.qr_svg(link, box=6)}
 
 
 def api_phone_check() -> dict:
@@ -1618,7 +2124,7 @@ _API = {"state": api_state, "older": api_older, "send": api_send,
         "phone_notify": api_phone_notify, "push_key": api_push_key,
         "push_subscribe": api_push_subscribe, "push_status": api_push_status,
         "push_unsubscribe": api_push_unsubscribe, "push_test": api_push_test,
-        "phone_check": api_phone_check}
+        "phone_check": api_phone_check, "order_details": api_order_details}
 #: Only a window on this PC may do these — never a phone, even a paired one.
 _LOCAL_ONLY = {"phone", "open", "phone_check"}
 
@@ -1659,10 +2165,20 @@ class _Handler(BaseHTTPRequestHandler):
             return host[1:host.find("]")] if "]" in host else host
         return host.rsplit(":", 1)[0]
 
+    def _key(self) -> str:
+        """The key sent with the request: a header, or ?t= (an <audio> or an
+        event stream can't send headers)."""
+        return (self.headers.get("X-GIL-Token", "")
+                or (parse_qs(urlparse(self.path).query).get("t") or [""])[0])
+
     def _local(self) -> bool:
         """A window on this PC — not a phone. Tailscale's HTTPS proxy connects
         from 127.0.0.1 as well, so anything forwarded, or addressed to another
-        name, is never "this PC"."""
+        name, is never "this PC". In the cloud: the PC's window or link, by
+        its key."""
+        if CLOUD:
+            return bool(CLOUD_KEY) and hmac.compare_digest(self._key().encode(),
+                                                           CLOUD_KEY.encode())
         if self.client_address[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
             return False
         if any(self.headers.get(h) for h in ("X-Forwarded-For", "X-Forwarded-Host",
@@ -1677,6 +2193,8 @@ class _Handler(BaseHTTPRequestHandler):
         host = self._host()
         if host in ("127.0.0.1", "localhost", "::1"):
             return True
+        if CLOUD:
+            return bool(CLOUD_HOST) and host == CLOUD_HOST
         if not _phone()["on"]:
             return False
         if _phone()["via"] == "tailscale":
@@ -1693,15 +2211,13 @@ class _Handler(BaseHTTPRequestHandler):
         phone = _phone()
         if not phone["on"] or not phone["token"]:
             return False
-        tok = self.headers.get("X-GIL-Token", "")
-        if not tok:
-            tok = (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
+        tok = self._key()
         return bool(tok) and hmac.compare_digest(tok.encode(), phone["token"].encode())
 
     def _public_ok(self) -> bool:
         """The page itself and its icons hold nothing private: a phone may load
         them (to show its sign-in error) whenever phone access is on."""
-        return self._local() or _phone()["on"]
+        return CLOUD or self._local() or _phone()["on"]
 
     def _send(self, code: int, body: bytes = b"", ctype: str = "text/plain") -> None:
         self.send_response(code)
@@ -1713,9 +2229,13 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_GET(self):
+        route = self.path.split("?", 1)[0]
+        if route == "/health":                       # the host's checks, and the keep-awake ping
+            return self._send(200, b"ok")
         if not self._host_ok():
             return self._send(403)
-        route = self.path.split("?", 1)[0]
+        if route == "/agent/events":
+            return self._agent_events()
         if route in ("/", "/index.html", "/vigil.html", "/vigil.webmanifest", "/sw.js") or \
                 route.lstrip("/") in _STATIC:
             if not self._public_ok():
@@ -1787,6 +2307,34 @@ class _Handler(BaseHTTPRequestHandler):
             # dropped phone would sit on an open socket thinking it's live.
             self.close_connection = True
 
+    def _agent_events(self):
+        """The PC's link listens here for what the cloud needs from the PC."""
+        if not (CLOUD and self._local()):
+            return self._send(403)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        q: queue.Queue = queue.Queue()
+        _agent_attach(q)
+        try:
+            while not _stop.is_set():
+                try:
+                    msg = q.get(timeout=15)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                if msg is None:                  # another link took over
+                    break
+                self.wfile.write(f"data: {msg}\n\n".encode("utf-8"))
+                self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            _agent_detach(q)
+            self.close_connection = True
+
     def do_POST(self):
         # Read the body first, even for a refusal: answering before it's read
         # makes Windows reset the connection, and the client then sees "can't
@@ -1804,6 +2352,8 @@ class _Handler(BaseHTTPRequestHandler):
         # site open in the user's browser can post to the chat.
         if not (self._host_ok() and self._token_ok() and self.headers.get("X-Vigil") == "1"):
             return self._send(403)
+        if self.path.split("?", 1)[0] == "/agent":
+            return self._agent_post(body)
         if self.path.split("?", 1)[0] != "/api":
             return self._send(404)
         try:
@@ -1819,8 +2369,23 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(200, json.dumps({"result": result}, ensure_ascii=False).encode("utf-8"),
                    "application/json")
 
+    def _agent_post(self, body: bytes):
+        if not (CLOUD and self._local()):
+            return self._send(403)
+        try:
+            req = json.loads(body or b"{}")
+            fn = _AGENT_API.get(req.get("method", ""))
+            result = fn(**(req.get("kwargs") or {})) if fn else None
+        except Exception:
+            log.error("vigil agent api error", exc_info=True)
+            result = None
+        self._send(200, json.dumps({"result": result}, ensure_ascii=False).encode("utf-8"),
+                   "application/json")
+
 
 def url() -> str:
+    if CLOUD:
+        return f"https://{CLOUD_HOST}/" if CLOUD_HOST else f"http://127.0.0.1:{_port}/"
     return f"http://127.0.0.1:{_port}/" if _port else ""
 
 
@@ -1828,8 +2393,13 @@ def _start_server() -> None:
     global _httpd, _port
     if _httpd is not None:
         return
-    bind = "0.0.0.0" if _phone()["on"] else "127.0.0.1"
-    for port in PORTS:
+    # Tailscale reaches the chat on this PC itself; only home-Wi-Fi mode
+    # needs it open to the network — and the cloud, where the host's own
+    # proxy is in front.
+    bind = (os.environ.get("GIL_BIND") or "0.0.0.0" if CLOUD
+            else "0.0.0.0" if _phone()["on"] and _phone()["via"] == "wifi" else "127.0.0.1")
+    ports = (int(os.environ.get("PORT") or 10000),) if CLOUD else PORTS
+    for port in ports:
         try:
             _httpd = _Server((bind, port), _Handler)
             break
@@ -1848,7 +2418,7 @@ def _rebind(bind: str) -> None:
     Open windows keep their event stream; it's only the listening socket."""
     global _httpd
     old = _httpd
-    if old is None or old.server_address[0] == bind:
+    if CLOUD or old is None or old.server_address[0] == bind:
         return
     old.shutdown()
     old.server_close()
@@ -1872,6 +2442,11 @@ def open_window() -> bool:
     """Open the Vigil chat in its own app window — or bring it forward if it's
     already open, rather than stacking a second copy. In a process that isn't
     hosting Vigil, asks the host to."""
+    if _role == "link":
+        import vigil_link
+        return vigil_link.open_window()
+    if CLOUD:
+        return _agent_send("open")
     if _role != "host":
         return open_from_outside()
     if not _port:
@@ -1880,6 +2455,11 @@ def open_window() -> bool:
         _push("focus")
         _raise_window()
         return True
+    return launch_app(url())
+
+
+def launch_app(address: str) -> bool:
+    """The chat as its own app window (Edge or Chrome --app, its own profile)."""
     import subprocess
     for exe in (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
                 r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -1887,7 +2467,7 @@ def open_window() -> bool:
                 "msedge", "chrome"):
         try:
             subprocess.Popen(
-                [exe, f"--app={url()}", "--window-size=480,860",
+                [exe, f"--app={address}", "--window-size=480,860",
                  f"--user-data-dir={PROFILE}", "--no-first-run",
                  "--no-default-browser-check", "--disable-extensions"],
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -1895,10 +2475,11 @@ def open_window() -> bool:
         except (FileNotFoundError, OSError):
             continue
     import webbrowser
-    return webbrowser.open(url())
+    return webbrowser.open(address)
 
 
-_WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+_WNDENUMPROC = (ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                if sys.platform == "win32" else None)
 
 
 def _find_window() -> int:
@@ -1952,6 +2533,9 @@ def open_from_outside() -> bool:
         pass
     if _raise_window():
         return True
+    import vigil_link
+    if vigil_link.configured():                  # Vigil in the cloud: open it straight
+        return vigil_link.open_window()
     port = _host_port()
     if not port:
         return False
@@ -2010,7 +2594,9 @@ def _register_protocol() -> None:
 
 def _greet() -> None:
     hi = f"Hey {_name()} 👋" if _name() else "Hey 👋"
-    add_message("system", "Vigil runs on this PC. What it watches and what we say here stay on it.")
+    add_message("system", "Vigil runs on your own private server, so it keeps watch with your "
+                          "PC off too." if CLOUD else
+                "Vigil runs on this PC. What it watches and what we say here stay on it.")
     add_message("gil", hi)
     add_message("gil", "This is where I'll text you when something needs you. Quiet stuff "
                        "arrives without a ping, the rest with one — and if you're away from "
@@ -2029,21 +2615,32 @@ def start(username: str = "") -> str:
     if username:
         _user = username
         vigil.set_user(username)
-    if _role == "host":
+    if _role in ("host", "link"):
         return _role
-    if not _claim_host():
-        _role = "client"
-        return _role
+    if not CLOUD:
+        if not _claim_host():
+            _role = "client"
+            return _role
+        import vigil_link
+        if vigil_link.configured():
+            # Vigil runs in the cloud: this PC only links to it — the checks,
+            # the chat and its server are all there.
+            _role = "link"
+            vigil_link.start()
+            return _role
     _role = "host"
     _stop.clear()
     _start_server()
-    if _port:
+    if _port and not CLOUD:
         try:
             PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
             PORT_FILE.write_text(str(_port), encoding="utf-8")
         except OSError:
             log.warning("couldn't write the vigil port file", exc_info=True)
-    _register_protocol()
+    if CLOUD:
+        connect_gil(send=_pc_send, busy=_pc_busy, show=_pc_show)
+    else:
+        _register_protocol()
     threading.Thread(target=_worker, daemon=True, name="GIL-VigilChat").start()
     threading.Thread(target=_presence_loop, daemon=True, name="GIL-VigilPresence").start()
     vigil.set_deliver(deliver)
@@ -2058,6 +2655,9 @@ def stop_hosting() -> None:
     checks, the chat and its server, and let go of the host lock. Open windows
     reconnect to the new host on their own."""
     global _httpd, _port, _role, _mutex
+    if _role == "link":
+        import vigil_link
+        vigil_link.stop()
     vigil.stop()
     _stop.set()
     if _httpd is not None:

@@ -1,0 +1,12 @@
+# Vigil in the cloud (vigil_cloud.py) — only what the server needs: no PC,
+# no microphone, no browser. The PC itself uses requirements.txt.
+requests>=2.31
+lxml>=5.0
+edge-tts>=7.0
+pywebpush>=2.0
+cryptography>=42
+google-api-python-client>=2.100
+google-auth>=2.20
+google-auth-httplib2>=0.2
+google-auth-oauthlib>=1.0
+qrcode>=7.4

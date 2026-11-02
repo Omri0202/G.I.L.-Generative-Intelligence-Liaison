@@ -28,7 +28,6 @@ emails and pages. If that check isn't sure, the user gets a card to tap.
 
 from __future__ import annotations
 
-import webbrowser
 from datetime import datetime, timedelta
 
 import vigil
@@ -221,7 +220,9 @@ def execute(a: dict) -> tuple[bool, str]:
             result = gcalendar.add_event(a["title"], a["start"], a["minutes"],
                                          description="Added by G.I.L. (Vigil)")
             return result.startswith("Done"), result
-        webbrowser.open(a["url"])
+        import vigil_chat
+        if not vigil_chat.open_on_pc(a["url"]):
+            return False, f"Your PC is off, so I couldn't open it there — here it is: {a['url']}"
         return True, "Opened it on your PC."
     except Exception as exc:
         log.error("vigil action %s failed", a.get("type"), exc_info=True)

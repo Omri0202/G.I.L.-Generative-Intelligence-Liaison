@@ -1174,6 +1174,79 @@ def _remember_fact(text: str, lower: str, eng) -> bool:
     return True
 
 
+_ORDER = _re.compile(r"\b(order|buy|purchase|get me)\b|תזמין|להזמין|תקנה|לקנות|אני רוצה את", _re.I)
+
+
+def _compare_order(text: str, lower: str, eng) -> bool:
+    """"Order the cheapest one" right after a comparison: G.I.L. opens that
+    shop, puts the offer in the cart, fills in the saved details and stops at
+    the payment page (checkout.py). The card and the pay button are the user's."""
+    import compare
+    if not _ORDER.search(text) or len(text.split()) > 14:
+        return False
+    o = compare.chosen(text)
+    if o is None:
+        return False
+    p = compare.last["result"]["plan"]
+    he = p["lang"] == "he" or bool(_re.search("[֐-׿]", text))
+    offer = {"seller": o["seller"], "name": o["name"], "price": compare._price(o, p), "url": o["url"]}
+
+    def _run():
+        import checkout, vigil
+        eng.window.add_chat_message(
+            f"על זה 🛒 פותח את {o['seller']} ומכין את ההזמנה עד דף התשלום." if he else
+            f"On it 🛒 — opening {o['seller']} and getting the order to the payment page.", "gil")
+        try:
+            eng.window.set_working(True, label=f"ordering at {o['seller']}")
+        except TypeError:
+            eng.window.set_working(True)
+        try:
+            res = checkout.run(offer, vigil.pref("order_details") or {},
+                               need=(p.get("need") or {}).get("summary", ""))
+        except Exception:
+            log.error("checkout failed", exc_info=True)
+            res = {"ok": False, "state": "error", "why": "something went wrong on my side",
+                   "url": o["url"], "trace": []}
+        finally:
+            eng.window.set_working(False)
+        eng.window.add_chat_message(checkout.summary(res, offer, he), "gil")
+
+    threading.Thread(target=_run, daemon=True, name="GIL-Checkout").start()
+    return True
+
+
+def _compare_shop(text: str, lower: str, eng) -> bool:
+    """"Find data packages for Poland on lots of sites and compare prices" —
+    shop around for real: many sites, every offer, one comparison with the
+    best picks (compare.py). Live research would answer with one site's one
+    offer, and this is the kind of task GIL gets most."""
+    import compare
+    if not compare.wants(text):
+        return False
+    log.info("fast-path: comparison for %r", text[:80])
+
+    def _run():
+        ack = compare.ack(text)
+        eng.window.add_chat_message(ack, "gil")
+        try:
+            eng.window.set_working(True, label=text.strip().splitlines()[0][:120])
+        except TypeError:
+            eng.window.set_working(True)
+        try:
+            res = compare.run(text)
+        except Exception:
+            log.error("comparison failed", exc_info=True)
+            res = {"ok": False, "why": "something went wrong on my side"}
+        finally:
+            eng.window.set_working(False)
+        eng.window.add_chat_message(
+            res["text"] + (f"\n\n{res['more']}" if res.get("more") else "") if res["ok"]
+            else f"I couldn't put that comparison together — {res['why']}.", "gil")
+
+    threading.Thread(target=_run, daemon=True, name="GIL-Compare").start()
+    return True
+
+
 def _research_fast(text: str, lower: str, eng) -> bool:
     """Force live research for time-sensitive questions — no stale answers.
     Also catches short follow-ups ("what players have they signed") by
@@ -1271,6 +1344,8 @@ _HANDLERS = [
     _vigil_open,
     _undo_agent,
     _remember_fact,      # "remember that…" → store, never search
+    _compare_order,      # "order the cheapest one" after a comparison — before a new one
+    _compare_shop,       # "compare prices on lots of sites" — before one-fact research
     _research_fast,      # live facts before the brain can answer from memory
     _dev_mode_toggle,    # check first — very specific phrases
     _recap_confirm,

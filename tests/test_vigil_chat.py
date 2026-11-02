@@ -22,6 +22,11 @@ class ChatCase(unittest.TestCase):
         self._orig_vigil = (vigil._PATH, vigil.call_json, vigil.run_order,
                             vigil._deliver_fn, vigil._status_fn)
         self._orig_toast = notify.toast
+        # Never the user's real phone: a test that pings must not push to it.
+        import phone_push
+        self._orig_push = (phone_push.SUBS_FILE, phone_push.KEY_FILE, phone_push.send)
+        phone_push.SUBS_FILE, phone_push.KEY_FILE = self.tmp / "push.json", self.tmp / "vapid.pem"
+        phone_push.send = lambda *a, **k: 0
         vc.DB_PATH = self.tmp / "chat.db"
         vc.VOICE_DIR = self.tmp / "voice"
         vc._conn = None
@@ -50,7 +55,15 @@ class ChatCase(unittest.TestCase):
         while not vc._inbox.empty():
             vc._inbox.get_nowait()
 
+    #: G.I.L.'s background jobs: a test may see their message before they're
+    #: done with the database, and closing it under them crashes the process.
+    JOBS = ("GIL-Checkout", "GIL-Compare", "GIL-Order", "GIL-PhoneJob", "GIL-VigilMail",
+            "GIL-VigilLookup", "GIL-PhonePush", "GIL-GmailReconnect", "GIL-VigilTranscribe")
+
     def tearDown(self):
+        for t in threading.enumerate():
+            if t.name in self.JOBS and t is not threading.current_thread():
+                t.join(timeout=5)
         if vc._conn is not None:
             vc._conn.close()
         for k, v in self._orig.items():
@@ -58,6 +71,8 @@ class ChatCase(unittest.TestCase):
         (vigil._PATH, vigil.call_json, vigil.run_order,
          vigil._deliver_fn, vigil._status_fn) = self._orig_vigil
         notify.toast = self._orig_toast
+        import phone_push
+        phone_push.SUBS_FILE, phone_push.KEY_FILE, phone_push.send = self._orig_push
         vc._view.update(visible=False, focused=False, at=0.0)
 
     def last(self, sender="gil"):
@@ -513,6 +528,9 @@ class _FakeRequest:
 
     def _local(self):
         return vc._Handler._local(self)
+
+    def _key(self):
+        return vc._Handler._key(self)
 
 
 TS_NAME = "omri-pc.tail1234.ts.net"
@@ -983,7 +1001,8 @@ class TestHosting(unittest.TestCase):
 
     def setUp(self):
         self._orig = (vc.HOST_MUTEX, vc._mutex, vc._role, vc.PORT_FILE, vc._raise_window,
-                      vc._protocol_ok)
+                      vc._protocol_ok, vigil._PATH)
+        vigil._PATH = Path(tempfile.mkdtemp()) / "vigil.json"
         vc.HOST_MUTEX = f"ProjectGIL_VigilHost_test_{os.getpid()}_{time.time_ns()}"
         vc._mutex, vc._role = None, ""
         vc._raise_window = lambda: False
@@ -994,7 +1013,7 @@ class TestHosting(unittest.TestCase):
             import ctypes
             ctypes.windll.kernel32.CloseHandle(vc._mutex)
         (vc.HOST_MUTEX, vc._mutex, vc._role, vc.PORT_FILE, vc._raise_window,
-         vc._protocol_ok) = self._orig
+         vc._protocol_ok, vigil._PATH) = self._orig
 
     def test_only_one_host(self):
         import ctypes
@@ -1274,6 +1293,269 @@ class TestReactionsAndActivity(ChatCase):
         self.assertEqual(vc._watch_rows()[0]["notes"], "Waiting on the exam date")
         vc.api_watch(w["id"], "clear_notes")
         self.assertEqual(vc._watch_rows()[0]["notes"], "")
+
+
+class TestShoppingAround(ChatCase):
+    """"Compare prices on lots of sites" gets a real comparison, never the
+    one-line lookup — with its buttons and a push when it's ready."""
+
+    RESULT = {"ok": True, "text": "מצאתי 40 הצעות ב-9 אתרים.\n\n🏆 ...", "more": "- more offers",
+              "pick": {"seller": "Andalu", "name": "5GB 30 days", "price": 9.09, "price_t": 9.09,
+                       "currency": "ILS", "fits": True, "url": "https://andalu.com/esim/poland",
+                       "fields": {}},
+              "plan": {"subject": "Mobile data for Poland", "currency": "ILS", "fields": [], "lang": "he"},
+              "offers": [{"seller": "Andalu", "name": "5GB 30 days", "price": 9.09, "price_t": 9.09,
+                          "currency": "ILS", "fits": True, "url": "https://andalu.com/esim/poland",
+                          "fields": {}}],
+              "picks": {"best": 1}, "sites": 9, "why": ""}
+
+    def setUp(self):
+        super().setUp()
+        import compare
+        self.compare = compare
+        self._orig_run = compare.run
+        self.asked = []
+
+        def fake_run(text, progress=None):
+            self.asked.append(text)
+            if progress:
+                progress("reading prices… 3/9 sites")
+            return dict(self.RESULT)
+        compare.run = fake_run
+        vc._last_compare.clear()
+
+    def tearDown(self):
+        self.compare.run = self._orig_run
+        vc._last_compare.clear()
+        super().tearDown()
+
+    def test_a_comparison_request_is_shopped_around(self):
+        looked = []
+        orig = vc._look_up
+        vc._look_up = lambda *a: looked.append(a)
+        try:
+            user = vc.add_message("me", "תחפש חבילות גלישה בהרבה אתרים לפולין ותשווה מחירים")
+            vc._handle(user)
+            deadline = time.time() + 2
+            while "compare" not in self.last()["meta"] and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            vc._look_up = orig
+        self.assertEqual(looked, [])                                   # not the one-line lookup
+        msgs = [m for m in vc.messages() if m["sender"] == "gil"]
+        self.assertIn("משווה", msgs[-2]["text"])                       # "on it" first
+        got = msgs[-1]
+        self.assertEqual(got["reply_to"], user["id"])
+        self.assertEqual([b["id"] for b in got["meta"]["buttons"]], ["cmp_checkout", "cmp_all", "cmp_open"])
+        self.assertEqual(got["meta"]["buttons"][0]["label"], "תזמין לי את ההמלצה")
+        self.assertEqual(got["meta"]["buttons"][1]["label"], "הצג את כל ה-1")
+        self.assertEqual(len(self.toasts), 1)                          # pinged when ready
+        self.assertEqual(self.asked, [user["text"]])                   # their own words
+        self.assertNotIn("task", vc._activity)
+
+    def test_show_all_and_open_the_pick(self):
+        user = vc.add_message("me", "compare prices of eSIMs for Poland")
+        vc._compare_job(user)
+        card = self.last()
+        vc.api_button(card["id"], "cmp_all")
+        self.assertEqual(self.last()["text"], "- more offers")
+        self.assertEqual([b["id"] for b in vc.get_message(card["id"])["meta"]["buttons"]],
+                         ["cmp_checkout", "cmp_open"])
+        import vigil_actions as va
+        opened, orig = [], va.execute
+        va.execute = lambda a: opened.append(a["url"]) or (True, "Opened it on your PC.")
+        try:
+            vc.api_button(card["id"], "cmp_open")
+        finally:
+            va.execute = orig
+        self.assertEqual(opened, ["https://andalu.com/esim/poland"])
+        self.assertIn("Opened", self.last("system")["text"])
+
+    def test_follow_ups_see_the_comparison(self):
+        vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+        ctx = vc._context(vc.add_message("me", "order the cheapest one"), None)
+        self.assertIn("YOUR LAST COMPARISON (Mobile data for Poland; your pick: Andalu — 5GB 30 days)", ctx)
+        self.assertIn("https://andalu.com/esim/poland", ctx)
+
+    def test_order_gives_the_link_and_what_to_pick(self):
+        vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+        self.replies.append({"reply": "Sure!", "ops": [{"op": "order", "offer": "best"}]})
+        vc._converse(vc.add_message("me", "order the one you recommended"), None)
+        deadline = time.time() + 2
+        while "order" not in self.last()["meta"] and time.time() < deadline:
+            time.sleep(0.02)
+        got = self.last()
+        self.assertIn("Andalu — 5GB 30 days", got["text"])
+        self.assertIn("(https://andalu.com/esim/poland)", got["text"])
+        self.assertIn("paying is yours", got["text"])
+        self.assertEqual([b["id"] for b in got["meta"]["buttons"]], ["order_checkout", "order_open"])
+        self.assertEqual([m["text"] for m in vc.messages() if m["sender"] == "gil"][-2], "Sure!")
+        import vigil_actions as va
+        opened, orig = [], va.execute
+        va.execute = lambda a: opened.append(a["url"]) or (True, "Opened it on your PC.")
+        try:
+            vc.api_button(got["id"], "order_open")
+        finally:
+            va.execute = orig
+        self.assertEqual(opened, ["https://andalu.com/esim/poland"])
+
+    def test_order_it_for_me(self):
+        import checkout
+        runs, orig = [], checkout.run
+        checkout.run = lambda offer, details, progress=None, need="", headless=False: (
+            runs.append((offer, details, need)) or
+            {"ok": True, "state": "payment", "why": "", "url": offer["url"],
+             "trace": ["filled the user's saved details"]})
+        vc.api_order_details({"name": "Omri Levi", "email": "omri@example.com", "phone": ""})
+        try:
+            vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+            card = self.last()
+            vc.api_button(card["id"], "cmp_checkout")
+            deadline = time.time() + 3
+            while "checkout" not in self.last()["meta"] and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            checkout.run = orig
+        offer, details, _ = runs[0]
+        self.assertEqual((offer["seller"], offer["name"], offer["price"]), ("Andalu", "5GB 30 days", "₪9.09"))
+        self.assertEqual(details["email"], "omri@example.com")
+        done = self.last()
+        self.assertTrue(done["text"].startswith("✅"))
+        self.assertIn("אני אף פעם לא לוחץ על תשלום", done["text"])      # the comparison was in Hebrew
+        self.assertIn("ומילאתי את הפרטים שלך", done["text"])
+        self.assertEqual(done["urgency"], "urgent")
+        self.assertTrue(self.toasts)                                         # pinged: it's ready
+
+    def test_plain_order_for_me_needs_no_model(self):
+        vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+        for text, want in (("תזמין לי את ההמלצה", "best"), ("order the cheapest one for me", "cheapest"),
+                           ("buy the andalu one for me", "Andalu — 5GB 30 days"),
+                           ("תעשה לי הזמנה של אנדלו", ""), ("order it for me but with 2 eSIMs", ""),
+                           ("what did you recommend?", "")):
+            self.assertEqual(vc._plain_order(text), want, text)
+        import checkout
+        runs, orig = [], checkout.run
+        checkout.run = lambda offer, details, progress=None, need="", headless=False: (
+            runs.append(offer["seller"]) or {"ok": True, "state": "payment", "why": "", "url": offer["url"],
+                                             "trace": []})
+        try:
+            vc._handle(vc.add_message("me", "תזמין לי את ההמלצה"))
+            deadline = time.time() + 3            # until the job is done, not just started
+            while "checkout" not in self.last()["meta"] and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            checkout.run = orig
+        self.assertEqual(runs, ["Andalu"])
+        vc._last_compare["at"] = time.time() - 3600                           # an old comparison
+        self.assertEqual(vc._plain_order("תזמין לי את ההמלצה"), "")
+
+    def test_order_details_are_checked(self):
+        self.assertIn("error", vc.api_order_details({"email": "not an email"}))
+        self.assertIn("error", vc.api_order_details({"phone": "call me"}))
+        saved = vc.api_order_details({"name": " Omri  Levi ", "email": "o@x.co", "phone": "+972 50-123-4567"})
+        self.assertEqual(saved["details"], {"name": "Omri Levi", "email": "o@x.co", "phone": "+972 50-123-4567"})
+        self.assertEqual(vc.api_order_details()["details"]["name"], "Omri Levi")
+
+    def test_the_link_is_sent_once(self):
+        vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+        before = len(vc.messages())
+        self.replies.append({"reply": "Here: https://andalu.com/esim/poland", "ops": [{"op": "order"}]})
+        vc._converse(vc.add_message("me", "I want that one"), None)
+        deadline = time.time() + 2
+        while "order" not in self.last()["meta"] and time.time() < deadline:
+            time.sleep(0.02)
+        added = [m for m in vc.messages()[before:] if m["sender"] == "gil"]
+        self.assertEqual(len(added), 1)
+        self.assertEqual(sum("andalu.com" in m["text"] for m in added), 1)
+
+    def test_order_by_name_and_with_nothing_to_order(self):
+        self.assertIn("ask me to compare first", vc._order("best")["text"])
+        vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+        self.assertIn("Andalu — 5GB 30 days", vc._order("andalu 5gb")["text"])
+
+    def test_when_it_fails_it_says_why(self):
+        self.compare.run = lambda text, progress=None: {"ok": False, "why": "the web search didn't answer",
+                                                        "offers": []}
+        vc._compare_job(vc.add_message("me", "compare prices of eSIMs for Poland"))
+        self.assertIn("the web search didn't answer", self.last()["text"])
+
+
+class TestCompareInTheMainChat(unittest.TestCase):
+
+    def test_the_main_chat_shops_around_too(self):
+        import compare, fast_path_handler as fp
+        said, working = [], []
+
+        class Win:
+            def add_chat_message(self, text, who):
+                said.append(text)
+
+            def set_working(self, on, label=""):
+                working.append((on, label))
+
+        class Eng:
+            window = Win()
+        orig = compare.run
+        compare.run = lambda text, progress=None: {"ok": True, "text": "THE COMPARISON", "more": "- rest"}
+        try:
+            self.assertTrue(fp._compare_shop("compare prices of eSIMs for Poland", "", Eng))
+            deadline = time.time() + 2
+            while len(said) < 2 and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertFalse(fp._compare_shop("compare python and java", "", Eng))
+        finally:
+            compare.run = orig
+        self.assertIn("comparing", said[0])
+        self.assertEqual(said[1], "THE COMPARISON\n\n- rest")
+        self.assertEqual([w[0] for w in working], [True, False])
+        self.assertLess(fp._HANDLERS.index(fp._compare_shop), fp._HANDLERS.index(fp._research_fast))
+
+    def test_order_in_the_main_chat_goes_to_checkout(self):
+        import compare, checkout, fast_path_handler as fp
+        said, runs, working = [], [], []
+
+        class Eng:
+            class window:
+                @staticmethod
+                def add_chat_message(text, who):
+                    said.append(text)
+
+                @staticmethod
+                def set_working(on, label=""):
+                    working.append(on)
+        plan = {"currency": "ILS", "lang": "en", "fields": [], "need": {"summary": "8 days"}}
+        offers = [{"seller": "Orange", "name": "1GB", "price": 3.97, "price_t": 3.97, "currency": "ILS",
+                   "url": "https://flex.orange.pl/x", "site": "flex.orange.pl", "fields": {}},
+                  {"seller": "Yatelo", "name": "10GB 30 days", "price": 15.05, "price_t": 15.05,
+                   "currency": "ILS", "url": "https://esims.io/pl", "site": "esims.io", "fields": {}}]
+        orig = (dict(compare.last), checkout.run)
+        compare.last.clear()
+        checkout.run = lambda offer, details, progress=None, need="", headless=False: (
+            runs.append((offer, need)) or {"ok": True, "state": "payment", "why": "", "url": offer["url"],
+                                            "trace": []})
+        try:
+            self.assertFalse(fp._compare_order("order the cheapest one", "", Eng))   # nothing compared yet
+            compare.last.update(at=time.time(), result={"plan": plan, "offers": offers,
+                                                         "picks": {"best": 2, "cheapest": 1, "premium": None}})
+            self.assertTrue(fp._compare_order("order the cheapest one for me", "", Eng))
+            deadline = time.time() + 2
+            while len(said) < 2 and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(fp._compare_order("תזמין לי את ההמלצה", "", Eng))
+            deadline = time.time() + 2
+            while len(said) < 4 and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertFalse(fp._compare_order("compare prices of flights to Rome", "", Eng))
+        finally:
+            compare.last.clear(); compare.last.update(orig[0])
+            checkout.run = orig[1]
+        self.assertEqual([(o["seller"], o["price"]) for o, _ in runs], [("Orange", "₪3.97"), ("Yatelo", "₪15.05")])
+        self.assertEqual(runs[0][1], "8 days")
+        self.assertIn("On it", said[0])
+        self.assertTrue(said[1].startswith("✅ Ready on your PC: Orange — 1GB (₪3.97)"))
+        self.assertIn("אני אף פעם לא לוחץ על תשלום", said[3])                  # asked in Hebrew
+        self.assertEqual(working, [True, False, True, False])
+        self.assertLess(fp._HANDLERS.index(fp._compare_order), fp._HANDLERS.index(fp._compare_shop))
 
 
 if __name__ == "__main__":

@@ -483,6 +483,14 @@ a:hover { text-decoration:underline; }
 .seg button:hover { color:var(--txt); }
 .seg button[aria-checked="true"] { background:var(--accent); color:var(--accent-ink); font-weight:600; }
 .p-note { padding:4px 20px 14px 72px; color:var(--sub); font-size:12.5px; line-height:1.45; }
+.od { display:grid; gap:8px; padding:4px 20px 6px 72px; }
+.od input {
+  width:100%; padding:9px 11px; border-radius:8px; border:1px solid var(--line);
+  background:var(--input); color:var(--txt); font:inherit; font-size:14px;
+}
+.od input:focus { outline:none; border-color:var(--accent); }
+.od-row { display:flex; align-items:center; gap:10px; }
+.od-row small { color:var(--sub); font-size:12px; }
 
 #sheet {
   position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:16px;
@@ -634,6 +642,21 @@ a:hover { text-decoration:underline; }
       <p class="p-note">Only watches you've asked to act can do these. He never sends email, pays,
         deletes anything or touches passwords.</p>
     </div>
+    <div class="p-sec" id="orderSec"><h3>Your details for orders</h3>
+      <div class="p-row">
+        <span class="p-ico" id="odIco"></span>
+        <div class="p-main"><b>For “Order it for me”</b>
+          <small>He fills these into the order form of the shop you chose</small></div>
+      </div>
+      <div class="od">
+        <input id="odName" placeholder="Full name" autocomplete="name" dir="auto" maxlength="80">
+        <input id="odEmail" type="email" placeholder="Email" autocomplete="email" maxlength="80">
+        <input id="odPhone" type="tel" placeholder="Phone (optional)" autocomplete="tel" maxlength="20">
+        <div class="od-row"><button class="mini" id="odSave">Save</button><small id="odNote"></small></div>
+      </div>
+      <p class="p-note">Nothing else, and nowhere else. Never your card — you type that and press pay
+        yourself.</p>
+    </div>
     <div class="p-sec"><h3>Activity <small>what he did while you weren't looking</small></h3>
       <div id="actList"></div>
       <button class="mini more" id="actMore" hidden>Show more</button>
@@ -695,6 +718,15 @@ const $ = s => document.querySelector(s);
    sends the key with everything it asks for; it stays in the address so a
    home-screen copy keeps it too. */
 const LOCAL = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+/* With Vigil in the cloud, the PC's own window opens it with ?pc=1 and the
+   PC's key: it gets the PC's switches, a phone doesn't. */
+const PC = LOCAL || (() => {
+  const pc = new URLSearchParams(location.search).get("pc") === "1";
+  try {
+    if (pc) localStorage.setItem("vigil_pc", "1");
+    return pc || localStorage.getItem("vigil_pc") === "1";
+  } catch { return pc; }
+})();
 const TOKEN = (() => {
   if (LOCAL) return "";
   const t = new URLSearchParams(location.search).get("t");
@@ -1100,7 +1132,7 @@ $("#menu").addEventListener("click", async e => {
   if (b.dataset.menu === "install") install();
 });
 // Phone access is switched on from the PC only; a phone doesn't get the switch.
-if (!LOCAL) { $("#menuPhone").hidden = true; $("#phoneSec").hidden = true; }
+if (!PC) { $("#menuPhone").hidden = true; $("#phoneSec").hidden = true; }
 
 /* ── voice messages ───────────────────────────────────────────────────────── */
 let actx = null;
@@ -1376,7 +1408,28 @@ $("#chips").addEventListener("click", e => {
 $("#pBack").innerHTML = svg("back");
 $("#masterIco").innerHTML = svg("eye");
 $("#footIco").innerHTML = svg("lock");
-function openPanel() { $("#panel").classList.add("open"); $("#menu").hidden = true; }
+function openPanel() { $("#panel").classList.add("open"); $("#menu").hidden = true; loadOrderDetails(); }
+
+/* the details "Order it for me" fills in: saved here, suggested from the G.I.L. profile */
+$("#odIco").innerHTML = svg("edit");
+async function loadOrderDetails() {
+  const got = await api("order_details");
+  if (!got) return;
+  const d = got.details || {}, hint = got.suggest || {};
+  const saved = !!(d.name || d.email || d.phone);
+  $("#odName").value = d.name || (saved ? "" : hint.name || "");
+  $("#odEmail").value = d.email || (saved ? "" : hint.email || "");
+  $("#odPhone").value = d.phone || "";
+  $("#odNote").textContent = saved ? "Saved" : (hint.name || hint.email) ? "Suggested from your profile — Save to use" : "";
+}
+$("#odSave").addEventListener("click", async () => {
+  const got = await api("order_details", { name: $("#odName").value, email: $("#odEmail").value,
+                                           phone: $("#odPhone").value });
+  if (!got) return snack("Couldn't save — is G.I.L. running?");
+  if (got.error) return snack(got.error);
+  $("#odNote").textContent = "Saved";
+  snack("Saved ✓ — I'll fill these in when I order for you");
+});
 function closePanel() { $("#panel").classList.remove("open"); }
 $("#who").addEventListener("click", openPanel);
 $("#pBack").addEventListener("click", closePanel);
@@ -1459,14 +1512,16 @@ function applyExtras(st) {
 
   if (st.phone) {
     const ph = st.phone;
-    if (LOCAL) {
+    if (PC) {
       $("#phoneText").textContent = !ph.on ? "Off"
+        : ph.via === "cloud"
+          ? `On — the G.I.L. app, from anywhere · ${ph.phones ? `notifications on ${ph.phones} phone${ph.phones === 1 ? "" : "s"}` : "no notifications yet"}`
         : ph.via === "tailscale"
           ? `On — the G.I.L. app, through Tailscale · ${ph.phones ? `notifications on ${ph.phones} phone${ph.phones === 1 ? "" : "s"}` : "no notifications yet"}`
           : "On — home Wi-Fi only, no notifications";
       $("#phoneBtn").textContent = ph.on ? "Show code" : "Set up";
     }
-    $("#notifySec").hidden = !(LOCAL ? ph.on && ph.phones : PUSH_OK);
+    $("#notifySec").hidden = !(PC ? ph.on && ph.phones : PUSH_OK);
     document.querySelectorAll("#notifySeg [data-notify]").forEach(b =>
       b.setAttribute("aria-checked", String(b.dataset.notify === ph.notify)));
   }
@@ -1515,7 +1570,16 @@ const ext = (url, text) => `<a href="${esc(url)}" target="_blank" rel="noopener 
 function renderSheet(v) {
   const ts = v.tailscale || {};
   let html;
-  if (v.on) {
+  if (v.on && v.via === "cloud") {
+    html = `<div id="qr">${v.qr || ""}</div><a id="qrLink">${esc(v.url)}</a>
+      <ol>
+        <li>Scan this code with your phone's camera.</li>
+        <li>In Chrome, tap <b>⋮ → Install app</b> (or <b>Add to Home screen</b>).</li>
+        <li>Open G.I.L. from your home screen and tap <b>Turn on notifications</b>.</li>
+      </ol>
+      <p class="sheet-note">Works wherever your phone has internet — even with this PC off.
+        The code holds a private key — keep it to yourself.</p>`;
+  } else if (v.on) {
     // The QR is drawn by G.I.L. itself, never taken from a page.
     const account = ts.account ? `<b>${esc(ts.account)}</b>, the same account as this PC` : "the same account as this PC";
     const joined = (ts.phones || []).some(p => p.online);
@@ -1585,9 +1649,9 @@ $("#sheetBody").addEventListener("click", e => {
 
 /* Notifications on this phone: the app subscribes once, then G.I.L. pushes
    through the phone's own push service — the app can be closed. */
-const PUSH_OK = !LOCAL && window.isSecureContext && "serviceWorker" in navigator &&
+const PUSH_OK = !PC && window.isSecureContext && "serviceWorker" in navigator &&
                 "PushManager" in window && "Notification" in window;
-if (!LOCAL && window.isSecureContext && "serviceWorker" in navigator) {
+if (!PC && window.isSecureContext && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
   navigator.serviceWorker.ready.then(reg => {
     reg.active?.postMessage({ key: TOKEN });       // so "Do it" on a notification works
@@ -1595,7 +1659,7 @@ if (!LOCAL && window.isSecureContext && "serviceWorker" in navigator) {
   });
   navigator.serviceWorker.addEventListener("message", e => { if (e.data?.jump) jumpTo(e.data.jump); });
 }
-if (!LOCAL) $("#thisPhone").hidden = false;
+if (!PC) $("#thisPhone").hidden = false;
 $("#tpIco").innerHTML = svg("bell");
 $("#notifyIco").innerHTML = svg("bell");
 $("#nbX").innerHTML = svg("close");
@@ -1614,7 +1678,7 @@ async function currentSub() {
 }
 async function refreshPush() {
   if (!PUSH_OK) {
-    $("#tpText").textContent = LOCAL ? "" : "Open G.I.L. through Tailscale (https) to get notifications";
+    $("#tpText").textContent = PC ? "" : "Open G.I.L. through Tailscale (https) to get notifications";
     $("#tpBtn").hidden = true;
     return;
   }
@@ -1723,12 +1787,15 @@ async function load() {
     return;
   }
   if (!st && !LOCAL) {
-    setStatus("can't reach your PC");
+    const cloud = (() => { try { return localStorage.getItem("vigil_cloud") === "1"; } catch { return false; } })();
+    setStatus(cloud ? "can't connect" : "can't reach your PC");
     if (!S.msgs.size) list.innerHTML = `<div class="denied"><b>Can't reach G.I.L.</b>
-      Check that Tailscale is on on this phone, and that your PC is awake with G.I.L. running.
+      ${cloud ? "Check this phone's internet connection."
+              : "Check that Tailscale is on on this phone, and that your PC is awake with G.I.L. running."}
       <br><br><button class="mini" onclick="location.reload()">Try again</button></div>`;
     return;
   }
+  try { localStorage.setItem("vigil_cloud", st?.phone?.cloud ? "1" : ""); } catch {}
   if (!st) { setStatus("G.I.L. isn't running"); return; }
   document.documentElement.dataset.theme = st.theme === "light" ? "light" : "dark";
   wallpaper();
