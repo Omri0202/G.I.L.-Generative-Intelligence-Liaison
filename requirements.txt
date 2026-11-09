@@ -14,3 +14,4 @@ bcrypt>=4.0.0
 numpy>=1.24.0
 keyring>=24.0.0
 pywebpush>=2.0          # push notifications to the G.I.L. phone app
+playwright>=1.45          # shop comparison and "order it for me"; then: python -m playwright install chromium

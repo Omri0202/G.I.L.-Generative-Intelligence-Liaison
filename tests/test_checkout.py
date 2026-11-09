@@ -4,7 +4,9 @@ details go in, the card field and the pay button are never touched."""
 import sys, os, json, shutil, threading, functools
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import importlib.util
 import unittest
+from unittest import mock
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import checkout as co
 
@@ -105,12 +107,83 @@ SHOP = {
 }
 
 
+def _have_chromium() -> bool:
+    """Playwright installed and its Chromium downloaded: what a whole run needs."""
+    if importlib.util.find_spec("playwright") is None:
+        return False
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            pw.chromium.launch(headless=True).close()
+        return True
+    except Exception:
+        return False
+
+
+class TestNoBrowser(unittest.TestCase):
+    """Without Playwright (or its Chromium) the order never starts, and the
+    user is told what to run instead of "something went wrong"."""
+
+    OFFER = {"seller": "Fake", "name": "5GB", "price": "₪18", "url": "https://shop.example/plan"}
+
+    def test_playwright_not_installed(self):
+        with mock.patch.dict(sys.modules, {"playwright": None, "playwright.sync_api": None}):
+            res = co.run(self.OFFER, DETAILS, headless=True)
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["state"], "no_browser")
+        self.assertIn("Playwright isn't installed", res["why"])
+        self.assertEqual(res["url"], self.OFFER["url"])
+        self.assertEqual(co._held, [])                                         # nothing opened
+
+    def test_chromium_not_downloaded(self):
+        stopped = []
+
+        class FakePW:
+            class chromium:
+                @staticmethod
+                def launch(**_kw):
+                    raise RuntimeError("Executable doesn't exist at C:\\ms-playwright\\chrome.exe\n"
+                                       "Please run the following command: playwright install")
+
+            def stop(self):
+                stopped.append(True)
+
+        sync_api = mock.MagicMock()
+        sync_api.sync_playwright.return_value.start.return_value = FakePW()
+        with mock.patch.dict(sys.modules, {"playwright": mock.MagicMock(),
+                                           "playwright.sync_api": sync_api}):
+            res = co.run(self.OFFER, DETAILS, headless=True)
+        self.assertEqual(res["state"], "no_browser")
+        self.assertIn("Chromium", res["why"])
+        self.assertEqual(stopped, [True])                                      # driver not left running
+
+    def test_the_message_says_what_to_run(self):
+        res = {"ok": False, "state": "no_browser", "why": "Playwright isn't installed",
+               "url": self.OFFER["url"], "trace": []}
+        for he in (False, True):
+            text = co.summary(res, self.OFFER, he)
+            self.assertIn("python -m playwright install chromium", text)
+            self.assertIn(self.OFFER["url"], text)
+            self.assertNotIn("open on your PC", text)
+
+    def test_the_packaged_app_says_to_run_from_source(self):
+        res = {"ok": False, "state": "no_browser", "why": "Playwright isn't installed",
+               "url": self.OFFER["url"], "trace": []}
+        with mock.patch.object(sys, "frozen", True, create=True):
+            text = co.summary(res, self.OFFER)
+        self.assertIn("gil.pyw", text)
+        self.assertNotIn("pip install", text)
+
+
 class TestAWholeRun(unittest.TestCase):
     """A fake shop, a real headless browser, and a decider that does what a
     model would — including trying to press Pay and to type into the card."""
 
     @classmethod
     def setUpClass(cls):
+        if not _have_chromium():
+            raise unittest.SkipTest("needs Playwright and its Chromium "
+                                    "(python -m playwright install chromium)")
         import tempfile
         cls.dir = tempfile.mkdtemp()
         for name, html in SHOP.items():

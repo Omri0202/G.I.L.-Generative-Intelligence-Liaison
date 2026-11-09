@@ -202,11 +202,23 @@ class _Browser:
 
     def __init__(self):
         self._pw = self._browser = None
+        self._missing = False
 
     def text(self, url: str) -> str:
+        if self._missing:
+            return ""
         try:
             if self._browser is None:
-                from playwright.sync_api import sync_playwright
+                try:
+                    from playwright.sync_api import sync_playwright
+                except ImportError:
+                    # Without it, shops that only show prices through JavaScript
+                    # drop out of the comparison: say so once, not per page.
+                    self._missing = True
+                    log.warning("Playwright isn't installed, so shops that need JavaScript are "
+                                "skipped (pip install playwright, then "
+                                "python -m playwright install chromium)")
+                    return ""
                 self._pw = sync_playwright().start()
                 self._browser = self._pw.chromium.launch(headless=True)
             page = self._browser.new_page(user_agent=UA, locale="he-IL")
