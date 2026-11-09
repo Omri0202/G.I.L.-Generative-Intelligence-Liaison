@@ -12,6 +12,14 @@ if errorlevel 1 (
     exit /b 1
 )
 echo.
+echo Installing the browser for shop comparison and orders...
+python -m playwright install chromium
+if errorlevel 1 (
+    echo   WARNING: Couldn't install it. Run "pip install -r requirements.txt", then
+    echo   "python -m playwright install chromium". G.I.L. works without it, but can't
+    echo   compare shops that need JavaScript or get orders ready.
+)
+echo.
 echo Starting G.I.L. in the background now...
 start "" pythonw "%~dp0gil.pyw"
 echo.

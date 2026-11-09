@@ -27,6 +27,7 @@ The window stays open after the handoff: it's the user's from there.
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import time
 from typing import Callable
@@ -40,6 +41,9 @@ log = _get_log("checkout")
 MAX_STEPS = 18
 MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
 UA_LOCALE = "he-IL"
+
+#: What sets up the browser checkout drives, on a PC that runs G.I.L. from source.
+SETUP_COMMANDS = ("pip install playwright", "python -m playwright install chromium")
 
 #: Buttons that pay or place the order — never clicked, whatever the model says.
 _FINAL = re.compile(
@@ -301,14 +305,39 @@ def run(offer: dict, details: dict | None = None, progress: Callable[[str], None
         _busy.release()
 
 
+def _no_browser(start: str, why: str) -> dict:
+    """Nothing was opened: the browser checkout drives isn't set up here."""
+    log.warning("checkout can't start: %s", why)
+    return {"ok": False, "state": "no_browser", "why": why, "url": start, "steps": 0,
+            "trace": []}
+
+
+def _browser_missing(exc: Exception) -> bool:
+    """Playwright is installed but its Chromium was never downloaded."""
+    text = str(exc)
+    return "playwright install" in text or "Executable doesn't exist" in text
+
+
 def _run(offer, details, say, headless, need) -> dict:
-    from playwright.sync_api import sync_playwright
     start = offer["url"]
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return _no_browser(start, "Playwright isn't installed")
     pw = sync_playwright().start()
     # A fresh browser each time: an earlier order's window may still be open
     # with the user halfway through paying, and must not be touched.
-    browser = pw.chromium.launch(headless=headless,
-                                 args=[] if headless else ["--start-maximized"])
+    try:
+        browser = pw.chromium.launch(headless=headless,
+                                     args=[] if headless else ["--start-maximized"])
+    except Exception as exc:
+        try:
+            pw.stop()
+        except Exception:
+            pass
+        if _browser_missing(exc):
+            return _no_browser(start, "Playwright's Chromium isn't installed")
+        raise
     ctx = browser.new_context(locale=UA_LOCALE,
                               viewport={"width": 1280, "height": 900} if headless else None)
     page = ctx.new_page()
@@ -447,6 +476,8 @@ def summary(res: dict, offer: dict, he: bool = False) -> str:
     filled = "filled the user's saved details" in res.get("trace", [])
     state, why, url = res.get("state"), res.get("why", ""), res.get("url") or offer.get("url", "")
     link = f"[{urlparse(url).hostname or 'the shop'}]({url})"
+    if state == "no_browser":
+        return _no_browser_text(why, offer, link, he)
     if he:
         if state == "payment":
             return (f"✅ מוכן במחשב: {what} בעגלה ובדף התשלום" +
@@ -480,6 +511,27 @@ def summary(res: dict, offer: dict, he: bool = False) -> str:
     if state == "pc_off":
         return f"Your PC is off, so there's nowhere to open the shop — here's the link to order it yourself: {link} ({offer.get('name')})"
     return f"I couldn't get through {offer.get('seller')}'s checkout — {why}. It's open on your PC where I stopped: {link}"
+
+
+def _no_browser_text(why: str, offer: dict, link: str, he: bool) -> str:
+    """The order never started: say why, how to fix it, and where to order meanwhile."""
+    item = offer.get("name", "")
+    if getattr(sys, "frozen", False):          # the packaged GIL.exe leaves Playwright out
+        if he:
+            return (f"אני לא יכול להכין הזמנות בגרסה הארוזה של G.I.L. — אין בה את הדפדפן שאני "
+                    f"צריך. תריץ את G.I.L. מהקוד (gil.pyw) כדי להשתמש בזה. בינתיים אפשר להזמין "
+                    f"בעצמך: {link} ({item})")
+        return (f"I can't get orders ready in the packaged G.I.L. app — it doesn't include the "
+                f"browser I need. Run G.I.L. from source (gil.pyw) to use this. Meanwhile you "
+                f"can order it yourself: {link} ({item})")
+    cmds = "\n".join(f"`{c}`" for c in SETUP_COMMANDS)
+    if he:
+        return (f"אני לא יכול לפתוח את החנות — הדפדפן שאני משתמש בו להזמנות לא מותקן במחשב "
+                f"({why}). תריץ את זה פעם אחת ותבקש שוב:\n{cmds}\n"
+                f"בינתיים אפשר להזמין בעצמך: {link} ({item})")
+    return (f"I can't open the shop: the browser I use for orders isn't set up on this PC "
+            f"({why}). Run this once, then ask me again:\n{cmds}\n"
+            f"Meanwhile you can order it yourself: {link} ({item})")
 
 
 def _handoff(page, state: str, why: str, history: list[str]) -> dict:

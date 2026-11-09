@@ -86,7 +86,10 @@ At school I study Java.
 git clone https://github.com/Omri0202/G.I.L.-Generative-Intelligence-Liaison.git
 cd G.I.L.-Generative-Intelligence-Liaison
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
+
+The second line downloads the browser that shop comparison and "order it for me" drive.
 
 Copy `.env.example` to `.env` and add your own API keys, then:
 
