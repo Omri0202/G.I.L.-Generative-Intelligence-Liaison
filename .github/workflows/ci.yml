@@ -14,6 +14,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test deps
-        run: python -m pip install pytest requests pillow customtkinter
+        # cryptography: Vigil's cloud store tests. python-dotenv: the live model
+        # test, which then skips itself here because CI has no Groq key.
+        # lxml: turning shop pages and HTML mail into text. qrcode: the phone
+        # app's pairing QR. pywebpush: push notifications to the phone.
+        run: python -m pip install pytest requests pillow customtkinter cryptography python-dotenv lxml qrcode pywebpush
       - name: Run core tests
         run: python -m pytest tests/ -q
