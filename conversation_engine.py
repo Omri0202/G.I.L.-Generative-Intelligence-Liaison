@@ -163,7 +163,7 @@ class ConversationEngine:
         from ears import listen_forever, set_passive, start_clap_detector
         from actions import execute_action, _build_app_index
         from credentials import initialize_credentials
-        import context_engine, goal_tracker, proactive, session_manager, preferences
+        import context_engine, memory, proactive, profile_store
 
         self._speak          = speak
         self._execute_action = execute_action
@@ -449,7 +449,7 @@ class ConversationEngine:
         All references to closure variables replaced with self.xxx.
         """
         from ears import unmute
-        import context_engine, goal_tracker, proactive, session_manager, preferences
+        import context_engine, memory, proactive, profile_store
 
         speak   = self._speak
         window  = self.window
@@ -463,11 +463,11 @@ class ConversationEngine:
                 # ── Preferences / context tracking ────────────────────────────────────
         try:
             ctx = context_engine.get_active_context()
-            preferences.learn_from_exchange(text)
-            goal_tracker.update_from_reply(text, app=ctx.get("app", ""),
+            profile_store.learn_from_exchange(text)
+            profile_store.update_from_reply(text, app=ctx.get("app", ""),
                                             file=ctx.get("file", ""))
-            if goal_tracker.get_goal_text():
-                session_manager.record_session_goal(goal_tracker.get_goal_text())
+            if profile_store.get_goal_text():
+                memory.record_session_goal(profile_store.get_goal_text())
             proactive.record_interaction()
         except Exception:
             pass
@@ -644,7 +644,7 @@ class ConversationEngine:
             try:
                 from memory import extract_memories_background
                 extract_memories_background(text, speech)
-                preferences.learn_from_exchange(text, speech)
+                profile_store.learn_from_exchange(text, speech)
             except Exception:
                 pass
             if self._active_project[0]:

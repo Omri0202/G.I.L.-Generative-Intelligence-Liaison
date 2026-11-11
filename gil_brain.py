@@ -690,8 +690,8 @@ class GILBrain:
         self.username = username
         # Seed with previous session so GIL remembers what you were working on
         try:
-            from session_memory import load as _load_mem
-            self.history: list[dict] = _load_mem()
+            from memory import load_history
+            self.history: list[dict] = load_history()
         except Exception:
             self.history: list[dict] = []
         self.pending_results: list[str] = []
@@ -750,21 +750,21 @@ class GILBrain:
 
         # Goal context
         try:
-            from goal_tracker import build_goal_context
+            from profile_store import build_goal_context
             goal_context = build_goal_context()
         except Exception:
             goal_context = ""
 
         # Preference context
         try:
-            from preferences import build_preference_context
+            from profile_store import build_preference_context
             pref_context = build_preference_context()
         except Exception:
             pref_context = ""
 
         # Session context
         try:
-            from session_manager import build_session_context
+            from memory import build_session_context
             session_context = build_session_context()
         except Exception:
             session_context = ""
@@ -1199,8 +1199,8 @@ class GILBrain:
             if summ_tok < before_tok:
                 self.history = summ_hist
                 try:
-                    from session_memory import save as _save_mem
-                    _save_mem(self.history)
+                    from memory import save_history
+                    save_history(self.history)
                 except Exception:
                     pass
                 return {"ok": True, "before": before_tok, "after": summ_tok,
