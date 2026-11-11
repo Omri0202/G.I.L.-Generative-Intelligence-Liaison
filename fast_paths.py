@@ -135,9 +135,9 @@ def is_greeting_response(speech: str) -> bool:
 # ── Startup greeting ──────────────────────────────────────────────────────────
 
 def build_greeting(username: str) -> str:
-    """Context-aware startup greeting powered by session_manager."""
+    """Context-aware startup greeting powered by memory.build_startup_greeting."""
     try:
-        from session_manager import build_startup_greeting
+        from memory import build_startup_greeting
         return build_startup_greeting(username)
     except Exception:
         pass

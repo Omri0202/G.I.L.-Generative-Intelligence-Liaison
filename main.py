@@ -48,9 +48,9 @@ log = _get_log("main")
 
 from auth import run_login
 import context_engine
-import goal_tracker
+import memory
+import profile_store
 import proactive
-import session_manager
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ def main() -> None:
 
     # ── Intelligence engines ──────────────────────────────────────────────────
     context_engine.start()
-    goal_tracker.start()
+    profile_store.start_goal_tracking()
     proactive.start()
 
     try:
@@ -274,14 +274,14 @@ def main() -> None:
     except Exception as exc:
         log.warning("Meeting detector disabled: %s", exc)
 
-    goal_tracker.on_checkin(
+    profile_store.on_checkin(
         lambda msg: window.after(0, lambda m=msg: window.show_proactive_suggestion(m))
     )
 
     def _on_ctx_change(ctx: dict) -> None:
         app = ctx.get("app", "")
         proactive.set_active_app(app)
-        session_manager.record_app_switch()
+        memory.record_app_switch()
         # App-switch popups removed — too noisy
 
     context_engine.on_context_changed(_on_ctx_change)
@@ -289,8 +289,7 @@ def main() -> None:
     # ── Session summary (every 10 min + on shutdown) ──────────────────────────
     def _save_session_memory() -> None:
         try:
-            from session_memory import save as _save_mem
-            _save_mem(engine.brain.history)
+            memory.save_history(engine.brain.history)
         except Exception as exc:
             log.warning("session memory save failed: %s", exc)
 
@@ -349,7 +348,7 @@ def main() -> None:
         except Exception:
             pass
 
-    session_manager.on_shutdown(_on_shutdown)
+    memory.on_shutdown(_on_shutdown)
 
     # ── Startup registration ──────────────────────────────────────────────────
     from gui import _set_startup, _get_startup_enabled
@@ -399,7 +398,7 @@ def main() -> None:
 
     window.after(500, window.show_window)
     window.mainloop()
-    session_manager.trigger_shutdown(username)
+    memory.trigger_shutdown(username)
     try:
         from chat_history import end_session
         end_session()

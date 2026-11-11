@@ -1,11 +1,21 @@
 """
 memory.py — Project G.I.L.
-Persistent memory system — SQLite + FTS5 full-text search.
+The recall half of GIL's memory: what GIL remembers from your conversations.
 
-Three layers:
 1. Memories   — facts, preferences, decisions GIL extracts from conversation
+                (SQLite + FTS5 full-text search, data/gil_brain.db)
 2. Session    — last task, last active (lightweight KV in same DB)
 3. Extraction — background Groq call after every turn to learn automatically
+4. Schedule   — day/time patterns of what you work on
+5. History    — the brain's recent conversation, saved between restarts
+                (data/session_memory.json)
+6. Session    — startup greeting, shutdown summary and the session line in
+   lifecycle    every brain prompt
+
+The profile half (preferences, current goal and the starting facts) lives in
+profile_store.py.
+
+Merged from memory.py, session_memory.py and session_manager.py.
 """
 
 import json
@@ -14,6 +24,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from logger import get as _get_log
 
 DB_PATH = Path(__file__).parent / "data" / "gil_brain.db"
 
@@ -161,7 +173,7 @@ def get_important_memories(limit: int = 6) -> list[dict]:
     return [dict(r) for r in results]
 
 
-# ── Smart context builder (injected into every LLM call) ─────────────────────
+# ── Smart context builder (injected into every LLM call) ──────────────────────
 
 def build_memory_context(user_message: str) -> str:
     """
@@ -205,7 +217,7 @@ def build_memory_context(user_message: str) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
-# ── Session KV (last task / timestamp) ───────────────────────────────────────
+# ── Session KV (last task / timestamp) ────────────────────────────────────────
 
 def record_task(user_text: str, gil_response: str = "") -> None:
     _set_kv("last_task",     user_text.strip())
@@ -252,7 +264,7 @@ def _set_kv(key: str, value: str) -> None:
         conn.close()
 
 
-# ── Automatic memory extraction (background, non-blocking) ───────────────────
+# ── Automatic memory extraction (background, non-blocking) ────────────────────
 
 _extraction_lock  = threading.Lock()   # only one extraction thread at a time
 _last_db_error_at: float = 0.0         # guards the single-fire error speech
@@ -434,3 +446,217 @@ def _announce_db_error_once() -> None:
         _init_db()
     except Exception as exc:
         print(f"[G.I.L. MEMORY] DB reinit failed: {exc}")
+
+
+# ── Conversation history between restarts ─────────────────────────────────────
+# On shutdown  → save the last MAX_PAIRS exchanges to data/session_memory.json
+# On startup   → reload them into brain.history so GIL remembers what you were
+#                working on (up to 24 hours ago).
+# Only user + assistant messages are saved — system prompts are not persisted
+# because they are rebuilt fresh on every start.
+
+_history_log  = _get_log("session_memory")
+_HISTORY_PATH = Path(__file__).parent / "data" / "session_memory.json"
+MAX_PAIRS = 8          # keep last 8 exchange pairs (16 messages max)
+MAX_AGE   = 86_400     # 24 hours — older context is stale and ignored
+
+
+def save_history(history: list) -> None:
+    """
+    Persist recent history to disk.
+    Call on GIL shutdown or periodically.
+    """
+    try:
+        # Keep only conversational turns, trim to last MAX_PAIRS pairs
+        turns    = [h for h in history if h.get("role") in ("user", "assistant")]
+        trimmed  = turns[-(MAX_PAIRS * 2):]
+        _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _HISTORY_PATH.write_text(
+            json.dumps({"saved_at": time.time(), "history": trimmed},
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _history_log.info("session memory saved (%d messages)", len(trimmed))
+    except Exception as exc:
+        _history_log.warning("could not save session memory: %s", exc)
+
+
+def load_history() -> list:
+    """
+    Return saved history to seed the brain on startup.
+    Returns [] if nothing saved, file missing, or context is too old.
+    """
+    try:
+        data     = json.loads(_HISTORY_PATH.read_text(encoding="utf-8"))
+        saved_at = data.get("saved_at", 0)
+        if time.time() - saved_at > MAX_AGE:
+            _history_log.info("session memory too old (>24 h) — starting fresh")
+            return []
+        history = data.get("history", [])
+        _history_log.info("loaded %d messages from previous session", len(history))
+        return history
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        _history_log.warning("could not load session memory: %s", exc)
+        return []
+
+
+# ── Session lifecycle: state ──────────────────────────────────────────────────
+
+_session_start: float = time.time()
+_session_goals: list[str] = []
+_session_app_switches: int = 0
+_shutdown_callbacks: list = []   # called on clean shutdown
+
+
+def record_session_goal(goal: str) -> None:
+    if goal and goal not in _session_goals:
+        _session_goals.append(goal)
+
+
+def record_app_switch() -> None:
+    global _session_app_switches
+    _session_app_switches += 1
+
+
+def get_session_duration_minutes() -> float:
+    return (time.time() - _session_start) / 60.0
+
+
+# ── Startup greeting ──────────────────────────────────────────────────────────
+
+def build_startup_greeting(username: str = "Omri") -> str:
+    """
+    Build a context-aware startup greeting based on last session.
+    Returns the speech string GIL should say aloud.
+    """
+    from profile_store import get_active_goal
+
+    last  = get_last_session()
+    now   = datetime.now()
+    hour  = now.hour
+
+    # Time-of-day greeting
+    if 5 <= hour < 12:
+        tod = "Good morning"
+    elif 12 <= hour < 18:
+        tod = "Good afternoon"
+    elif 18 <= hour < 23:
+        tod = "Good evening"
+    else:
+        tod = "Working late again"
+
+    goal = get_active_goal()
+
+    if last.get("is_recent") and last.get("last_task"):
+        hours_ago = last.get("hours_ago") or 0
+        raw_task  = last["last_task"]
+
+        # Try to parse as a JSON topic array (new format)
+        try:
+            import json as _j
+            topics = _j.loads(raw_task)
+            if isinstance(topics, list) and topics:
+                if len(topics) == 1:
+                    topic_str = topics[0]
+                elif len(topics) == 2:
+                    topic_str = f"{topics[0]} and {topics[1]}"
+                else:
+                    topic_str = ", ".join(topics[:-1]) + f", and {topics[-1]}"
+                last_task = topic_str
+            else:
+                last_task = raw_task[:60]
+        except Exception:
+            last_task = raw_task[:60]
+
+        if hours_ago < 0.5:
+            greeting = (f"Welcome back, {username}. "
+                        f"Last session you covered: {last_task}. Picking up where we left off?")
+        elif hours_ago < 3:
+            greeting = (f"{tod}, {username}. "
+                        f"Last session you covered: {last_task}. Still on that, or something new?")
+        elif hours_ago < 12:
+            greeting = (f"{tod}, {username}. "
+                        f"Last session you covered: {last_task}. Want to continue?")
+        else:
+            greeting = (f"{tod}, {username}. "
+                        f"Last session you covered: {last_task}. Ready to pick it back up?")
+    elif goal:
+        greeting = (f"{tod}, {username}. "
+                    f"Picking up from {goal.get('description', '')[:50]}.")
+    else:
+        greeting = (f"{tod}, {username}. "
+                    f"All systems online. What are we working on today?")
+
+    return greeting
+
+
+# ── Shutdown summary ──────────────────────────────────────────────────────────
+
+def build_shutdown_summary(username: str = "Omri") -> str:
+    """Speech said when GIL shuts down cleanly."""
+    duration = get_session_duration_minutes()
+    goals    = _session_goals
+
+    if duration < 1:
+        return f"Short session. Closing down, {username}."
+
+    if duration < 60:
+        dur_str = f"{int(duration)} minutes"
+    else:
+        h = int(duration // 60)
+        m = int(duration % 60)
+        dur_str = f"{h} hour{'s' if h > 1 else ''}{f' {m} minutes' if m else ''}"
+
+    if goals:
+        goal_str = goals[-1][:40]
+        return (f"Saving session. {dur_str} of work on {goal_str}. "
+                f"Talk later, {username}.")
+    else:
+        return (f"Saving session. {dur_str} on the clock. "
+                f"Talk later, {username}.")
+
+
+def on_shutdown(fn) -> None:
+    _shutdown_callbacks.append(fn)
+
+
+def trigger_shutdown(username: str = "Omri") -> str:
+    summary = build_shutdown_summary(username)
+    for fn in list(_shutdown_callbacks):
+        try:
+            fn(summary)
+        except Exception:
+            pass
+    # Persist session summary to memory
+    try:
+        goal = _session_goals[-1] if _session_goals else ""
+        dur  = int(get_session_duration_minutes())
+        if goal:
+            remember(
+                f"Session {datetime.now().strftime('%Y-%m-%d')}: worked on '{goal}' for {dur} min.",
+                mem_type="project",
+                importance=4,
+            )
+    except Exception:
+        pass
+    return summary
+
+
+# ── Session context for brain prompt ──────────────────────────────────────────
+
+def build_session_context() -> str:
+    duration = get_session_duration_minutes()
+    if duration < 1:
+        when = "just started"
+    elif duration < 60:
+        when = f"{int(duration)} min active"
+    else:
+        when = f"{int(duration//60)}h {int(duration%60)}m active"
+
+    lines = [f"SESSION: {when}"]
+    if _session_goals:
+        lines.append(f"  Goals this session: {' → '.join(g[:30] for g in _session_goals[-3:])}")
+
+    return "\n".join(lines)
